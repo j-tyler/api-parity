@@ -40,7 +40,7 @@ This is `api-parity`, a differential fuzzing tool for comparing API implementati
 
 ### Writing for AI Agents
 
-Write code for AI, not humans. Prefer inline logic over indirection—don't fragment logic into small helpers for "clean code" aesthetics. Principled reuse is fine; unnecessary abstraction is not. Keep docs token-efficient. Organize files so agents get relevant context without clutter.
+See DESIGN.md "AI-Optimized Code and Documentation" for the full rationale. In brief: prefer inline logic over indirection, avoid unnecessary abstraction, keep docs token-efficient.
 
 ## Design Decision Format
 
