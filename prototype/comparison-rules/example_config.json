@@ -1,0 +1,70 @@
+{
+  "$schema": "./comparison_rules.schema.json",
+  "version": "1",
+
+  "default_rules": {
+    "status_code": {"predefined": "exact_match"},
+    "headers": {
+      "include": ["content-type"]
+    },
+    "body": {
+      "mode": "json_structural",
+      "ignored_paths": [],
+      "field_rules": {}
+    }
+  },
+
+  "operation_rules": {
+    "createUser": {
+      "body": {
+        "ignored_paths": ["$.request_id"],
+        "field_rules": {
+          "$.id": {"predefined": "uuid_format"},
+          "$.created_at": {"predefined": "iso_timestamp_format"},
+          "$.updated_at": {"predefined": "timestamp_within_5s"}
+        }
+      }
+    },
+
+    "getUser": {
+      "body": {
+        "field_rules": {
+          "$.last_login": {"predefined": "ignore"},
+          "$.session_count": {"predefined": "numeric_tolerance", "tolerance": 1}
+        }
+      }
+    },
+
+    "listUsers": {
+      "body": {
+        "field_rules": {
+          "$.users": {"predefined": "unordered_array"},
+          "$.users[*].last_seen": {"predefined": "ignore"},
+          "$.total_count": {"predefined": "exact_match"},
+          "$.page_token": {"predefined": "string_nonempty"}
+        }
+      }
+    },
+
+    "updateBalance": {
+      "body": {
+        "field_rules": {
+          "$.balance": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.currency": {"predefined": "exact_match"},
+          "$.effective_rate": {"predefined": "both_in_range", "min": 0.0, "max": 1.0}
+        }
+      }
+    },
+
+    "searchProducts": {
+      "body": {
+        "field_rules": {
+          "$.results": {"predefined": "array_length"},
+          "$.results[*].score": {"predefined": "numeric_tolerance", "tolerance": 0.001},
+          "$.results[*].id": {"predefined": "exact_match"},
+          "$.query_time_ms": {"expr": "a < 5000 && b < 5000"}
+        }
+      }
+    }
+  }
+}

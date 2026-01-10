@@ -146,6 +146,18 @@ These issues were discovered during prototype validation. Don't repeat them:
 
 4. **Override validate_response()** — Must override and return `pass` to skip built-in schema validation (we do our own comparison).
 
+## Comparison Rules Gotchas
+
+These issues were discovered during comparison rules design. Don't repeat them:
+
+1. **Override semantics, not merge** — Operation rules completely override default rules for any key they define. There is no deep merging of nested objects.
+
+2. **`unordered_array` doesn't handle duplicates** — The expression `a.all(x, x in b)` passes for arrays with different duplicate counts (e.g., `[1,1,2]` matches `[1,2,2]`). Only use for arrays with unique elements.
+
+3. **Escape strings in CEL expressions** — When inlining string parameters, escape backslashes and quotes. A regex pattern like `foo"bar` must become `"foo\"bar"` in CEL.
+
+4. **No `inherit_defaults` field** — Operation rules don't have an explicit inheritance flag. They always implicitly inherit unless they override.
+
 ## What NOT to Do
 
 - Don't propose changes without reading relevant code first

@@ -355,38 +355,50 @@ secrets:
     - "$.api_key"
 ```
 
-### Per-Endpoint Comparison Rules [NEEDS SPEC]
+### Per-Endpoint Comparison Rules [SPECIFIED]
 
 Users must define comparison rules per operationId. No heuristic guessing.
 
-**Concept:**
-```yaml
-comparison_rules:
-  default:
-    status: exact           # exact | family (2xx matches 2xx)
-    headers:
-      compare: [content-type]
-      ignore: [date, x-request-id]
-    body:
-      mode: json            # json | bytes
-      ignore_paths:
-        - "$.created_at"
-        - "$.updated_at"
-        - "$.id"
+**Format:** JSON file optimized for LLM authorship and human readability. See DESIGN.md for rationale.
 
-  # Override for specific operation
-  createUser:
-    body:
-      ignore_paths:
-        - "$.id"
-        - "$.created_at"
+**Engine:** All comparisons evaluate as CEL (Common Expression Language) expressions at runtime. Predefined comparisons (e.g., `numeric_tolerance`, `unordered_array`) expand to CEL during config loading.
+
+**Example:**
+```json
+{
+  "version": "1",
+  "default_rules": {
+    "status_code": {"predefined": "exact_match"},
+    "headers": {"include": ["content-type"]},
+    "body": {
+      "mode": "json_structural",
+      "ignored_paths": [],
+      "field_rules": {}
+    }
+  },
+  "operation_rules": {
+    "createUser": {
+      "body": {
+        "ignored_paths": ["$.request_id"],
+        "field_rules": {
+          "$.id": {"predefined": "uuid_format"},
+          "$.created_at": {"predefined": "timestamp_within_5s"},
+          "$.balance": {"predefined": "numeric_tolerance", "tolerance": 0.01}
+        }
+      }
+    }
+  }
+}
 ```
 
-**Open Questions:**
-1. What's the inheritance model? (operation inherits from default, can override?)
-2. How to handle array ordering? (treat as set vs ordered list)
-3. How to handle floating point comparison? (epsilon tolerance?)
-4. How to specify field-level comparison functions? (e.g., "$.timestamp" should be within 5 seconds)
+**Resolved questions:**
+1. **Inheritance model:** Operation rules inherit from default_rules with override semantics (not merge).
+2. **Array ordering:** Use `unordered_array` predefined for set semantics, default is ordered.
+3. **Floating point:** Use `numeric_tolerance` predefined with `tolerance` parameter.
+4. **Field-level functions:** Use predefined comparisons or custom CEL expressions.
+
+**Implementation:** See `prototype/comparison-rules/` for working validation and inlining.
+See DESIGN.md "CEL as Comparison Engine" and "Predefined Comparison Library" for full design.
 
 ### Error Classification [NEEDS SPEC]
 

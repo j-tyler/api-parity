@@ -198,3 +198,119 @@ Key distinction—**mismatch** vs **error**:
 Rationale: If targets diverge, they're in different states. Comparing subsequent steps produces noise. Stop at the first discrepancy, fix it, re-run to discover the next.
 
 **Note:** Schemathesis continues after errors by default. api-parity overrides this to stop on mismatch.
+
+---
+
+# Comparison Rules Format: JSON for LLM Authorship
+
+Keywords: comparison rules format json yaml llm agent config
+Date: 20260110
+
+Comparison rules use JSON format, optimized for LLM writing and human reading.
+
+**Design constraint:** LLMs are the primary authors of comparison rules configs. Humans will read them for the 1% of cases LLMs can't automate. This inverts traditional config file priorities.
+
+**Why JSON over YAML:**
+- Unambiguous parsing (no YAML type coercion surprises like `NO` → boolean)
+- LLMs generate valid JSON more reliably than YAML
+- JSON Schema validation is native
+- Human readability is "good enough" for occasional reading
+
+**Structure principles:**
+- Explicit field names (`ignored_paths` not `ignore`)
+- No shorthand forms (always object syntax, never scalar shortcuts)
+- Self-documenting through verbose naming
+- One level of inheritance max (operation rules → default rules)
+- Override semantics, not merge (simpler mental model)
+
+See `prototype/comparison-rules/` for working implementation.
+
+---
+
+# CEL as Comparison Engine
+
+Keywords: cel expression language comparison evaluation runtime
+Date: 20260110
+
+All field comparisons evaluate as CEL (Common Expression Language) expressions at runtime. CEL was chosen because:
+
+- Battle-tested in production (Kubernetes, Firebase, Envoy)
+- Safe evaluation (not Turing-complete, no arbitrary code execution)
+- Simple syntax that LLMs can generate reliably
+- Well-defined semantics across implementations
+
+**Runtime is CEL-only.** The runtime receives expressions like `(a - b) <= 0.01 && (b - a) <= 0.01` and evaluates them with bindings `{a: value_from_target_a, b: value_from_target_b}`. The runtime has no knowledge of "comparison types" or special cases—just CEL evaluation.
+
+**Config loading inlines predefined comparisons to CEL** before the config reaches the runtime. This separation means:
+1. Runtime code is simple (just CEL evaluation)
+2. Predefined library can grow without runtime changes
+3. Custom expressions and predefined use identical code paths
+
+---
+
+# Predefined Comparison Library
+
+Keywords: predefined library comparisons expressions cel templates
+Date: 20260110
+
+A predefined comparison library ships with api-parity. It contains named comparisons that expand to CEL expressions during config loading.
+
+**Location:** `comparison_library.json` at a well-known path. LLMs discover available comparisons by reading this file. The file is self-documenting with descriptions for each predefined.
+
+**Design: No optional parameters.** Each predefined has a fixed signature. Parameterized comparisons require all parameters. If you want different behavior, use a different predefined or write custom CEL.
+
+```json
+{
+  "predefined": {
+    "ignore": {
+      "description": "Always passes. Field is not compared.",
+      "params": [],
+      "expr": "true"
+    },
+    "numeric_tolerance": {
+      "description": "Numbers are equal within tolerance.",
+      "params": ["tolerance"],
+      "expr": "(a - b) <= tolerance && (b - a) <= tolerance"
+    }
+  }
+}
+```
+
+**User config references predefined by name:**
+```json
+{"predefined": "numeric_tolerance", "tolerance": 0.01}
+```
+
+**Config loader inlines to pure CEL:**
+```json
+{"expr": "(a - b) <= 0.01 && (b - a) <= 0.01"}
+```
+
+**Escape hatch:** Users can write custom CEL directly with `{"expr": "..."}` when predefined comparisons don't suffice.
+
+**Validation:** JSON Schema enforces that predefined names are valid and required parameters are present.
+
+See `prototype/comparison-rules/` for working implementation with validation and inlining.
+
+---
+
+# CEL Runtime Selection Deferred
+
+Keywords: cel runtime python library cel-go cel-python implementation
+Date: 20260110
+
+The specific CEL runtime library is not yet selected. Candidates:
+
+| Library | Language | Python Version | Notes |
+|---------|----------|----------------|-------|
+| `common-expression-language` | Rust (bindings) | 3.11+ | Fastest, simple API |
+| `cel-python` | Pure Python | 3.9+ | Cloud Custodian project |
+| cel-go subprocess | Go | N/A | Official Google impl, operational overhead |
+
+**Decision:** Start with a Python library (`common-expression-language` or `cel-python`). These are pip-installable with no operational burden. Our predefined expressions are simple (equality, arithmetic, array operations) and should work in any conformant implementation.
+
+**If Python libraries fail:** The escape hatch is a long-running Go subprocess wrapping cel-go. ~60 lines Go, ~40 lines Python. Communicates via line-delimited JSON over stdin/stdout. This avoids gRPC complexity but adds binary distribution burden.
+
+**Build the escape hatch when:** A specific expression works in cel-go but fails in Python libraries. Not before.
+
+See TODO.md "CEL Runtime Validation" for the work item.

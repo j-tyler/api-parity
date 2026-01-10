@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://api-parity.dev/schemas/comparison_rules.schema.json",
+  "title": "API Parity Comparison Rules",
+  "description": "Configuration for comparing API responses between two targets. Uses predefined comparisons that expand to CEL expressions.",
+  "type": "object",
+  "required": ["version", "default_rules"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for editor support."
+    },
+
+    "version": {
+      "type": "string",
+      "const": "1",
+      "description": "Schema version. Must be '1'."
+    },
+
+    "default_rules": {
+      "$ref": "#/$defs/comparison_rules",
+      "description": "Default comparison rules applied to all operations unless overridden."
+    },
+
+    "operation_rules": {
+      "type": "object",
+      "description": "Per-operation overrides. Keys are operationId from OpenAPI spec.",
+      "additionalProperties": {
+        "$ref": "#/$defs/comparison_rules"
+      }
+    }
+  },
+
+  "$defs": {
+    "comparison_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status_code": {
+          "$ref": "#/$defs/field_comparison",
+          "description": "How to compare HTTP status codes."
+        },
+
+        "headers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "include": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "Header names to compare. Others are ignored."
+            }
+          }
+        },
+
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["json_structural", "text_exact", "binary_hash", "ignore"],
+              "description": "Overall body comparison strategy."
+            },
+            "ignored_paths": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "JSONPath expressions for fields to skip entirely."
+            },
+            "field_rules": {
+              "type": "object",
+              "description": "Per-field comparison rules. Keys are JSONPath expressions.",
+              "additionalProperties": {
+                "$ref": "#/$defs/field_comparison"
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "field_comparison": {
+      "oneOf": [
+        {"$ref": "#/$defs/predefined_ignore"},
+        {"$ref": "#/$defs/predefined_exact_match"},
+        {"$ref": "#/$defs/predefined_numeric_tolerance"},
+        {"$ref": "#/$defs/predefined_timestamp_tolerance"},
+        {"$ref": "#/$defs/predefined_timestamp_within_5s"},
+        {"$ref": "#/$defs/predefined_timestamp_within_30s"},
+        {"$ref": "#/$defs/predefined_unordered_array"},
+        {"$ref": "#/$defs/predefined_array_length"},
+        {"$ref": "#/$defs/predefined_array_length_tolerance"},
+        {"$ref": "#/$defs/predefined_string_prefix"},
+        {"$ref": "#/$defs/predefined_string_nonempty"},
+        {"$ref": "#/$defs/predefined_both_match_regex"},
+        {"$ref": "#/$defs/predefined_uuid_format"},
+        {"$ref": "#/$defs/predefined_iso_timestamp_format"},
+        {"$ref": "#/$defs/predefined_both_null"},
+        {"$ref": "#/$defs/predefined_both_null_or_equal"},
+        {"$ref": "#/$defs/predefined_type_match"},
+        {"$ref": "#/$defs/predefined_both_positive"},
+        {"$ref": "#/$defs/predefined_same_sign"},
+        {"$ref": "#/$defs/predefined_both_in_range"},
+        {"$ref": "#/$defs/custom_expr"}
+      ]
+    },
+
+    "predefined_ignore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "ignore"}
+      }
+    },
+
+    "predefined_exact_match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "exact_match"}
+      }
+    },
+
+    "predefined_numeric_tolerance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined", "tolerance"],
+      "properties": {
+        "predefined": {"const": "numeric_tolerance"},
+        "tolerance": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+
+    "predefined_timestamp_tolerance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined", "seconds"],
+      "properties": {
+        "predefined": {"const": "timestamp_tolerance"},
+        "seconds": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+
+    "predefined_timestamp_within_5s": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "timestamp_within_5s"}
+      }
+    },
+
+    "predefined_timestamp_within_30s": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "timestamp_within_30s"}
+      }
+    },
+
+    "predefined_unordered_array": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "unordered_array"}
+      }
+    },
+
+    "predefined_array_length": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "array_length"}
+      }
+    },
+
+    "predefined_array_length_tolerance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined", "tolerance"],
+      "properties": {
+        "predefined": {"const": "array_length_tolerance"},
+        "tolerance": {"type": "integer", "minimum": 0}
+      }
+    },
+
+    "predefined_string_prefix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined", "length"],
+      "properties": {
+        "predefined": {"const": "string_prefix"},
+        "length": {"type": "integer", "minimum": 1}
+      }
+    },
+
+    "predefined_string_nonempty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "string_nonempty"}
+      }
+    },
+
+    "predefined_both_match_regex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined", "pattern"],
+      "properties": {
+        "predefined": {"const": "both_match_regex"},
+        "pattern": {"type": "string", "minLength": 1}
+      }
+    },
+
+    "predefined_uuid_format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "uuid_format"}
+      }
+    },
+
+    "predefined_iso_timestamp_format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "iso_timestamp_format"}
+      }
+    },
+
+    "predefined_both_null": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "both_null"}
+      }
+    },
+
+    "predefined_both_null_or_equal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "both_null_or_equal"}
+      }
+    },
+
+    "predefined_type_match": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "type_match"}
+      }
+    },
+
+    "predefined_both_positive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "both_positive"}
+      }
+    },
+
+    "predefined_same_sign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "same_sign"}
+      }
+    },
+
+    "predefined_both_in_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined", "min", "max"],
+      "properties": {
+        "predefined": {"const": "both_in_range"},
+        "min": {"type": "number"},
+        "max": {"type": "number"}
+      }
+    },
+
+    "custom_expr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expr"],
+      "properties": {
+        "expr": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Custom CEL expression. Variables 'a' and 'b' are the values from target A and B."
+        }
+      }
+    }
+  }
+}
