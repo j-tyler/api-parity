@@ -13,12 +13,16 @@ v0 supports simple header-based auth configured manually in runtime config (see 
 
 ---
 
-## Validate Schemathesis Link Support
+## ~~Validate Schemathesis Link Support~~ (COMPLETED 20260108)
 
-Before implementation proceeds too far, validate that Schemathesis's OpenAPI link traversal meets our requirements:
-- Can it handle 6-step chains?
-- Does it correctly extract variables from responses and inject into subsequent requests?
-- What happens when link definitions are incomplete?
+Validation complete. Key findings now documented in DESIGN.md and ARCHITECTURE.md.
+
+Results:
+- ✅ 6-step chains validated (70+ unique operation sequences)
+- ✅ Variable extraction works via state machine bundles and link definitions
+- ✅ Incomplete links = shorter chains (expected behavior)
+- ✅ GenerationMode.POSITIVE produces schema-valid data only
+- ⚠️ Schemathesis continues after errors by default; api-parity stops on mismatch (see DESIGN.md)
 
 ---
 
@@ -30,14 +34,26 @@ Document the level of detail required in OpenAPI link definitions for effective 
 
 ## Specification Work Required
 
-Several sections in ARCHITECTURE.md are marked [NEEDS SPEC] or [CONCEPT] and need design work before implementation. See ARCHITECTURE.md for details and context on each:
+Several sections in ARCHITECTURE.md are marked [NEEDS SPEC] and need design work before implementation:
 
 - **Data Models** — Schema format (JSON Schema, TypeScript, Python dataclasses?)
 - **Mismatch Report Bundle / diff.json** — Diff library/algorithm, header comparison rules
 - **Runtime Configuration / Comparison Rules** — Inheritance model, array ordering, field-level functions
 - **Error Classification** — Edge cases like A=500/B=400
-- **Stateful Chains / Variable Extraction** — How Schemathesis exposes link data
 - **Stateful Chains / Replay Behavior** — Unique field regeneration mechanism
 - **OpenAPI Spec as Field Authority** — JSON Schema validator choice, additionalProperties handling
+
+**Resolved during Schemathesis validation:**
+- ~~Stateful Chains / Variable Extraction~~ — Handled by state machine bundles
+- ~~Stateful Chains / Link-Based Generation~~ — Now [SPECIFIED] in ARCHITECTURE.md
+
+---
+
+## Implementation Notes from Validation
+
+Notes to remember when implementing (validated during Schemathesis prototype). API patterns and code examples are in DESIGN.md "Schemathesis as Generator (Validated)".
+
+1. **Link provenance not exposed** — The `call()` method receives the case but not which link triggered it. Accept reporting "step N mismatch" rather than "link X failed."
+2. **Duplicate chain sequences** — Hypothesis may generate duplicate operation sequences. Consider deduplication or increased `max_examples`.
 
 ---

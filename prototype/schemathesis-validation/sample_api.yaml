@@ -1,0 +1,383 @@
+openapi: "3.0.3"
+info:
+  title: Sample API for Schemathesis Validation
+  version: "1.0.0"
+  description: Test API with various parameter types and OpenAPI links for chain testing
+
+servers:
+  - url: http://localhost:8000
+
+paths:
+  /items:
+    get:
+      operationId: listItems
+      summary: List all items
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [electronics, clothing, food, books]
+      responses:
+        "200":
+          description: List of items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Item"
+                  total:
+                    type: integer
+
+    post:
+      operationId: createItem
+      summary: Create a new item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItemCreate"
+      responses:
+        "201":
+          description: Item created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+          links:
+            GetItem:
+              operationId: getItem
+              parameters:
+                item_id: "$response.body#/id"
+            UpdateItem:
+              operationId: updateItem
+              parameters:
+                item_id: "$response.body#/id"
+            DeleteItem:
+              operationId: deleteItem
+              parameters:
+                item_id: "$response.body#/id"
+
+  /items/{item_id}:
+    get:
+      operationId: getItem
+      summary: Get item by ID
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Item details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+          links:
+            UpdateItem:
+              operationId: updateItem
+              parameters:
+                item_id: "$response.body#/id"
+            DeleteItem:
+              operationId: deleteItem
+              parameters:
+                item_id: "$response.body#/id"
+        "404":
+          description: Item not found
+
+    put:
+      operationId: updateItem
+      summary: Update an item
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItemUpdate"
+      responses:
+        "200":
+          description: Item updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+          links:
+            GetItem:
+              operationId: getItem
+              parameters:
+                item_id: "$response.body#/id"
+            DeleteItem:
+              operationId: deleteItem
+              parameters:
+                item_id: "$response.body#/id"
+        "404":
+          description: Item not found
+
+    delete:
+      operationId: deleteItem
+      summary: Delete an item
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Item deleted
+          links:
+            VerifyDeleted:
+              operationId: getItem
+              parameters:
+                item_id: "$request.path.item_id"
+        "404":
+          description: Item not found
+
+  /categories/{category}/items:
+    get:
+      operationId: listCategoryItems
+      summary: List items in a category
+      parameters:
+        - name: category
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [electronics, clothing, food, books]
+        - name: min_price
+          in: query
+          schema:
+            type: number
+            format: float
+            minimum: 0
+        - name: max_price
+          in: query
+          schema:
+            type: number
+            format: float
+            minimum: 0
+        - name: in_stock
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Items in category
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Item"
+
+  /users/{user_id}/cart:
+    get:
+      operationId: getCart
+      summary: Get user's cart
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: User's cart
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+
+    post:
+      operationId: addToCart
+      summary: Add item to cart
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item_id, quantity]
+              properties:
+                item_id:
+                  type: string
+                  format: uuid
+                quantity:
+                  type: integer
+                  minimum: 1
+                  maximum: 99
+      responses:
+        "200":
+          description: Item added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+          links:
+            GetCart:
+              operationId: getCart
+              parameters:
+                user_id: "$request.path.user_id"
+
+components:
+  schemas:
+    Item:
+      type: object
+      required: [id, name, price, category]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        price:
+          type: number
+          format: float
+          minimum: 0.01
+          maximum: 999999.99
+        category:
+          type: string
+          enum: [electronics, clothing, food, books]
+        in_stock:
+          type: boolean
+        stock_count:
+          type: integer
+          minimum: 0
+        tags:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ItemCreate:
+      type: object
+      required: [name, price, category]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        price:
+          type: number
+          format: float
+          minimum: 0.01
+          maximum: 999999.99
+        category:
+          type: string
+          enum: [electronics, clothing, food, books]
+        in_stock:
+          type: boolean
+          default: true
+        stock_count:
+          type: integer
+          minimum: 0
+          default: 0
+        tags:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+
+    ItemUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        price:
+          type: number
+          format: float
+          minimum: 0.01
+          maximum: 999999.99
+        in_stock:
+          type: boolean
+        stock_count:
+          type: integer
+          minimum: 0
+        tags:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+
+    Cart:
+      type: object
+      required: [user_id, items, total]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              quantity:
+                type: integer
+              unit_price:
+                type: number
+              subtotal:
+                type: number
+        total:
+          type: number
+          format: float
