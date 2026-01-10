@@ -49,21 +49,46 @@ Several sections in ARCHITECTURE.md are marked [NEEDS SPEC] and need design work
 
 ---
 
-## CEL Runtime Validation
+## ~~CEL Runtime Validation~~ (SUPERSEDED 20260110)
 
-Before implementation, validate that the chosen Python CEL library handles all predefined expressions correctly. See DESIGN.md "CEL Runtime Selection Deferred" for context.
+Decision made: Use cel-go via Go subprocess. Python CEL libraries are not an option due to untrusted dependency constraints.
 
-**Work:**
-1. Install `common-expression-language` (Rust-backed, requires Python 3.11+)
-2. Run all predefined expressions from `comparison_library.json` through it
-3. If any fail, try `cel-python` (pure Python, Python 3.9+)
-4. If both fail for specific expressions, evaluate cel-go subprocess escape hatch
+See DESIGN.md "CEL Evaluation via Go Subprocess" and "Stdin/Stdout IPC for CEL Subprocess" for full design. See ARCHITECTURE.md "CEL Evaluator Component" for implementation details.
 
-**Escape hatch design (if needed):**
-- Long-running Go subprocess wrapping cel-go
-- Line-delimited JSON protocol over stdin/stdout
-- ~60 lines Go, ~40 lines Python
-- Adds binary distribution burden; avoid unless necessary
+---
+
+## CEL Evaluator Implementation
+
+Implement the Go subprocess CEL evaluator and Python integration.
+
+**Go side (`cmd/cel-evaluator/main.go`):**
+1. Read JSON from stdin line-by-line using `bufio.Scanner`
+2. Parse expression and data from request
+3. Compile and evaluate CEL expression with cel-go
+4. Write JSON result to stdout, flush after each line
+5. Handle errors gracefully (return error response, don't crash)
+6. Send `{"ready":true}` on startup
+
+**Python side (`api_parity/cel_evaluator.py`):**
+1. Spawn subprocess with `subprocess.Popen(stdin=PIPE, stdout=PIPE)`
+2. Wait for ready handshake
+3. Implement `evaluate(expr: str, data: dict) -> bool` method
+4. Flush after each write, use readline for responses
+5. Handle subprocess crash (EOF detection, automatic restart)
+6. Implement `close()` for clean shutdown
+
+**Testing:**
+1. Unit tests for Go evaluator (stdin/stdout mocking)
+2. Unit tests for Python CELEvaluator class
+3. Integration test: Python → Go → Python round-trip
+4. Test all predefined expressions from `comparison_library.json`
+
+**Build/Distribution:**
+1. Create `go.mod` with cel-go dependency
+2. Add build instructions (Makefile or setup.py integration)
+3. Decide: build from source on install vs pre-built binaries
+
+See ARCHITECTURE.md "CEL Evaluator Component" for protocol details.
 
 ---
 

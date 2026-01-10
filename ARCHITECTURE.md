@@ -70,7 +70,7 @@ api-parity replay \
 
 ---
 
-## Component Architecture [NEEDS SPEC]
+## Component Architecture [SPECIFIED]
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -79,6 +79,7 @@ api-parity replay \
 │  - Load OpenAPI spec                                             │
 │  - Load runtime config                                           │
 │  - Dispatch to Explore or Replay mode                            │
+│  - Start/stop CEL Evaluator subprocess                           │
 └─────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
@@ -105,7 +106,16 @@ api-parity replay \
 │  - Apply per-endpoint comparison rules (user-defined)            │
 │  - Validate response fields against OpenAPI spec                 │
 │  - Produce structured diff                                       │
+│  - Delegates CEL evaluation to CEL Evaluator                     │
 └─────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+│                   CEL Evaluator (Go subprocess)                  │
+│  - Runs cel-go for expression evaluation                         │
+│  - Stdin/stdout IPC with NDJSON protocol                         │
+│  - Stateless: (expr, data) → bool                                │
+└ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -115,6 +125,57 @@ api-parity replay \
 │  - Write run logs and summary stats                              │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+Note: CEL Evaluator shown with dashed border to indicate it's a subprocess, not in-process Python.
+
+---
+
+## CEL Evaluator Component [SPECIFIED]
+
+The CEL Evaluator is a Go subprocess that evaluates CEL expressions for the Comparator. See DESIGN.md "CEL Evaluation via Go Subprocess" and "Stdin/Stdout IPC for CEL Subprocess" for rationale.
+
+### Why a Subprocess
+
+Python CEL libraries are unavailable (untrusted dependencies). The reference CEL implementation is cel-go. A subprocess isolates Go code behind a simple interface.
+
+### Interface
+
+Python side:
+```python
+class CELEvaluator(Protocol):
+    def evaluate(self, expression: str, data: dict) -> bool: ...
+    def close(self) -> None: ...
+```
+
+The Comparator calls `evaluate()` for each field comparison. It has no knowledge of the subprocess—just a function that takes an expression and data, returns a boolean.
+
+### IPC Protocol
+
+Communication uses stdin/stdout with newline-delimited JSON.
+
+**Startup:**
+1. Python spawns `./cel-evaluator` with `stdin=PIPE, stdout=PIPE`
+2. Go writes `{"ready":true}\n`
+3. Python reads ready message, proceeds
+
+**Request/Response:**
+```
+Python: {"id":"<uuid>","expr":"a == b","data":{"a":1,"b":1}}\n
+Go:     {"id":"<uuid>","ok":true,"result":true}\n
+```
+
+**Error:**
+```
+Python: {"id":"<uuid>","expr":"undefined_var","data":{}}\n
+Go:     {"id":"<uuid>","ok":false,"error":"undeclared reference to 'undefined_var'"}\n
+```
+
+### Lifecycle
+
+- Started once at CLI startup (before explore/replay begins)
+- Kept alive for duration of run
+- Terminated on CLI exit (close stdin, wait for process)
+- Restarted automatically if subprocess crashes (EOF detected on stdout)
 
 ---
 
@@ -361,7 +422,7 @@ Users must define comparison rules per operationId. No heuristic guessing.
 
 **Format:** JSON file optimized for LLM authorship and human readability. See DESIGN.md for rationale.
 
-**Engine:** All comparisons evaluate as CEL (Common Expression Language) expressions at runtime. Predefined comparisons (e.g., `numeric_tolerance`, `unordered_array`) expand to CEL during config loading.
+**Engine:** All comparisons evaluate as CEL (Common Expression Language) expressions at runtime via a Go subprocess running cel-go. Predefined comparisons (e.g., `numeric_tolerance`, `unordered_array`) expand to CEL during config loading. See "CEL Evaluator Component" for implementation details.
 
 **Example:**
 ```json

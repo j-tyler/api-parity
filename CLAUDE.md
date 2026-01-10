@@ -104,7 +104,8 @@ When something about the environment or project trips you up, add it to CLAUDE.m
 - This repository uses Git for version control
 - License: MIT
 - Primary documentation is in Markdown files at the repo root
-- Python is the implementation language
+- **Python** is the primary implementation language
+- **Go** is used for the CEL evaluator subprocess only (see ARCHITECTURE.md "CEL Evaluator Component")
 
 ### Reading Files and Running Commands
 
@@ -158,9 +159,47 @@ These issues were discovered during comparison rules design. Don't repeat them:
 
 4. **No `inherit_defaults` field** — Operation rules don't have an explicit inheritance flag. They always implicitly inherit unless they override.
 
+## CEL Evaluator Gotchas
+
+These patterns apply when working with the Go CEL subprocess:
+
+1. **Flush after every write** — Both Python and Go buffer I/O. Without explicit flush, messages sit in userspace buffers:
+   ```python
+   proc.stdin.write(json.dumps(req) + '\n')
+   proc.stdin.flush()  # Required!
+   ```
+   ```go
+   writer.WriteString(resp + "\n")
+   writer.Flush()  // Required!
+   ```
+
+2. **Newline-delimited JSON** — Each message is one line. Use `readline()` in Python, `bufio.Scanner` in Go. Never embed raw newlines in JSON values (they must be escaped as `\n`).
+
+3. **Handle subprocess death** — If Go process crashes, Python sees EOF on stdout. Detect and restart:
+   ```python
+   line = proc.stdout.readline()
+   if not line:  # EOF = subprocess died
+       self._restart_subprocess()
+   ```
+   Limit restarts (e.g., 3 attempts) to avoid infinite loops if the binary is broken.
+
+4. **Capture stderr** — Use `stderr=PIPE` or `stderr=DEVNULL`. Leaving stderr inherited pollutes CLI output if Go logs or panics.
+
+5. **Correlate by ID** — Always match response `id` to request `id` for debugging and log correlation.
+
+6. **CEL errors are not Python exceptions** — A malformed expression returns `{"ok":false,"error":"..."}`, not a crash. Handle both cases:
+   ```python
+   if not result['ok']:
+       raise CELEvaluationError(result['error'])
+   return result['result']
+   ```
+
+7. **Expression timeout** — CEL expressions can be crafted to run indefinitely. Use a context deadline in Go to prevent hangs. Return an error response on timeout, don't crash.
+
 ## What NOT to Do
 
 - Don't propose changes without reading relevant code first
 - Don't retread decisions already documented in DESIGN.md
 - Don't add unnecessary complexity or future-proofing
 - Don't create new files unless absolutely necessary
+- Don't use Python CEL libraries (cel-python, common-expression-language) — untrusted dependencies
