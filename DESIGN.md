@@ -294,23 +294,62 @@ See `prototype/comparison-rules/` for working implementation with validation and
 
 ---
 
-# CEL Runtime Selection Deferred
+# CEL Runtime Selection (DECIDED 20260110)
 
 Keywords: cel runtime python library cel-go cel-python implementation
 Date: 20260110
 
-The specific CEL runtime library is not yet selected. Candidates:
+**Decision:** Use cel-go via a Go subprocess. Python CEL libraries (cel-python, common-expression-language) cannot be used because they lack required security review for production use. cel-go, as Google's reference implementation with widespread production use (Kubernetes, Envoy, Firebase), meets the trust bar.
 
-| Library | Language | Python Version | Notes |
-|---------|----------|----------------|-------|
-| `common-expression-language` | Rust (bindings) | 3.11+ | Fastest, simple API |
-| `cel-python` | Pure Python | 3.9+ | Cloud Custodian project |
-| cel-go subprocess | Go | N/A | Official Google impl, operational overhead |
+See "CEL Evaluation via Go Subprocess" and "Stdin/Stdout IPC for CEL Subprocess" below for full design.
 
-**Decision:** Start with a Python library (`common-expression-language` or `cel-python`). These are pip-installable with no operational burden. Our predefined expressions are simple (equality, arithmetic, array operations) and should work in any conformant implementation.
+---
 
-**If Python libraries fail:** The escape hatch is a long-running Go subprocess wrapping cel-go. ~60 lines Go, ~40 lines Python. Communicates via line-delimited JSON over stdin/stdout. This avoids gRPC complexity but adds binary distribution burden.
+# CEL Evaluation via Go Subprocess
 
-**Build the escape hatch when:** A specific expression works in cel-go but fails in Python libraries. Not before.
+Keywords: cel go subprocess ipc python hybrid architecture
+Date: 20260110
 
-See TODO.md "CEL Runtime Validation" for the work item.
+CEL expressions are evaluated by a Go subprocess running cel-go, not a Python library. This decision was driven by dependency constraints: cel-python and similar Python CEL libraries cannot be used because they are untrusted dependencies.
+
+**Why not all-Python with a CEL alternative?**
+CEL alternatives (JsonLogic, JMESPath, RestrictedPython) lack CEL's combination of: sandboxed execution, expressive syntax, user-defined functions, and battle-tested security model. Replacing CEL would trade a solved problem for an unsolved one.
+
+**Why not all-Go replacing Schemathesis?**
+No Go equivalent to Schemathesis exists. Go has OpenAPI parsers (kin-openapi) and property testing (rapid), but no integrated tool providing: OpenAPI-driven generation, stateful chains via links, Hypothesis-style shrinking. Rebuilding this would be massive scope creep.
+
+**Architecture:**
+- Python: Main application (CLI, Schemathesis integration, HTTP execution, artifact writing)
+- Go: Single-purpose CEL evaluator subprocess (~60 lines)
+- Interface: `CELEvaluator` protocol in Python, implementation calls subprocess
+
+The Go subprocess is not a "hybrid architecture" in the complex sense—it's a small, focused helper behind a clean interface. The implementation detail (subprocess vs hypothetical future Python CEL library) is hidden from the rest of the codebase.
+
+---
+
+# Stdin/Stdout IPC for CEL Subprocess
+
+Keywords: ipc stdin stdout pipes subprocess protocol ndjson unix sockets
+Date: 20260110
+
+The Python↔Go CEL evaluator uses stdin/stdout pipes with newline-delimited JSON (NDJSON), not Unix domain sockets.
+
+**Why stdin/stdout over Unix sockets:**
+
+| Criterion | Pipes | Unix Sockets |
+|-----------|-------|--------------|
+| Setup complexity | Low (subprocess.Popen) | Medium (socket file, connect polling) |
+| Cleanup on crash | Automatic (process dies = EOF) | Manual (stale socket files) |
+| Cross-platform | Excellent | Good (no abstract namespace on macOS) |
+| Multi-client | No | Yes |
+| Our requirement | Single client | Single client |
+
+Sockets win for multi-client scenarios (multiple Python workers sharing one evaluator). We have single-client: one Python process, one Go subprocess. Pipes are simpler.
+
+**Technical details:**
+
+Pipes are unidirectional. Stdin/stdout requires two pipes for bidirectional communication. Data flows: Python writes → kernel buffer → Go reads (and vice versa for responses).
+
+Both Python and Go buffer I/O in userspace. Messages must be flushed after each write. EOF signals subprocess crash.
+
+See ARCHITECTURE.md "IPC Protocol" for the message format specification.

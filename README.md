@@ -6,6 +6,8 @@ Differential fuzzing tool for comparing two API implementations against an OpenA
 
 **Design phase** — Architecture and design docs are complete. Implementation has not started. See ARCHITECTURE.md and DESIGN.md for technical details.
 
+**Languages:** Python (primary), Go (CEL evaluator subprocess)
+
 ## Why
 
 API migration is hard. You have a working API, you're rewriting it, and you need to know: does the new implementation behave exactly like the old one? Existing tools solve pieces of this problem but don't combine them for migration workflows. api-parity focuses specifically on differential testing between two implementations with replayable failure artifacts.
