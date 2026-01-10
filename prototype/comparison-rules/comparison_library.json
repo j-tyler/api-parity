@@ -1,0 +1,126 @@
+{
+  "library_version": "1",
+  "description": "Predefined comparison expressions for api-parity. Each predefined expands to a CEL expression at config load time. Runtime only evaluates CEL.",
+
+  "predefined": {
+    "ignore": {
+      "description": "Always passes. Field is not compared.",
+      "params": [],
+      "expr": "true"
+    },
+
+    "exact_match": {
+      "description": "Values must be exactly equal.",
+      "params": [],
+      "expr": "a == b"
+    },
+
+    "numeric_tolerance": {
+      "description": "Numbers are equal within tolerance. Passes if |a - b| <= tolerance.",
+      "params": ["tolerance"],
+      "expr": "(a - b) <= tolerance && (b - a) <= tolerance"
+    },
+
+    "timestamp_tolerance": {
+      "description": "Unix timestamps (seconds) within N seconds of each other.",
+      "params": ["seconds"],
+      "expr": "(a - b) <= seconds && (b - a) <= seconds"
+    },
+
+    "timestamp_within_5s": {
+      "description": "Unix timestamps within 5 seconds. Convenience for common case.",
+      "params": [],
+      "expr": "(a - b) <= 5 && (b - a) <= 5"
+    },
+
+    "timestamp_within_30s": {
+      "description": "Unix timestamps within 30 seconds. Convenience for common case.",
+      "params": [],
+      "expr": "(a - b) <= 30 && (b - a) <= 30"
+    },
+
+    "unordered_array": {
+      "description": "Arrays contain same elements, order ignored. Elements compared by equality. WARNING: Does not correctly handle duplicates (e.g., [1,1,2] matches [1,2,2]). Use for arrays with unique elements only.",
+      "params": [],
+      "expr": "size(a) == size(b) && a.all(x, x in b)"
+    },
+
+    "array_length": {
+      "description": "Arrays have same length. Contents not compared.",
+      "params": [],
+      "expr": "size(a) == size(b)"
+    },
+
+    "array_length_tolerance": {
+      "description": "Array lengths differ by at most N elements.",
+      "params": ["tolerance"],
+      "expr": "(size(a) - size(b)) <= tolerance && (size(b) - size(a)) <= tolerance"
+    },
+
+    "string_prefix": {
+      "description": "First N characters of both strings match.",
+      "params": ["length"],
+      "expr": "a.substring(0, length) == b.substring(0, length)"
+    },
+
+    "string_nonempty": {
+      "description": "Both strings are non-empty. Actual content not compared.",
+      "params": [],
+      "expr": "size(a) > 0 && size(b) > 0"
+    },
+
+    "both_match_regex": {
+      "description": "Both values match the given regex pattern.",
+      "params": ["pattern"],
+      "expr": "a.matches(pattern) && b.matches(pattern)"
+    },
+
+    "uuid_format": {
+      "description": "Both values are valid UUID v4 format. Actual values not compared.",
+      "params": [],
+      "expr": "a.matches('^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') && b.matches('^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')"
+    },
+
+    "iso_timestamp_format": {
+      "description": "Both values are ISO 8601 timestamp format. Actual values not compared.",
+      "params": [],
+      "expr": "a.matches('^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}') && b.matches('^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}')"
+    },
+
+    "both_null": {
+      "description": "Both values are null.",
+      "params": [],
+      "expr": "a == null && b == null"
+    },
+
+    "both_null_or_equal": {
+      "description": "Both null, or both non-null and equal.",
+      "params": [],
+      "expr": "(a == null && b == null) || (a != null && b != null && a == b)"
+    },
+
+    "type_match": {
+      "description": "Values have the same type. Actual values not compared.",
+      "params": [],
+      "expr": "type(a) == type(b)"
+    },
+
+    "both_positive": {
+      "description": "Both values are positive numbers.",
+      "params": [],
+      "expr": "a > 0 && b > 0"
+    },
+
+    "same_sign": {
+      "description": "Both values have the same sign (both positive, both negative, or both zero).",
+      "params": [],
+      "expr": "(a > 0 && b > 0) || (a < 0 && b < 0) || (a == 0 && b == 0)"
+    },
+
+    "both_in_range": {
+      "description": "Both values fall within [min, max] inclusive.",
+      "params": ["min", "max"],
+      "expr": "(a >= min && a <= max) && (b >= min && b <= max)"
+    }
+  }
+}
