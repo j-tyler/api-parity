@@ -6,6 +6,25 @@ Instructions for Claude (AI assistant) when working in this repository.
 
 This is `api-parity`, a differential fuzzing tool for comparing API implementations against an OpenAPI specification.
 
+## Document Purposes
+
+Each root markdown file has a specific purpose. Put content in the right place:
+
+| File | Purpose | Content Examples |
+|------|---------|------------------|
+| **README.md** | Brief project overview for humans | What it does, how to run it, license |
+| **CLAUDE.md** | Instructions for AI assistants | Workflow, gotchas, environment notes |
+| **ARCHITECTURE.md** | Technical system structure | Components, data models, data flow, APIs |
+| **DESIGN.md** | Decisions and reasoning | Why choices were made, tradeoffs considered |
+| **TODO.md** | Future work items | Planned features, known issues, spec work needed |
+
+**Rule of thumb:**
+- "What is this project?" → README
+- "How do I work in this repo?" → CLAUDE
+- "How does the system work?" → ARCHITECTURE
+- "Why was it built this way?" → DESIGN
+- "What might we do later?" → TODO
+
 ## Key Files to Read First
 
 1. **ARCHITECTURE.md** - Understand system structure
@@ -85,6 +104,47 @@ When something about the environment or project trips you up, add it to CLAUDE.m
 - This repository uses Git for version control
 - License: MIT
 - Primary documentation is in Markdown files at the repo root
+- Python is the implementation language
+
+### Reading Files and Running Commands
+
+- **Read files** with the `Read` tool, not `cat` or shell commands
+- **Search file contents** with `Grep`, not `grep` or `rg`
+- **Find files by pattern** with `Glob`, not `find` or `ls`
+- **Edit files** with `Edit` tool for surgical changes, `Write` for full rewrites
+- **Run shell commands** with `Bash` tool for git, python, pip, etc.
+- **Explore codebase** with `Task` tool (subagent_type=Explore) for open-ended searches
+
+### Custom Slash Commands
+
+Commands are defined in `.claude/commands/*.md`. To run a command like `/foo`, read `.claude/commands/foo.md` and execute the logic manually.
+
+## Schemathesis Gotchas
+
+These issues were discovered during prototype validation. Don't repeat them:
+
+1. **Wrapped results** — `schema.get_all_operations()` returns wrapped `Ok/Err` results. Call `.ok()` to unwrap:
+   ```python
+   for result in schema.get_all_operations():
+       operation = result.ok()  # Don't forget this!
+   ```
+
+2. **Response constructor** — `schemathesis.core.transport.Response` requires specific fields:
+   ```python
+   Response(
+       status_code=200,
+       headers={'content-type': ['application/json']},  # List values!
+       content=b'{"id": "abc"}',  # Bytes, not str
+       request=prepared_request,  # PreparedRequest object required
+       elapsed=0.1,
+       verify=False,
+       http_version='1.1',
+   )
+   ```
+
+3. **Header values are lists** — Response headers dict must have list values, not strings.
+
+4. **Override validate_response()** — Must override and return `pass` to skip built-in schema validation (we do our own comparison).
 
 ## What NOT to Do
 

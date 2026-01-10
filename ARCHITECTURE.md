@@ -217,12 +217,13 @@ Execution of one step on one target.
 | response | ResponseCase | The response received |
 | extracted | object | Variables extracted for subsequent steps |
 
-**Chain execution semantics:** Each target maintains independent context. If POST returns `{"id": "abc"}` on Target A and `{"id": "xyz"}` on Target B, subsequent GET uses `/items/abc` for A and `/items/xyz` for B.
+**Chain execution semantics:** Both targets execute the same chain operations, but each uses its own extracted data. If POST returns `{"id": "abc"}` on Target A and `{"id": "xyz"}` on Target B, subsequent GET uses `/items/abc` for A and `/items/xyz` for B.
 
 ### Open Questions
 
 1. **Schema format:** Should these be JSON Schema definitions? TypeScript types? Python dataclasses?
-2. **Variable extraction:** How are `link_source` and `extracted` populated? This depends on how Schemathesis exposes link data.
+
+**Resolved:** Variable extraction is handled by Schemathesis state machine internals. The `extracted` field in ChainStepExecution stores values pulled from responses per OpenAPI link definitions. We don't need to implement custom extraction.
 
 ---
 
@@ -404,13 +405,13 @@ error_classification:
 
 ---
 
-## Stateful Chains [CONCEPT]
+## Stateful Chains [PARTIALLY SPECIFIED]
 
 ### Link-Based Generation
 
-Chains are auto-discovered from OpenAPI links by Schemathesis. The OpenAPI spec must define links with sufficient detail to express data flow.
+Chains are auto-discovered from OpenAPI links by Schemathesis via `schema.as_state_machine()`. The state machine automatically creates transitions for each link defined in the spec. Validated: up to 6-step chains, 70+ unique operation sequences generated.
 
-Target chain depth: At least 6 steps (create → get → update → get → delete → get).
+The OpenAPI spec must define links with sufficient detail to express data flow. Sparse link definitions produce shallow chains.
 
 **Example OpenAPI link:**
 ```yaml
@@ -427,19 +428,21 @@ paths:
                 id: '$response.body#/id'
 ```
 
-### Variable Extraction [CONCEPT]
+### Variable Extraction [SPECIFIED]
 
-When executing chains:
-1. Execute step on Target A, extract variables per link definitions
-2. Execute same step on Target B, extract variables per link definitions
-3. Use A's variables for A's next step, B's variables for B's next step
+Schemathesis handles variable extraction automatically via OpenAPI link expressions (e.g., `$response.body#/id`). The state machine maintains "bundles" that store extracted values between steps.
 
-**Open Questions:**
-1. Does Schemathesis expose extracted variables, or do we need custom extraction?
-2. How are extraction failures handled? (missing field in response)
-3. Can we extend extraction beyond what OpenAPI links define?
+When executing chains for api-parity:
+1. Execute step on Target A, extract variables from A's response
+2. Execute same operation on Target B, extract variables from B's response
+3. Compare responses—if mismatch, stop chain and record
+4. If parity, continue; each target's next step uses its own extracted variables
 
-### Replay Behavior [CONCEPT]
+Both targets follow the same chain of operations, but with their own data. If A's POST returns `{"id": "abc"}` and B's returns `{"id": "xyz"}`, A's GET hits `/items/abc` while B's hits `/items/xyz`.
+
+**Mismatch vs error:** If both return 404, that's parity—chain continues. If A returns 404 and B returns 200, that's a mismatch—chain stops.
+
+### Replay Behavior [NEEDS SPEC]
 
 Replay re-executes the full chain, including CREATE operations.
 
@@ -463,7 +466,7 @@ Response fields not present in the OpenAPI spec are treated as mismatches (categ
 
 ## Implementation Approach [SPECIFIED]
 
-**Generator:** Schemathesis — OpenAPI-driven fuzzing with stateful link support. This is an unvalidated bet; see TODO.md for validation tasks.
+**Generator:** Schemathesis v4.8.0 — OpenAPI-driven fuzzing with stateful link support. Validated 20260108; see DESIGN.md "Schemathesis as Generator (Validated)" for integration details.
 
 **HTTP client:** Any client supporting explicit headers, repeated query parameters, and raw body bytes.
 
