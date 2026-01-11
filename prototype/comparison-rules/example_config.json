@@ -8,7 +8,6 @@
       "content-type": {"predefined": "exact_match"}
     },
     "body": {
-      "ignored_paths": [],
       "field_rules": {}
     }
   },
@@ -16,8 +15,8 @@
   "operation_rules": {
     "createUser": {
       "body": {
-        "ignored_paths": ["$.request_id"],
         "field_rules": {
+          "$.request_id": {"predefined": "ignore"},
           "$.id": {"predefined": "uuid_format"},
           "$.created_at": {"predefined": "iso_timestamp_format"},
           "$.updated_at": {"predefined": "timestamp_within_5s"}

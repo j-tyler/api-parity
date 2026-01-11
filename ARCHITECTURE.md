@@ -483,15 +483,14 @@ When `presence` is omitted, it defaults to `parity`. When only `presence` is spe
       "content-type": {"predefined": "exact_match"}
     },
     "body": {
-      "ignored_paths": [],
       "field_rules": {}
     }
   },
   "operation_rules": {
     "createUser": {
       "body": {
-        "ignored_paths": ["$.request_id"],
         "field_rules": {
+          "$.request_id": {"predefined": "ignore"},
           "$.id": {"presence": "required", "predefined": "uuid_format"},
           "$.created_at": {"predefined": "timestamp_within_5s"},
           "$.balance": {"predefined": "numeric_tolerance", "tolerance": 0.01},

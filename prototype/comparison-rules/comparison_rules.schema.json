@@ -60,11 +60,6 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "ignored_paths": {
-              "type": "array",
-              "items": {"type": "string"},
-              "description": "JSONPath expressions for fields to skip entirely."
-            },
             "field_rules": {
               "type": "object",
               "description": "Per-field comparison rules. Keys are JSONPath expressions.",
