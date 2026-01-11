@@ -83,7 +83,7 @@ Replay mode regenerates data for fields with uniqueness constraints rather than 
 Keywords: errors 500 400 status codes classification recording
 Date: 20260108
 
-Default error handling: 500-class errors are not recorded as mismatches (assumed transient/infrastructure). Differing 400-class errors between targets are recorded (indicates behavioral difference). Users can override these defaults in configuration. This prevents infrastructure noise from polluting mismatch artifacts while capturing meaningful client-error divergence. Note: Edge case where A returns 500 and B returns 400 is unresolved; see ARCHITECTURE.md "Error Classification" open questions.
+Default error handling: 500-class errors are not recorded as mismatches (assumed transient/infrastructure). Differing 400-class errors between targets are recorded (indicates behavioral difference). Users can override these defaults in configuration. This prevents infrastructure noise from polluting mismatch artifacts while capturing meaningful client-error divergence. Cross-class differences (e.g., A returns 500, B returns 400) are mismatches—different status code classes indicate behavioral difference, not infrastructure noise.
 
 ---
 

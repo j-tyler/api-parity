@@ -539,20 +539,23 @@ When `presence` is omitted, it defaults to `parity`. When only `presence` is spe
 
 See `comparison_library.json` for all available predefineds with descriptions.
 
-### Error Classification [NEEDS SPEC]
+### Error Classification [SPECIFIED]
 
-Default behavior:
-- 500-class errors: Not recorded as mismatches (assumed transient)
-- Differing 400-class errors: Recorded (indicates behavioral difference)
+Error responses follow the status code class rule from "When body comparison applies":
+- Same status code class (e.g., both 4xx, both 5xx) → parity
+- Different status code classes (e.g., 4xx vs 5xx, or 2xx vs 4xx) → mismatch
 
-**Concept:**
+**Additional behavior for 5xx:**
+- Both return 5xx → parity, but not recorded (assumed transient/infrastructure). May retry.
+- One returns 5xx, other returns different class → mismatch, recorded.
+
+**Configurable overrides:**
 ```yaml
 error_classification:
-  ignore_status_codes: [500, 502, 503, 504]
-  record_on_difference: [400, 401, 403, 404, 422]
+  ignore_when_both: [500, 502, 503, 504]  # skip test case if both return these
 ```
 
-**Open Question:** What if A returns 500 and B returns 400? Is that a mismatch or ignored?
+This keeps infrastructure noise out of artifacts while catching real behavioral differences.
 
 ---
 
