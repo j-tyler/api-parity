@@ -32,36 +32,6 @@ api-parity is a local CLI that compares two deployments of a "theoretically iden
 
 ---
 
-## User vs Internal Artifacts [SPECIFIED]
-
-This section clarifies what users provide, what users receive, and what exists only inside the tool.
-
-### User-Provided (Input)
-
-| Artifact | Format | Purpose |
-|----------|--------|---------|
-| OpenAPI spec | YAML/JSON | Describes API operations, used for request generation |
-| Runtime config | YAML | Target URLs, auth headers, rate limits, secrets to redact |
-| Comparison rules | JSON | How to compare responses per operation (see "Per-Endpoint Comparison Rules") |
-
-### Tool-Produced (Output)
-
-| Artifact | Format | Purpose |
-|----------|--------|---------|
-| Mismatch bundles | Directory of JSON files | Everything needed for replay and analysis |
-| Run logs | Text/JSON | Progress and summary statistics |
-
-### Internal Only
-
-| Artifact | Format | Purpose |
-|----------|--------|---------|
-| Data models | Pydantic classes | In-memory representation of requests, responses, chains |
-| CEL evaluator | Go subprocess | Executes comparison expressions |
-
-**Key distinction:** Users write comparison rules in JSON referencing predefineds like `{"predefined": "numeric_tolerance", "tolerance": 0.01}`. The tool internally uses Pydantic models like `RequestCase` and `ResponseCase` to represent HTTP traffic. These are separate concerns—don't conflate them.
-
----
-
 ## Execution Modes [SPECIFIED]
 
 ### Mode A: Explore
