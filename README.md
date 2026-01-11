@@ -4,7 +4,7 @@ Differential fuzzing tool for comparing two API implementations against an OpenA
 
 ## Status
 
-**In development** — CEL evaluator subprocess and integration test infrastructure implemented. Core CLI pending. See ARCHITECTURE.md and DESIGN.md for technical details.
+**In development** — `explore` subcommand fully implemented with stateless test generation, dual-target execution, response comparison, and mismatch artifact writing. `replay` subcommand pending. See ARCHITECTURE.md and DESIGN.md for technical details.
 
 **Languages:** Python (primary), Go (CEL evaluator subprocess)
 

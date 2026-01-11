@@ -12,6 +12,8 @@ For each item, conclude with one of:
 - Code snippets that demonstrate the issue
 - Clear reasoning explaining why this is a problem
 - Single best recommendation to resolve it
+  - Right: "Recommendation: Doing A is best because Y."
+  - Wrong: "Do A or B."
 
 **RETRACT**: You were mistaken or the concern doesn't apply. Include:
 - What you misunderstood

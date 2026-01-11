@@ -223,6 +223,7 @@ class ComparisonRulesFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: str = Field(default="1", description="Schema version")
+    description: str | None = Field(default=None, description="Optional description")
     default_rules: OperationRules = Field(
         default_factory=OperationRules, description="Rules applied to all operations"
     )

@@ -432,19 +432,85 @@ def run_list_operations(args: ListOperationsArgs) -> int:
 
 
 def run_explore(args: ExploreArgs) -> int:
-    """Run explore mode."""
-    # Placeholder until components are implemented
+    """Run explore mode.
+
+    Generates test cases from OpenAPI spec and compares responses between two targets.
+    """
+    from api_parity.artifact_writer import ArtifactWriter, RunStats
+    from api_parity.case_generator import CaseGenerator, CaseGeneratorError
+    from api_parity.cel_evaluator import CELEvaluator, CELSubprocessError
+    from api_parity.comparator import Comparator
+    from api_parity.config_loader import (
+        ConfigError,
+        get_operation_rules,
+        load_comparison_library,
+        load_comparison_rules,
+        load_runtime_config,
+        resolve_comparison_rules_path,
+        validate_targets,
+    )
+    from api_parity.executor import Executor, RequestError
+    from api_parity.models import TargetInfo
+
+    # Load configuration
+    try:
+        runtime_config = load_runtime_config(args.config)
+    except ConfigError as e:
+        print(f"Error loading config: {e}", file=sys.stderr)
+        return 1
+
+    # Validate targets
+    try:
+        target_a_config, target_b_config = validate_targets(
+            runtime_config, args.target_a, args.target_b
+        )
+    except ConfigError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # Load comparison rules
+    try:
+        rules_path = resolve_comparison_rules_path(args.config, runtime_config.comparison_rules)
+        comparison_rules = load_comparison_rules(rules_path)
+    except ConfigError as e:
+        print(f"Error loading comparison rules: {e}", file=sys.stderr)
+        return 1
+
+    # Load comparison library
+    try:
+        comparison_library = load_comparison_library()
+    except ConfigError as e:
+        print(f"Error loading comparison library: {e}", file=sys.stderr)
+        return 1
+
+    # Initialize case generator
+    try:
+        generator = CaseGenerator(args.spec, exclude_operations=args.exclude)
+    except CaseGeneratorError as e:
+        print(f"Error loading OpenAPI spec: {e}", file=sys.stderr)
+        return 1
+
+    # Validate mode - just check config validity without executing
     if args.validate:
         print(f"Validating: spec={args.spec}, config={args.config}")
         print(f"  Targets: {args.target_a}, {args.target_b}")
+        print(f"    {args.target_a}: {target_a_config.base_url}")
+        print(f"    {args.target_b}: {target_b_config.base_url}")
         if args.exclude:
             print(f"  Excluding: {', '.join(args.exclude)}")
-        # TODO: Load and validate spec, config, check targets exist, validate excluded operationIds
+
+        # List operations that will be tested
+        operations = generator.get_operations()
+        print(f"  Operations: {len(operations)}")
+        for op in operations:
+            print(f"    {op['operation_id']} ({op['method']} {op['path']})")
+
         print("Validation successful")
         return 0
 
-    print(f"Explore mode: spec={args.spec}, config={args.config}")
-    print(f"  Targets: {args.target_a} vs {args.target_b}")
+    # Print run configuration
+    print(f"Explore mode: spec={args.spec}")
+    print(f"  Targets: {args.target_a} ({target_a_config.base_url}) vs {args.target_b} ({target_b_config.base_url})")
     print(f"  Output: {args.out}")
     if args.seed is not None:
         print(f"  Seed: {args.seed}")
@@ -456,6 +522,93 @@ def run_explore(args: ExploreArgs) -> int:
     if args.operation_timeout:
         for op_id, timeout in args.operation_timeout.items():
             print(f"  Timeout for {op_id}: {timeout}s")
+    print()
+
+    # Initialize components
+    stats = RunStats()
+    writer = ArtifactWriter(args.out, runtime_config.secrets)
+
+    target_a_info = TargetInfo(name=args.target_a, base_url=target_a_config.base_url)
+    target_b_info = TargetInfo(name=args.target_b, base_url=target_b_config.base_url)
+
+    # Start CEL evaluator
+    try:
+        cel_evaluator = CELEvaluator()
+    except CELSubprocessError as e:
+        print(f"Error starting CEL evaluator: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        comparator = Comparator(cel_evaluator, comparison_library)
+
+        # Start executor
+        with Executor(
+            target_a_config,
+            target_b_config,
+            default_timeout=args.timeout,
+            operation_timeouts=args.operation_timeout,
+        ) as executor:
+
+            # Generate and execute test cases
+            for case in generator.generate(max_cases=args.max_cases, seed=args.seed):
+                stats.total_cases += 1
+                stats.add_operation(case.operation_id)
+
+                print(f"[{stats.total_cases}] {case.operation_id}: {case.method} {case.rendered_path}", end=" ")
+
+                try:
+                    # Execute request against both targets
+                    response_a, response_b = executor.execute(case)
+
+                    # Get rules for this operation
+                    rules = get_operation_rules(comparison_rules, case.operation_id)
+
+                    # Compare responses
+                    result = comparator.compare(response_a, response_b, rules)
+
+                    if result.match:
+                        stats.matches += 1
+                        print("MATCH")
+                    else:
+                        stats.mismatches += 1
+                        print(f"MISMATCH: {result.summary}")
+
+                        # Write mismatch bundle
+                        bundle_path = writer.write_mismatch(
+                            case=case,
+                            response_a=response_a,
+                            response_b=response_b,
+                            diff=result,
+                            target_a_info=target_a_info,
+                            target_b_info=target_b_info,
+                            seed=args.seed,
+                        )
+                        print(f"         Bundle: {bundle_path}")
+
+                except RequestError as e:
+                    stats.errors += 1
+                    print(f"ERROR: {e}")
+
+    except CELSubprocessError as e:
+        print(f"\nFatal: CEL evaluator crashed: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
+    finally:
+        cel_evaluator.close()
+
+    # Write summary
+    writer.write_summary(stats, seed=args.seed)
+
+    # Print summary
+    print()
+    print("=" * 60)
+    print(f"Total cases: {stats.total_cases}")
+    print(f"  Matches:    {stats.matches}")
+    print(f"  Mismatches: {stats.mismatches}")
+    print(f"  Errors:     {stats.errors}")
+    print(f"Summary written to: {args.out / 'summary.json'}")
+
     return 0
 
 
