@@ -352,3 +352,38 @@ The Python↔Go CEL evaluator uses stdin/stdout pipes with newline-delimited JSO
 Sockets win for multi-client scenarios. We have single-client (one Python process, one Go subprocess), so pipes are simpler. Both sides buffer I/O—flush after each write. EOF signals subprocess crash.
 
 See ARCHITECTURE.md "IPC Protocol" for the message format.
+
+---
+
+# jsonpath-ng for JSONPath Extraction
+
+Keywords: jsonpath jsonpath-ng jmespath extraction body fields
+Date: 20260111
+
+JSONPath extraction uses the `jsonpath-ng` library. Alternatives considered:
+
+| Library | Pros | Cons |
+|---------|------|------|
+| jsonpath-ng | Full JSONPath spec, wildcards, filters | Heavier dependency |
+| jmespath | Fast, AWS-backed | Different syntax (not JSONPath) |
+| Manual | No dependency | Limited features, maintenance burden |
+
+Chose jsonpath-ng because: (1) it implements the standard JSONPath syntax users expect, (2) supports all wildcard patterns (`[*]`, `..`, `[?()]`, slices), (3) provides parse-once-execute-many for caching compiled paths.
+
+The Comparator caches compiled JSONPath expressions per path string. Cache size is bounded by the number of unique paths in user configuration.
+
+---
+
+# CEL Errors Treated as Mismatches
+
+Keywords: cel error handling mismatch exception propagation
+Date: 20260111
+
+When CEL expression evaluation fails (syntax error, type error, unknown function), the Comparator records this as a mismatch with `rule: "error: <message>"` rather than raising an exception.
+
+Rationale:
+1. **Fail-safe behavior** — A broken comparison rule shouldn't crash the entire run. Record the error, continue comparing other fields.
+2. **Visibility** — Errors appear in mismatch artifacts alongside real mismatches, making them visible for debugging.
+3. **Consistency** — Both configuration errors (unknown predefined) and runtime errors (CEL type mismatch) are handled the same way.
+
+This is distinct from `CELSubprocessError` (Go process crashed), which does propagate as an exception since it indicates infrastructure failure, not configuration/data issues.

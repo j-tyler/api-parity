@@ -196,7 +196,7 @@ These patterns apply when working with the Go CEL subprocess:
    return result['result']
    ```
 
-7. **Expression timeout** — CEL expressions can be crafted to run indefinitely. Use a context deadline in Go to prevent hangs. Return an error response on timeout, don't crash.
+7. **Expression timeout** — The Go CEL evaluator has a 5-second timeout per expression (see `evaluationTimeout` in `cmd/cel-evaluator/main.go`). If evaluation exceeds this, it returns `{"ok":false,"error":"evaluation timeout exceeded"}`. The Comparator treats this as a mismatch with `rule: "error: evaluation timeout exceeded"`. No special handling needed—timeout errors flow through the normal error path.
 
 ## What NOT to Do
 

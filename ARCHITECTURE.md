@@ -104,8 +104,7 @@ api-parity replay \
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Comparator                                │
 │  - Apply per-endpoint comparison rules (user-defined)            │
-│  - Validate response fields against OpenAPI spec                 │
-│  - Produce structured diff                                       │
+│  - Produce structured diff with field-level details              │
 │  - Delegates CEL evaluation to CEL Evaluator                     │
 └─────────────────────────────────────────────────────────────────┘
                                 │
