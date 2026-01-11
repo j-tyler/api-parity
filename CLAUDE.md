@@ -159,6 +159,8 @@ These issues were discovered during comparison rules design. Don't repeat them:
 
 4. **No `inherit_defaults` field** — Operation rules don't have an explicit inheritance flag. They always implicitly inherit unless they override.
 
+5. **Multi-value headers use first value only** — Don't assume header values are strings—they're lists internally. Only the first value is used for comparison.
+
 ## CEL Evaluator Gotchas
 
 These patterns apply when working with the Go CEL subprocess:

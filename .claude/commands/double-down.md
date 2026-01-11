@@ -11,7 +11,7 @@ For each item, conclude with one of:
 **DOUBLE DOWN**: You found supporting evidence. Include:
 - Code snippets that demonstrate the issue
 - Clear reasoning explaining why this is a problem
-- Concrete recommendation to resolve it
+- Single best recommendation to resolve it
 
 **RETRACT**: You were mistaken or the concern doesn't apply. Include:
 - What you misunderstood

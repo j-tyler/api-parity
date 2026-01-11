@@ -69,6 +69,9 @@ def inline_predefined(comparison: dict, library: dict) -> dict:
         return comparison
 
     if "predefined" not in comparison:
+        # Presence-only rule (no value comparison), return as-is
+        if "presence" in comparison:
+            return comparison
         raise ValueError(f"Invalid comparison: {comparison}")
 
     name = comparison["predefined"]
@@ -116,6 +119,12 @@ def inline_comparison_rules(rules: dict, library: dict) -> dict:
 
     if "status_code" in result:
         result["status_code"] = inline_predefined(result["status_code"], library)
+
+    if "headers" in result:
+        result["headers"] = {
+            name: inline_predefined(rule, library)
+            for name, rule in result["headers"].items()
+        }
 
     if "body" in result:
         result["body"] = inline_body_rules(result["body"], library)
