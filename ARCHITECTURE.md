@@ -440,6 +440,25 @@ A JSON file you write to tell api-parity how responses should be compared. You d
 
 In CEL expressions, `a` is the value from Target A, `b` is from Target B.
 
+**Default behavior for unspecified fields:** Fields without explicit `field_rules` entries are compared for presence parity only—both responses must have the field, or both must lack it. Values are not compared. This lets fields the user doesn't care about be whatever, as long as they're whatever in both.
+
+**Field presence:** Each field rule can specify a `presence` property to control existence requirements. Presence is checked before value comparison (in Python, not CEL).
+
+| Presence | Meaning |
+|----------|---------|
+| `parity` | Both must have field, or both must lack it (default) |
+| `required` | Both must have field—fails if either lacks it |
+| `forbidden` | Both must lack field—fails if either has it |
+| `optional` | Compare values if both have field; pass if either lacks it |
+
+```json
+{"presence": "required", "predefined": "uuid_format"}     // must exist, check format
+{"presence": "forbidden"}                                  // must not exist
+{"presence": "optional", "predefined": "exact_match"}     // compare only if present
+```
+
+When `presence` is omitted, it defaults to `parity`. When only `presence` is specified (no `predefined` or `expr`), value comparison is skipped after presence check passes.
+
 **Full example:**
 ```json
 {
@@ -458,9 +477,11 @@ In CEL expressions, `a` is the value from Target A, `b` is from Target B.
       "body": {
         "ignored_paths": ["$.request_id"],
         "field_rules": {
-          "$.id": {"predefined": "uuid_format"},
+          "$.id": {"presence": "required", "predefined": "uuid_format"},
           "$.created_at": {"predefined": "timestamp_within_5s"},
-          "$.balance": {"predefined": "numeric_tolerance", "tolerance": 0.01}
+          "$.balance": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.legacy_field": {"presence": "forbidden"},
+          "$.nickname": {"presence": "optional", "predefined": "exact_match"}
         }
       }
     }
@@ -473,6 +494,9 @@ In CEL expressions, `a` is the value from Target A, `b` is from Target B.
 - Tolerate float rounding: `{"predefined": "numeric_tolerance", "tolerance": 0.01}`
 - Unordered arrays: `{"predefined": "unordered_array"}` (unique elements only)
 - Format-only check: `{"predefined": "uuid_format"}` or `{"predefined": "iso_timestamp_format"}`
+- Require field exists: `{"presence": "required"}` (value not compared)
+- Forbid deprecated field: `{"presence": "forbidden"}`
+- Compare only if present: `{"presence": "optional", "predefined": "exact_match"}`
 
 See `comparison_library.json` for all available predefineds with descriptions.
 
