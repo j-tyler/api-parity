@@ -5,13 +5,31 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+from api_parity.models import ResponseCase
 
 # Project root for fixture paths
 PROJECT_ROOT = Path(__file__).parent.parent
 FIXTURES_DIR = PROJECT_ROOT / "tests" / "fixtures"
 MOCK_SERVER_MODULE = "tests.integration.mock_server"
+
+
+def make_response(
+    status_code: int = 200,
+    headers: dict = None,
+    body: Any = None,
+    elapsed_ms: float = 10.0,
+) -> ResponseCase:
+    """Helper to create ResponseCase instances for testing."""
+    return ResponseCase(
+        status_code=status_code,
+        headers=headers or {},
+        body=body,
+        elapsed_ms=elapsed_ms,
+    )
 
 
 def find_free_port() -> int:
