@@ -1,22 +1,27 @@
 """Case Generator - Wraps Schemathesis for test case generation.
 
 Generates RequestCase objects from an OpenAPI specification using Schemathesis
-as the underlying fuzzer. Currently supports stateless (single request) generation
-only. Stateful chain generation via OpenAPI links is planned but not yet implemented.
+as the underlying fuzzer. Supports both stateless (single request) generation
+and stateful chain generation via OpenAPI links.
 
 See ARCHITECTURE.md "Case Generator Component" for specifications.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
+import requests
 import schemathesis
 from hypothesis import Phase, settings
+from hypothesis.stateful import run_state_machine_as_test
+from schemathesis.core.transport import Response as SchemathesisResponse
+from schemathesis.specs.openapi.stateful import OpenAPIStateMachine
 
-from api_parity.models import RequestCase
+from api_parity.models import ChainCase, ChainStep, RequestCase
 
 
 class CaseGeneratorError(Exception):
@@ -207,10 +212,10 @@ class CaseGenerator:
         if case.cookies:
             cookies = {str(k): str(v) for k, v in case.cookies.items()}
 
-        # Body
+        # Body - check for NotSet sentinel
         body: Any = None
         media_type: str | None = None
-        if case.body is not None:
+        if case.body is not None and str(type(case.body).__name__) != "NotSet":
             body = case.body
             media_type = case.media_type
 
@@ -227,3 +232,151 @@ class CaseGenerator:
             body=body,
             media_type=media_type,
         )
+
+    def generate_chains(
+        self,
+        max_chains: int | None = None,
+        max_steps: int = 6,
+        seed: int | None = None,
+    ) -> list[ChainCase]:
+        """Generate stateful request chains following OpenAPI links.
+
+        Uses Schemathesis state machine to generate multi-step sequences.
+        Chains are generated without making HTTP calls - the executor handles
+        actual execution.
+
+        Args:
+            max_chains: Maximum number of chains to generate (default 20).
+            max_steps: Maximum steps per chain (default 6).
+            seed: Random seed for reproducibility.
+
+        Returns:
+            List of ChainCase objects ready for execution.
+        """
+        max_chains = max_chains or 20
+
+        # Create capturing state machine
+        captured_chains: list[ChainCase] = []
+        current_steps: list[ChainStep] = []
+        step_counter = 0
+
+        generator_self = self
+
+        class ChainCapturingStateMachine(OpenAPIStateMachine):
+            """State machine that captures chains without making HTTP calls."""
+
+            def validate_response(self, response, case, **kwargs):
+                """Skip validation - we're just generating chains."""
+                pass
+
+            def setup(self):
+                """Called before each test run - start a new chain."""
+                nonlocal current_steps, step_counter
+                current_steps = []
+                step_counter = 0
+
+            def teardown(self):
+                """Called after each test run - save the completed chain."""
+                nonlocal captured_chains, current_steps
+                if current_steps:
+                    chain = ChainCase(
+                        chain_id=str(uuid.uuid4()),
+                        steps=list(current_steps),
+                    )
+                    captured_chains.append(chain)
+                current_steps = []
+
+            def call(self, case, **kwargs) -> SchemathesisResponse:
+                """Capture the case instead of making HTTP request."""
+                nonlocal current_steps, step_counter
+
+                # Extract operation info
+                op_id = case.operation.definition.raw.get("operationId", "unknown")
+                if op_id in generator_self._exclude:
+                    # Still need to return a mock response for excluded operations
+                    return self._mock_response(case, op_id)
+
+                # Convert to our RequestCase
+                request_case = generator_self._convert_case(case, op_id)
+
+                # Create chain step
+                step = ChainStep(
+                    step_index=step_counter,
+                    request_template=request_case,
+                    link_source=None,  # Link source tracked by Schemathesis internally
+                )
+                current_steps.append(step)
+                step_counter += 1
+
+                return self._mock_response(case, op_id)
+
+            def _mock_response(self, case, op_id: str) -> SchemathesisResponse:
+                """Generate mock response for link resolution."""
+                # Create mock data that links can use
+                mock_body = self._generate_mock_body(op_id)
+
+                # Create a mock PreparedRequest
+                req = requests.Request(
+                    method=case.method,
+                    url=f"http://mock{case.path}",
+                )
+                prepared = req.prepare()
+
+                return SchemathesisResponse(
+                    status_code=201 if case.method == "POST" else 200,
+                    headers={"content-type": ["application/json"]},
+                    content=json.dumps(mock_body).encode(),
+                    request=prepared,
+                    elapsed=0.1,
+                    verify=False,
+                    http_version="1.1",
+                )
+
+            def _generate_mock_body(self, op_id: str) -> dict:
+                """Generate mock response body with data for link resolution."""
+                # Generate UUIDs that links can extract
+                return {
+                    "id": str(uuid.uuid4()),
+                    "name": "Mock Item",
+                    "price": 9.99,
+                    "status": "pending",
+                    "user_id": str(uuid.uuid4()),
+                    "order_id": str(uuid.uuid4()),
+                    "widget_id": str(uuid.uuid4()),
+                    "items": [{"id": str(uuid.uuid4())} for _ in range(3)],
+                    "total": 3,
+                    "created_at": "2024-01-01T00:00:00Z",
+                }
+
+        # Get the state machine class from schema
+        try:
+            OriginalStateMachine = self._schema.as_state_machine()
+        except Exception as e:
+            raise CaseGeneratorError(f"Failed to create state machine: {e}") from e
+
+        # Create combined class
+        class CombinedMachine(ChainCapturingStateMachine, OriginalStateMachine):
+            pass
+
+        # Run the state machine
+        @settings(
+            max_examples=max_chains,
+            stateful_step_count=max_steps,
+            database=None,
+            phases=[Phase.generate],
+            deadline=None,
+            derandomize=seed is not None,
+        )
+        def run_generation():
+            run_state_machine_as_test(CombinedMachine)
+
+        try:
+            run_generation()
+        except Exception:
+            # Hypothesis may raise when exhausted, that's OK
+            pass
+
+        # Filter to chains with multiple steps (single-step chains aren't useful)
+        multi_step_chains = [c for c in captured_chains if len(c.steps) > 1]
+
+        return multi_step_chains

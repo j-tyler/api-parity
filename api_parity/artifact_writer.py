@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 from api_parity.models import (
+    ChainCase,
+    ChainExecution,
     ComparisonResult,
     MismatchMetadata,
     RequestCase,
@@ -39,6 +41,11 @@ class RunStats:
     errors: int = 0
     skipped: int = 0
     operations: dict[str, int] = field(default_factory=dict)
+    # Chain-specific stats
+    total_chains: int = 0
+    chain_matches: int = 0
+    chain_mismatches: int = 0
+    chain_errors: int = 0
 
     def add_operation(self, operation_id: str) -> None:
         """Record a case for an operation."""
@@ -138,6 +145,84 @@ class ArtifactWriter:
 
         return bundle_dir
 
+    def write_chain_mismatch(
+        self,
+        chain: ChainCase,
+        execution_a: ChainExecution,
+        execution_b: ChainExecution,
+        step_diffs: list[ComparisonResult],
+        mismatch_step: int,
+        target_a_info: TargetInfo,
+        target_b_info: TargetInfo,
+        seed: int | None = None,
+    ) -> Path:
+        """Write a chain mismatch bundle to disk.
+
+        Chain bundles contain:
+        - chain.json: The chain template (ChainCase)
+        - target_a.json: Full execution trace for Target A (ChainExecution)
+        - target_b.json: Full execution trace for Target B (ChainExecution)
+        - diff.json: Step-by-step comparison results with mismatch info
+        - metadata.json: Run context
+
+        Args:
+            chain: The chain that produced the mismatch.
+            execution_a: Execution trace from Target A.
+            execution_b: Execution trace from Target B.
+            step_diffs: List of comparison results for each step.
+            mismatch_step: Index of first step with mismatch.
+            target_a_info: Target A information.
+            target_b_info: Target B information.
+            seed: Random seed used (if any).
+
+        Returns:
+            Path to the bundle directory.
+        """
+        # Generate bundle directory name
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        chain_id = chain.chain_id[:8]
+        # Include first operation for context
+        first_op = chain.steps[0].request_template.operation_id if chain.steps else "unknown"
+        first_op = self._sanitize_filename(first_op)
+        bundle_name = f"{timestamp}__chain__{first_op}__{chain_id}"
+        bundle_dir = self._mismatches_dir / bundle_name
+
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+
+        # Redact secrets from chain and executions
+        chain_data = self._redact(chain.model_dump())
+        exec_a_data = self._redact(execution_a.model_dump())
+        exec_b_data = self._redact(execution_b.model_dump())
+
+        # Write chain.json
+        self._write_json(bundle_dir / "chain.json", chain_data)
+
+        # Write target_a.json and target_b.json
+        self._write_json(bundle_dir / "target_a.json", exec_a_data)
+        self._write_json(bundle_dir / "target_b.json", exec_b_data)
+
+        # Write diff.json with step-by-step results
+        diff_data = {
+            "match": False,
+            "mismatch_step": mismatch_step,
+            "total_steps": len(chain.steps),
+            "steps": [diff.model_dump() for diff in step_diffs],
+        }
+        self._write_json(bundle_dir / "diff.json", diff_data)
+
+        # Write metadata.json
+        metadata = MismatchMetadata(
+            tool_version=TOOL_VERSION,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            seed=seed,
+            target_a=target_a_info,
+            target_b=target_b_info,
+            comparison_rules_applied="operation",
+        )
+        self._write_json(bundle_dir / "metadata.json", metadata.model_dump())
+
+        return bundle_dir
+
     def write_summary(self, stats: RunStats, seed: int | None = None) -> None:
         """Write run summary to disk.
 
@@ -155,6 +240,11 @@ class ArtifactWriter:
             "errors": stats.errors,
             "skipped": stats.skipped,
             "operations": stats.operations,
+            # Chain stats (only included if chains were run)
+            "total_chains": stats.total_chains,
+            "chain_matches": stats.chain_matches,
+            "chain_mismatches": stats.chain_mismatches,
+            "chain_errors": stats.chain_errors,
         }
         self._write_json(self._output_dir / "summary.json", summary)
 

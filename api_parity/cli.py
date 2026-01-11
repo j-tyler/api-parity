@@ -98,6 +98,10 @@ class ExploreArgs:
     exclude: list[str]
     timeout: float
     operation_timeout: dict[str, float]
+    # Stateful chain options
+    stateful: bool
+    max_chains: int | None
+    max_steps: int
 
 
 @dataclass
@@ -215,6 +219,27 @@ def build_parser() -> argparse.ArgumentParser:
         dest="operation_timeout",
         help="Set timeout for a specific operation (can be repeated)",
     )
+    # Stateful chain options
+    explore_parser.add_argument(
+        "--stateful",
+        action="store_true",
+        default=False,
+        help="Enable stateful chain testing using OpenAPI links",
+    )
+    explore_parser.add_argument(
+        "--max-chains",
+        type=positive_int,
+        default=None,
+        dest="max_chains",
+        help="Maximum number of chains to generate in stateful mode (default: 20)",
+    )
+    explore_parser.add_argument(
+        "--max-steps",
+        type=positive_int,
+        default=6,
+        dest="max_steps",
+        help="Maximum steps per chain in stateful mode (default: 6)",
+    )
 
     # Replay subcommand
     replay_parser = subparsers.add_parser(
@@ -314,6 +339,9 @@ def parse_explore_args(namespace: argparse.Namespace) -> ExploreArgs:
         exclude=namespace.exclude or [],
         timeout=namespace.timeout,
         operation_timeout=op_timeouts,
+        stateful=namespace.stateful,
+        max_chains=namespace.max_chains,
+        max_steps=namespace.max_steps,
     )
 
 
@@ -509,12 +537,17 @@ def run_explore(args: ExploreArgs) -> int:
         return 0
 
     # Print run configuration
-    print(f"Explore mode: spec={args.spec}")
+    mode = "stateful" if args.stateful else "stateless"
+    print(f"Explore mode ({mode}): spec={args.spec}")
     print(f"  Targets: {args.target_a} ({target_a_config.base_url}) vs {args.target_b} ({target_b_config.base_url})")
     print(f"  Output: {args.out}")
     if args.seed is not None:
         print(f"  Seed: {args.seed}")
-    if args.max_cases is not None:
+    if args.stateful:
+        max_chains = args.max_chains or 20
+        print(f"  Max chains: {max_chains}")
+        print(f"  Max steps per chain: {args.max_steps}")
+    elif args.max_cases is not None:
         print(f"  Max cases: {args.max_cases}")
     if args.exclude:
         print(f"  Excluding: {', '.join(args.exclude)}")
@@ -549,45 +582,37 @@ def run_explore(args: ExploreArgs) -> int:
             operation_timeouts=args.operation_timeout,
         ) as executor:
 
-            # Generate and execute test cases
-            for case in generator.generate(max_cases=args.max_cases, seed=args.seed):
-                stats.total_cases += 1
-                stats.add_operation(case.operation_id)
-
-                print(f"[{stats.total_cases}] {case.operation_id}: {case.method} {case.rendered_path}", end=" ")
-
-                try:
-                    # Execute request against both targets
-                    response_a, response_b = executor.execute(case)
-
-                    # Get rules for this operation
-                    rules = get_operation_rules(comparison_rules, case.operation_id)
-
-                    # Compare responses
-                    result = comparator.compare(response_a, response_b, rules)
-
-                    if result.match:
-                        stats.matches += 1
-                        print("MATCH")
-                    else:
-                        stats.mismatches += 1
-                        print(f"MISMATCH: {result.summary}")
-
-                        # Write mismatch bundle
-                        bundle_path = writer.write_mismatch(
-                            case=case,
-                            response_a=response_a,
-                            response_b=response_b,
-                            diff=result,
-                            target_a_info=target_a_info,
-                            target_b_info=target_b_info,
-                            seed=args.seed,
-                        )
-                        print(f"         Bundle: {bundle_path}")
-
-                except RequestError as e:
-                    stats.errors += 1
-                    print(f"ERROR: {e}")
+            if args.stateful:
+                # Stateful chain testing
+                _run_stateful_explore(
+                    generator=generator,
+                    executor=executor,
+                    comparator=comparator,
+                    comparison_rules=comparison_rules,
+                    writer=writer,
+                    stats=stats,
+                    target_a_info=target_a_info,
+                    target_b_info=target_b_info,
+                    max_chains=args.max_chains,
+                    max_steps=args.max_steps,
+                    seed=args.seed,
+                    get_operation_rules=get_operation_rules,
+                )
+            else:
+                # Stateless testing
+                _run_stateless_explore(
+                    generator=generator,
+                    executor=executor,
+                    comparator=comparator,
+                    comparison_rules=comparison_rules,
+                    writer=writer,
+                    stats=stats,
+                    target_a_info=target_a_info,
+                    target_b_info=target_b_info,
+                    max_cases=args.max_cases,
+                    seed=args.seed,
+                    get_operation_rules=get_operation_rules,
+                )
 
     except CELSubprocessError as e:
         print(f"\nFatal: CEL evaluator crashed: {e}", file=sys.stderr)
@@ -603,13 +628,155 @@ def run_explore(args: ExploreArgs) -> int:
     # Print summary
     print()
     print("=" * 60)
-    print(f"Total cases: {stats.total_cases}")
-    print(f"  Matches:    {stats.matches}")
-    print(f"  Mismatches: {stats.mismatches}")
-    print(f"  Errors:     {stats.errors}")
+    if args.stateful:
+        print(f"Total chains: {stats.total_chains}")
+        print(f"  Matches:    {stats.chain_matches}")
+        print(f"  Mismatches: {stats.chain_mismatches}")
+        print(f"  Errors:     {stats.chain_errors}")
+    else:
+        print(f"Total cases: {stats.total_cases}")
+        print(f"  Matches:    {stats.matches}")
+        print(f"  Mismatches: {stats.mismatches}")
+        print(f"  Errors:     {stats.errors}")
     print(f"Summary written to: {args.out / 'summary.json'}")
 
     return 0
+
+
+def _run_stateless_explore(
+    generator,
+    executor,
+    comparator,
+    comparison_rules,
+    writer,
+    stats,
+    target_a_info,
+    target_b_info,
+    max_cases,
+    seed,
+    get_operation_rules,
+):
+    """Execute stateless (single-request) testing."""
+    from api_parity.executor import RequestError
+
+    for case in generator.generate(max_cases=max_cases, seed=seed):
+        stats.total_cases += 1
+        stats.add_operation(case.operation_id)
+
+        print(f"[{stats.total_cases}] {case.operation_id}: {case.method} {case.rendered_path}", end=" ")
+
+        try:
+            # Execute request against both targets
+            response_a, response_b = executor.execute(case)
+
+            # Get rules for this operation
+            rules = get_operation_rules(comparison_rules, case.operation_id)
+
+            # Compare responses
+            result = comparator.compare(response_a, response_b, rules)
+
+            if result.match:
+                stats.matches += 1
+                print("MATCH")
+            else:
+                stats.mismatches += 1
+                print(f"MISMATCH: {result.summary}")
+
+                # Write mismatch bundle
+                bundle_path = writer.write_mismatch(
+                    case=case,
+                    response_a=response_a,
+                    response_b=response_b,
+                    diff=result,
+                    target_a_info=target_a_info,
+                    target_b_info=target_b_info,
+                    seed=seed,
+                )
+                print(f"         Bundle: {bundle_path}")
+
+        except RequestError as e:
+            stats.errors += 1
+            print(f"ERROR: {e}")
+
+
+def _run_stateful_explore(
+    generator,
+    executor,
+    comparator,
+    comparison_rules,
+    writer,
+    stats,
+    target_a_info,
+    target_b_info,
+    max_chains,
+    max_steps,
+    seed,
+    get_operation_rules,
+):
+    """Execute stateful chain testing."""
+    from api_parity.executor import RequestError
+
+    # Generate chains
+    print("Generating chains...")
+    chains = generator.generate_chains(
+        max_chains=max_chains,
+        max_steps=max_steps,
+        seed=seed,
+    )
+    print(f"Generated {len(chains)} chains with multiple steps")
+    print()
+
+    for chain in chains:
+        stats.total_chains += 1
+
+        # Build chain description
+        ops = [step.request_template.operation_id for step in chain.steps]
+        chain_desc = " → ".join(ops)
+        print(f"[Chain {stats.total_chains}] {chain_desc}")
+
+        try:
+            # Execute chain against both targets
+            execution_a, execution_b = executor.execute_chain(chain)
+
+            # Compare each step
+            step_diffs = []
+            mismatch_step = -1
+
+            for i, (step_a, step_b) in enumerate(zip(execution_a.steps, execution_b.steps)):
+                rules = get_operation_rules(
+                    comparison_rules, step_a.request.operation_id
+                )
+                result = comparator.compare(step_a.response, step_b.response, rules)
+                step_diffs.append(result)
+
+                if not result.match and mismatch_step < 0:
+                    mismatch_step = i
+
+            # Determine overall result
+            if mismatch_step < 0:
+                stats.chain_matches += 1
+                print("  MATCH (all steps)")
+            else:
+                stats.chain_mismatches += 1
+                mismatch_op = chain.steps[mismatch_step].request_template.operation_id
+                print(f"  MISMATCH at step {mismatch_step} ({mismatch_op}): {step_diffs[mismatch_step].summary}")
+
+                # Write chain mismatch bundle
+                bundle_path = writer.write_chain_mismatch(
+                    chain=chain,
+                    execution_a=execution_a,
+                    execution_b=execution_b,
+                    step_diffs=step_diffs,
+                    mismatch_step=mismatch_step,
+                    target_a_info=target_a_info,
+                    target_b_info=target_b_info,
+                    seed=seed,
+                )
+                print(f"  Bundle: {bundle_path}")
+
+        except RequestError as e:
+            stats.chain_errors += 1
+            print(f"  ERROR: {e}")
 
 
 def run_replay(args: ReplayArgs) -> int:
