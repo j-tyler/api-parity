@@ -451,6 +451,8 @@ In CEL expressions, `a` is the value from Target A, `b` is from Target B.
 | `forbidden` | Both must lack field—fails if either has it |
 | `optional` | Compare values if both have field; pass if either lacks it |
 
+**Null handling:** A field present with `null` value is treated as "present" for presence checks. The distinction is between `{"name": null}` (present, value is null) and `{}` (missing). In CEL expressions, `a` and `b` receive the actual `null` value when the field is null.
+
 ```json
 {"presence": "required", "predefined": "uuid_format"}     // must exist, check format
 {"presence": "forbidden"}                                  // must not exist
