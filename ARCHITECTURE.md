@@ -187,7 +187,7 @@ Go:     {"id":"<uuid>","ok":false,"error":"undeclared reference to 'undefined_va
 
 ## Internal Data Models [SPECIFIED]
 
-These are Pydantic classes used inside the tool—not user-facing config formats. They are aligned with Schemathesis's internal structures to enable direct integration. Schemathesis uses a `Case` class with separate path parameters, and a `Response` class with normalized fields.
+Python classes (Pydantic v2) representing HTTP requests and responses as they flow through the tool. The Executor creates these when sending requests; the Artifact Writer serializes them to mismatch bundles on disk.
 
 ### RequestCase
 
@@ -424,13 +424,23 @@ secrets:
 
 ### Per-Endpoint Comparison Rules [SPECIFIED]
 
-Users must define comparison rules per operationId. No heuristic guessing.
+A JSON file you write to tell api-parity how responses should be compared. You define rules per OpenAPI `operationId`—the tool does not guess which fields are timestamps, UUIDs, or otherwise volatile.
 
-**Format:** JSON file optimized for LLM authorship and human readability. See DESIGN.md for rationale.
+**File structure:**
+- `default_rules` — applied to all operations
+- `operation_rules` — per-operationId overrides (completely replaces default for any key it defines)
+- `field_rules` — JSONPath → comparison rule mapping
 
-**Engine:** All comparisons evaluate as CEL (Common Expression Language) expressions at runtime via a Go subprocess running cel-go. Predefined comparisons (e.g., `numeric_tolerance`, `unordered_array`) expand to CEL during config loading. See "CEL Evaluator Component" for implementation details.
+**Specifying comparisons:** Use a predefined from the library (`comparison_library.json`) or write custom CEL. Predefineds expand to CEL at load time; the runtime only evaluates CEL expressions.
 
-**Example:**
+```json
+{"predefined": "numeric_tolerance", "tolerance": 0.01}   // use predefined
+{"expr": "a.startsWith(b.substring(0, 5))"}              // custom CEL
+```
+
+In CEL expressions, `a` is the value from Target A, `b` is from Target B.
+
+**Full example:**
 ```json
 {
   "version": "1",
@@ -458,14 +468,13 @@ Users must define comparison rules per operationId. No heuristic guessing.
 }
 ```
 
-**Resolved questions:**
-1. **Inheritance model:** Operation rules inherit from default_rules with override semantics (not merge).
-2. **Array ordering:** Use `unordered_array` predefined for set semantics, default is ordered.
-3. **Floating point:** Use `numeric_tolerance` predefined with `tolerance` parameter.
-4. **Field-level functions:** Use predefined comparisons or custom CEL expressions.
+**Common patterns:**
+- Ignore volatile fields: `{"predefined": "ignore"}`
+- Tolerate float rounding: `{"predefined": "numeric_tolerance", "tolerance": 0.01}`
+- Unordered arrays: `{"predefined": "unordered_array"}` (unique elements only)
+- Format-only check: `{"predefined": "uuid_format"}` or `{"predefined": "iso_timestamp_format"}`
 
-**Implementation:** See `prototype/comparison-rules/` for working validation and inlining.
-See DESIGN.md "CEL as Comparison Engine" and "Predefined Comparison Library" for full design.
+See `comparison_library.json` for all available predefineds with descriptions.
 
 ### Error Classification [NEEDS SPEC]
 
