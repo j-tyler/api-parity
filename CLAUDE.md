@@ -14,7 +14,7 @@ Each root markdown file has a specific purpose. Put content in the right place:
 |------|---------|------------------|
 | **README.md** | Brief project overview for humans | What it does, how to run it, license |
 | **CLAUDE.md** | Instructions for AI assistants | Workflow, gotchas, environment notes |
-| **ARCHITECTURE.md** | Technical system structure | Components, data models, data flow, APIs |
+| **ARCHITECTURE.md** | Technical system structure (for agents) | Components, data models, data flow, interfaces |
 | **DESIGN.md** | Decisions and reasoning | Why choices were made, tradeoffs considered |
 | **TODO.md** | Future work items | Planned features, known issues, spec work needed |
 
@@ -24,6 +24,24 @@ Each root markdown file has a specific purpose. Put content in the right place:
 - "How does the system work?" → ARCHITECTURE
 - "Why was it built this way?" → DESIGN
 - "What might we do later?" → TODO
+
+### ARCHITECTURE.md Content Guidelines
+
+ARCHITECTURE.md helps new agents efficiently understand the project without clogging context windows with unnecessary code. Be token-efficient but not at the expense of clarity.
+
+**Include in ARCHITECTURE.md:**
+- Component responsibilities and boundaries
+- Data flow between components
+- Interfaces (what inputs/outputs, how to instantiate)
+- Behavior that affects multiple components or callers
+- Error handling philosophy (what propagates vs what's handled)
+
+**Leave in code (don't document in ARCHITECTURE.md):**
+- Internal implementation details (caching strategies, sentinel values, internal helpers)
+- Information already documented elsewhere (don't duplicate)
+- Details only relevant when modifying that specific file
+
+**Test:** Would a new agent working on a *different* component benefit from knowing this? If yes, document it. If only useful when reading *this* file, leave it in code.
 
 ## Key Files to Read First
 
@@ -106,6 +124,19 @@ When something about the environment or project trips you up, add it to CLAUDE.m
 - Primary documentation is in Markdown files at the repo root
 - **Python** is the primary implementation language
 - **Go** is used for the CEL evaluator subprocess only (see ARCHITECTURE.md "CEL Evaluator Component")
+
+### Git Commands
+
+The `main` branch exists only on the remote, not locally. Use `origin/main` for comparisons:
+
+```bash
+# Correct - compare to remote main
+git diff origin/main..HEAD
+git log --oneline origin/main..HEAD
+
+# Wrong - fails with "unknown revision"
+git diff main..HEAD
+```
 
 ### Reading Files and Running Commands
 

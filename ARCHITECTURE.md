@@ -1,6 +1,13 @@
 # Architecture
 
-High-level architecture of api-parity, optimized for AI agents to quickly understand the codebase.
+High-level architecture of api-parity for AI agents to efficiently understand the project without reading unnecessary code.
+
+**Guiding principles:**
+- Token-efficient but not at the expense of clarity
+- Include: information that helps agents understand the system's structure and behavior
+- Exclude: implementation details only needed when reading a specific code file
+
+**Rule of thumb:** If content helps a new agent attain understanding of the project, it belongs here. If it's detail only relevant when working in a specific file, leave it to be learned from reading that file.
 
 ## Specification Status Key
 
@@ -129,6 +136,146 @@ Note: CEL Evaluator shown with dashed border to indicate it's a subprocess, not 
 
 ---
 
+## CLI Frontend [NEEDS SPEC]
+
+Not yet implemented. Open questions:
+
+1. How to structure the main entry point (single file vs module)?
+2. How to handle progress reporting during long runs?
+3. How to wire the component pipeline (Generator → Executor → Comparator → Writer)?
+4. Error handling: which errors abort the run vs skip the test case?
+
+---
+
+## Case Generator [NEEDS SPEC]
+
+Not yet implemented. Wraps Schemathesis to yield `RequestCase`/`ChainCase` objects.
+
+**Prototype reference:** `prototype/schemathesis-validation/generate_cases.py` demonstrates:
+- Loading schema via `schemathesis.openapi.from_path()`
+- Iterating operations with `schema.get_all_operations()` (results need `.ok()` unwrapping)
+- Generating cases via Hypothesis: `operation.as_strategy()` with `@given`
+- Converting Schemathesis `Case` → dict (see `case_to_dict()`)
+
+**Open questions:**
+
+1. What interface should the generator expose? Iterator? Callback?
+2. How to apply `--seed` and `--max-cases` constraints?
+3. How to interleave stateless cases with chain generation?
+4. Should chains be generated lazily or upfront?
+
+---
+
+## Executor [NEEDS SPEC]
+
+Not yet implemented. Sends requests to both targets and captures responses.
+
+**Expected interface:**
+
+```python
+class Executor:
+    def __init__(self, target_a: TargetConfig, target_b: TargetConfig, rate_limit: RateLimitConfig | None): ...
+    def execute(self, request: RequestCase) -> tuple[ResponseCase, ResponseCase]: ...
+    def execute_chain(self, chain: ChainCase) -> tuple[ChainExecution, ChainExecution]: ...
+```
+
+**Open questions:**
+
+1. Which HTTP client library? (httpx, requests, aiohttp?)
+2. Timeout configuration—per-request? Global?
+3. Retry policy for transient failures (connection errors, 503s)?
+4. How to handle rate limiting—token bucket? Simple sleep?
+
+---
+
+## Artifact Writer [NEEDS SPEC]
+
+Not yet implemented. Writes mismatch bundles to disk.
+
+**Expected interface:**
+
+```python
+class ArtifactWriter:
+    def __init__(self, output_dir: Path, secrets_config: SecretsConfig | None): ...
+    def write_mismatch(self, case: RequestCase | ChainCase, exec_a: ..., exec_b: ..., diff: ComparisonResult, metadata: MismatchMetadata) -> Path: ...
+    def write_summary(self, stats: RunStats) -> None: ...
+```
+
+**Open questions:**
+
+1. How to implement secret redaction? JSONPath extraction + replacement?
+2. Bundle naming: `<timestamp>__<operation_id>__<case_id>` — how to sanitize for filesystem?
+3. Should write be atomic (temp file + rename)?
+
+---
+
+## Runtime Config Loading [NEEDS SPEC]
+
+Models exist (`api_parity/models.py`: `RuntimeConfig`, `ComparisonRulesFile`, `ComparisonLibrary`). Loading logic not implemented.
+
+**Prototype reference:** `prototype/comparison-rules/validate_and_inline.py` demonstrates predefined → CEL inlining.
+
+**Open questions:**
+
+1. How to implement `${ENV_VAR}` substitution in YAML? Regex replacement before parse? Custom YAML loader?
+2. Where does config loading live? Separate module? CLI?
+3. How to resolve relative paths in `comparison_rules` field?
+
+---
+
+## Error Classification [NEEDS SPEC]
+
+Model exists (`api_parity/models.py`: `ErrorClassificationConfig`). Implementation not done.
+
+**Behavior specified in "Per-Endpoint Comparison Rules":**
+- Same status code class (both 4xx, both 5xx) → parity
+- Both return codes in `ignore_when_both` list → skip test case entirely
+
+**Open questions:**
+
+1. Where does this logic live? Comparator? Executor? Separate component?
+2. How does "skip test case" integrate with artifact writing (nothing written) vs "parity" (logged but not written)?
+
+---
+
+## Comparator Component [SPECIFIED]
+
+The Comparator (`api_parity/comparator.py`) compares two `ResponseCase` objects according to `OperationRules` and produces a `ComparisonResult`. It delegates CEL evaluation to the CEL Evaluator.
+
+### Comparison Order
+
+Comparison proceeds in order with short-circuit on first mismatch:
+
+1. **Status Code** → 2. **Headers** → 3. **Body**
+
+The `mismatch_type` field in `ComparisonResult` indicates which phase failed first. If status codes mismatch, headers and body are not compared.
+
+### Error Handling
+
+Rule errors (invalid JSONPath, unknown predefined, CEL evaluation failure) are recorded as mismatches with `rule: "error: ..."`, not raised as exceptions. This keeps one broken rule from stopping the run.
+
+Infrastructure failures (`CELSubprocessError` from subprocess crash) propagate as exceptions.
+
+### Interface
+
+```python
+class Comparator:
+    def __init__(self, cel_evaluator: CELEvaluator, comparison_library: ComparisonLibrary): ...
+    def compare(self, response_a: ResponseCase, response_b: ResponseCase, rules: OperationRules) -> ComparisonResult: ...
+```
+
+Caller owns CEL Evaluator lifecycle:
+
+```python
+with CELEvaluator() as cel:
+    comparator = Comparator(cel, library)
+    result = comparator.compare(response_a, response_b, rules)
+```
+
+See "Per-Endpoint Comparison Rules" for rule semantics (presence modes, predefined expansion, header handling).
+
+---
+
 ## CEL Evaluator Component [SPECIFIED]
 
 The CEL Evaluator is a Go subprocess that evaluates CEL expressions for the Comparator. See DESIGN.md "CEL Evaluation via Go Subprocess" and "Stdin/Stdout IPC for CEL Subprocess" for rationale.
@@ -154,27 +301,6 @@ class CELEvaluator:
 
 The Comparator calls `evaluate()` for each field comparison. It has no knowledge of the subprocess—just a function that takes an expression and data, returns a boolean. Use as context manager for automatic cleanup: `with CELEvaluator() as e: ...`
 
-### IPC Protocol
-
-Communication uses stdin/stdout with newline-delimited JSON.
-
-**Startup:**
-1. Python spawns `./cel-evaluator` with `stdin=PIPE, stdout=PIPE`
-2. Go writes `{"ready":true}\n`
-3. Python reads ready message, proceeds
-
-**Request/Response:**
-```
-Python: {"id":"<uuid>","expr":"a == b","data":{"a":1,"b":1}}\n
-Go:     {"id":"<uuid>","ok":true,"result":true}\n
-```
-
-**Error:**
-```
-Python: {"id":"<uuid>","expr":"undefined_var","data":{}}\n
-Go:     {"id":"<uuid>","ok":false,"error":"undeclared reference to 'undefined_var'"}\n
-```
-
 ### Lifecycle
 
 - Started once at CLI startup (before explore/replay begins)
@@ -186,215 +312,45 @@ Go:     {"id":"<uuid>","ok":false,"error":"undeclared reference to 'undefined_va
 
 ## Internal Data Models [SPECIFIED]
 
-Python classes (Pydantic v2) representing HTTP requests and responses as they flow through the tool. The Executor creates these when sending requests; the Artifact Writer serializes them to mismatch bundles on disk.
+Pydantic v2 models in `api_parity/models.py`. Key models:
 
-### RequestCase
+| Model | Purpose |
+|-------|---------|
+| `RequestCase` | HTTP request (includes `path_template`, `path_parameters`, `rendered_path` for debugging) |
+| `ResponseCase` | HTTP response captured from target |
+| `ChainCase` / `ChainStep` | Chain template (no execution data) |
+| `ChainExecution` / `ChainStepExecution` | Execution trace per target |
+| `ComparisonResult` / `FieldDifference` | Comparison output |
+| `RuntimeConfig` | Config file structure |
+| `ComparisonRulesFile` / `OperationRules` | Comparison rules structure |
 
-Represents one HTTP request that can be executed, recorded, and replayed.
+**Key design notes:**
+- Header/query values are arrays (supports repeated params)
+- `body` and `body_base64` are mutually exclusive
+- Chain templates separate from execution traces (enables replay with fresh data)
+- Each target maintains its own extracted variables during chain execution
+- **Why three path fields?** `path_template` + `path_parameters` preserve which values caused failures; `rendered_path` gives the actual URL without computation
 
-| Field | Type | Description |
-|-------|------|-------------|
-| case_id | string | Unique identifier for traceability (maps to Schemathesis `X-Schemathesis-TestCaseId`) |
-| operation_id | string | OpenAPI operationId |
-| method | string | HTTP method |
-| path_template | string | Path with parameter placeholders, e.g., `/items/{id}` |
-| path_parameters | object | Parameter values, e.g., `{"id": "abc123"}` |
-| rendered_path | string | Fully rendered path (computed from template + parameters) |
-| query | object | Query parameters (arrays for repeated params) |
-| headers | object | Request headers (arrays for repeated headers) |
-| cookies | object | Cookies (separate from headers for clarity) |
-| body | any | Body as JSON value if parseable |
-| body_base64 | string | Body as base64 if binary (mutually exclusive with body) |
-| media_type | string | Content-Type, e.g., `application/json` |
-
-**Header and query structure:** Values are arrays to support repeated parameters (e.g., `{"Accept": ["application/json", "text/plain"]}`).
-
-**Why all three path fields?** `path_template` + `path_parameters` preserve which values caused failures; `rendered_path` gives the actual URL without computation. `operation_id` is required for comparison rule lookup.
-
-**Example:**
-```json
-{
-  "case_id": "test-abc123",
-  "operation_id": "createItem",
-  "method": "POST",
-  "path_template": "/categories/{category}/items",
-  "path_parameters": {"category": "electronics"},
-  "rendered_path": "/categories/electronics/items",
-  "query": {"notify": ["true"]},
-  "headers": {"Content-Type": ["application/json"], "Accept": ["application/json"]},
-  "cookies": {},
-  "body": {"name": "Widget", "price": 9.99},
-  "media_type": "application/json"
-}
-```
-
-### ResponseCase
-
-Represents one HTTP response captured from a target.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| status_code | integer | HTTP status code |
-| headers | object | Response headers (arrays for repeated headers, lowercase keys) |
-| body | any | Body as JSON value if parseable |
-| body_base64 | string | Body as base64 if binary |
-| elapsed_ms | number | Response time in milliseconds |
-| http_version | string | Protocol version, e.g., `1.1` |
-
-### ChainCase
-
-Represents a stateful sequence of requests (template only, no execution data).
-
-| Field | Type | Description |
-|-------|------|-------------|
-| chain_id | string | Unique identifier |
-| steps | array | Ordered list of ChainStep |
-
-### ChainStep
-
-One step in a chain (template only).
-
-| Field | Type | Description |
-|-------|------|-------------|
-| step_index | integer | 0-based position in chain |
-| request_template | RequestCase | The request template (path_template populated, path_parameters empty until execution) |
-| link_source | object or null | Which previous step and field provides data for this step |
-
-**Note:** `ChainCase` and `ChainStep` describe the chain template. Execution data (actual requests sent, responses received, extracted variables) is stored separately in `target_a.json` and `target_b.json` in the mismatch bundle. This separation keeps the template reusable for replay while storing target-specific execution traces.
-
-### ChainExecution
-
-Execution trace for one target (stored in bundle's `target_a.json` / `target_b.json` for chains).
-
-| Field | Type | Description |
-|-------|------|-------------|
-| steps | array | Ordered list of ChainStepExecution |
-
-### ChainStepExecution
-
-Execution of one step on one target.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| step_index | integer | Matches ChainStep.step_index |
-| request | RequestCase | The actual request sent (all fields populated) |
-| response | ResponseCase | The response received |
-| extracted | object | Variables extracted for subsequent steps |
-
-**Chain execution semantics:** Both targets execute the same chain operations, but each uses its own extracted data. If POST returns `{"id": "abc"}` on Target A and `{"id": "xyz"}` on Target B, subsequent GET uses `/items/abc` for A and `/items/xyz` for B.
-
-### Resolved Questions
-
-1. **Schema format:** Pydantic v2 models. See DESIGN.md "Pydantic v2 for Data Models" for rationale.
-
-2. **Variable extraction:** Handled by Schemathesis state machine internals. The `extracted` field in ChainStepExecution stores values pulled from responses per OpenAPI link definitions. We don't need to implement custom extraction.
+See `api_parity/models.py` for complete field definitions.
 
 ---
 
 ## Mismatch Report Bundle [SPECIFIED]
 
-On mismatch, produce a bundle containing everything needed for replay and analysis. This format intentionally differs from Schemathesis's VCR cassettes because we need to store parallel execution on two targets, not sequential interactions with one.
-
-### Bundle Structure
+On mismatch, emit a bundle for replay and analysis. Differs from Schemathesis VCR cassettes—stores parallel execution on two targets.
 
 ```
-mismatches/
-  <timestamp>__<operation_id>__<case_id>/
-    case.json           # The RequestCase or ChainCase
-    target_a.json       # Request sent + response received from A
-    target_b.json       # Request sent + response received from B
-    diff.json           # Structured comparison result
-    metadata.json       # Run context
+mismatches/<timestamp>__<operation_id>__<case_id>/
+  case.json        # RequestCase or ChainCase
+  target_a.json    # StatelessExecution or ChainExecution
+  target_b.json    # StatelessExecution or ChainExecution
+  diff.json        # ComparisonResult
+  metadata.json    # MismatchMetadata (tool version, targets, seed)
 ```
 
-### case.json
+**diff.json structure:** `mismatch_type` (status_code|headers|body), `summary` (human-readable), `details` with per-component `match` boolean and `differences` array. Each difference has `path`, `target_a`, `target_b`, `rule`.
 
-For stateless tests: A single `RequestCase` object.
-
-For stateful tests: A `ChainCase` object with all steps and their link relationships.
-
-### target_a.json / target_b.json
-
-For stateless tests:
-```json
-{
-  "request": { /* RequestCase */ },
-  "response": { /* ResponseCase */ }
-}
-```
-
-For stateful chains (uses ChainExecution structure):
-```json
-{
-  "steps": [
-    {
-      "step_index": 0,
-      "request": { /* RequestCase with all fields populated */ },
-      "response": { /* ResponseCase */ },
-      "extracted": { "item_id": "abc123" }
-    },
-    {
-      "step_index": 1,
-      "request": { /* RequestCase using extracted item_id */ },
-      "response": { /* ResponseCase */ },
-      "extracted": {}
-    }
-  ]
-}
-```
-
-### diff.json [SPECIFIED]
-
-Structured comparison result. Not a traditional diff—records which comparisons passed/failed and the values involved.
-
-```json
-{
-  "mismatch_type": "body",
-  "summary": "Response body field 'status' differs: 'active' vs 'pending'",
-  "details": {
-    "status_code": { "match": true },
-    "headers": { "match": true },
-    "body": {
-      "match": false,
-      "differences": [
-        {
-          "path": "$.status",
-          "target_a": "active",
-          "target_b": "pending",
-          "rule": "exact_match"
-        }
-      ]
-    }
-  }
-}
-```
-
-**Fields:**
-- `mismatch_type`: First component that failed (`status_code`, `headers`, `body`)
-- `summary`: Human-readable one-liner for logs
-- `details`: Per-component results with `match` boolean
-- `differences`: Array of failed comparisons with JSONPath, both values, and which rule failed
-
-Header differences use the same format with header name as path. Body comparison only applies to 2xx JSON responses (see "When body comparison applies" in Per-Endpoint Comparison Rules).
-
-### metadata.json
-
-```json
-{
-  "tool_version": "0.1.0",
-  "timestamp": "2026-01-08T12:00:00Z",
-  "seed": 12345,
-  "target_a": {
-    "name": "production",
-    "base_url": "https://api.example.com"
-  },
-  "target_b": {
-    "name": "staging",
-    "base_url": "https://staging.api.example.com"
-  },
-  "comparison_rules_applied": "default"
-}
-```
+Models in `api_parity/models.py`.
 
 ---
 
@@ -431,173 +387,53 @@ The `comparison_rules` field references a separate JSON file (see "Per-Endpoint 
 
 ### Per-Endpoint Comparison Rules [SPECIFIED]
 
-A JSON file you write to tell api-parity how responses should be compared. You define rules per OpenAPI `operationId`—the tool does not guess which fields are timestamps, UUIDs, or otherwise volatile.
+JSON file defining how responses are compared. Model: `ComparisonRulesFile` in `api_parity/models.py`.
 
-**File structure:**
+**Structure:**
 - `default_rules` — applied to all operations
-- `operation_rules` — per-operationId overrides (completely replaces default for any key it defines)
-- `field_rules` — JSONPath → comparison rule mapping
+- `operation_rules` — per-operationId overrides (completely replaces default for keys it defines)
+- Body rules nested under `body.field_rules` (see example config)
 
-**Specifying comparisons:** Use a predefined from `prototype/comparison-rules/comparison_library.json` or write custom CEL. Predefineds expand to CEL at load time.
+**Rule types:** Use predefined (expands to CEL at load time) or custom CEL expression. In CEL, `a` = Target A value, `b` = Target B value.
 
-```json
-{"predefined": "numeric_tolerance", "tolerance": 0.01}   // use predefined
-{"expr": "a.startsWith(b.substring(0, 5))"}              // custom CEL
-```
-
-In CEL expressions, `a` is the value from Target A, `b` is from Target B.
-
-**JSONPath semantics:** Paths with wildcards (`[*]`) expand to match each element—the rule applies to each matched pair in array order.
-
-Example: Given `$.users[*].score` with `{"predefined": "numeric_tolerance", "tolerance": 0.05}`:
-- A has `$.users` = `[{"score": 0.95}, {"score": 0.87}]`
-- B has `$.users` = `[{"score": 0.96}, {"score": 0.88}]`
-- Compares: `$.users[0].score` (0.95 vs 0.96 ✓), `$.users[1].score` (0.87 vs 0.88 ✓)
-
-Array length mismatches are caught by presence parity on missing indices. To compare an array as a whole (e.g., unordered), target the array directly: `"$.users": {"predefined": "unordered_array"}`.
-
-**Default behavior for unspecified fields:** Fields without explicit `field_rules` entries are compared for presence parity only—both responses must have the field, or both must lack it. Values are not compared. This lets fields the user doesn't care about be whatever, as long as they're whatever in both.
-
-**Field presence:** Controls existence requirements (checked before value comparison):
-
-| Presence | Meaning |
-|----------|---------|
-| `parity` | Both have field, or both lack it (default) |
-| `required` | Both must have field |
-| `forbidden` | Both must lack field |
-| `optional` | Compare if both have field; pass if either lacks it |
-
-**Null handling:** `{"name": null}` is "present"; `{}` is "missing". CEL receives the actual `null` value.
+**Presence modes:** `parity` (default), `required`, `forbidden`, `optional` — checked before value comparison. Null values (`{"name": null}`) are present; missing fields (`{}`) are absent.
 
 ```json
-{"presence": "required", "predefined": "uuid_format"}     // must exist, check format
-{"presence": "forbidden"}                                  // must not exist
-{"presence": "optional", "predefined": "exact_match"}     // compare only if present
+{"presence": "required", "predefined": "uuid_format"}
+{"presence": "optional", "predefined": "exact_match"}
+{"presence": "forbidden"}
 ```
+*(Comments not allowed in JSON; see example config for annotated version)*
 
-Default is `parity`. Specifying only `presence` (no `predefined` or `expr`) skips value comparison.
+**Key behaviors:**
+- Unspecified fields: presence parity only (both have or both lack), values not compared
+- Body rules: only apply to 2xx JSON responses
+- Error responses: same status code class = parity, body not compared
+- Headers: case-insensitive, multi-value uses first value only
+- Wildcards (`[*]`): expand and compare by index
 
-**When body comparison applies:** Body rules only apply to successful (2xx) responses with JSON content. Error responses (4xx, 5xx) are compared by status code only—if both targets return the same status code class, that's parity. Body content of error responses is not compared.
+**References:**
+- Predefineds: `prototype/comparison-rules/comparison_library.json`
+- Example config: `tests/fixtures/comparison_rules.json`
 
-**Header comparison:** Headers use explicit rules, same as body fields. Each header you care about gets a rule; unlisted headers are ignored. Header names are case-insensitive.
+### Error Classification
 
-```json
-"headers": {
-  "content-type": {"predefined": "exact_match"},
-  "x-request-id": {"predefined": "uuid_format"},
-  "cache-control": {"predefined": "exact_match"}
-}
-```
-
-**Multi-value headers:** When a header has multiple values (e.g., `Set-Cookie`), only the first value is compared. In CEL expressions, `a` and `b` are the first header values from Target A and B respectively. This is a known limitation—if you need to compare all values of a multi-value header, the workaround is to check specific values exist in application logic rather than in api-parity rules.
-
-**Full example:**
-```json
-{
-  "version": "1",
-  "default_rules": {
-    "status_code": {"predefined": "exact_match"},
-    "headers": {
-      "content-type": {"predefined": "exact_match"}
-    },
-    "body": {
-      "field_rules": {}
-    }
-  },
-  "operation_rules": {
-    "createUser": {
-      "body": {
-        "field_rules": {
-          "$.request_id": {"predefined": "ignore"},
-          "$.id": {"presence": "required", "predefined": "uuid_format"},
-          "$.created_at": {"predefined": "epoch_seconds_tolerance", "seconds": 5},
-          "$.balance": {"predefined": "numeric_tolerance", "tolerance": 0.01},
-          "$.legacy_field": {"presence": "forbidden"},
-          "$.nickname": {"presence": "optional", "predefined": "exact_match"}
-        }
-      }
-    }
-  }
-}
-```
-
-**Common patterns:**
-- Ignore volatile fields: `{"predefined": "ignore"}`
-- Tolerate float rounding: `{"predefined": "numeric_tolerance", "tolerance": 0.01}`
-- Unordered arrays: `{"predefined": "unordered_array"}` (unique elements only)
-- Format-only check: `{"predefined": "uuid_format"}` or `{"predefined": "iso_timestamp_format"}`
-- Require field exists: `{"presence": "required"}` (value not compared)
-- Forbid deprecated field: `{"presence": "forbidden"}`
-- Compare only if present: `{"presence": "optional", "predefined": "exact_match"}`
-- Unordered array with volatile nested fields—use custom CEL to compare only stable fields:
-  ```json
-  "$.users": {"expr": "size(a) == size(b) && a.all(ax, b.exists(bx, ax.id == bx.id && ax.name == bx.name))"}
-  ```
-
-See `prototype/comparison-rules/comparison_library.json` for all available predefineds.
-
-### Error Classification [SPECIFIED]
-
-Error responses follow the status code class rule from "When body comparison applies":
-- Same status code class (e.g., both 4xx, both 5xx) → parity
-- Different status code classes (e.g., 4xx vs 5xx, or 2xx vs 4xx) → mismatch
-
-**Additional behavior for 5xx:**
-- Both return 5xx → parity, but not recorded (assumed transient/infrastructure).
-- One returns 5xx, other returns different class → mismatch, recorded.
-
-**Configurable overrides:**
-```yaml
-error_classification:
-  ignore_when_both: [500, 502, 503, 504]  # skip test case if both return these
-```
-
-This keeps infrastructure noise out of artifacts while catching real behavioral differences.
+- Same status code class (both 4xx, both 5xx) → parity
+- Both in `ignore_when_both` list → skip test case
+- Different classes → mismatch
 
 ---
 
 ## Stateful Chains [SPECIFIED]
 
-### Link-Based Generation
+Chains are auto-discovered from OpenAPI links via Schemathesis `schema.as_state_machine()`. Validated: 6-step chains, 70+ unique sequences.
 
-Chains are auto-discovered from OpenAPI links by Schemathesis via `schema.as_state_machine()`. The state machine automatically creates transitions for each link defined in the spec. Validated: up to 6-step chains, 70+ unique operation sequences generated.
+**Execution semantics:**
+- Each target maintains its own extracted variables (A's POST returns `id: abc`, B's returns `id: xyz` → A's GET hits `/items/abc`, B's hits `/items/xyz`)
+- Mismatch stops chain and records; same error on both = parity, chain continues
+- Schemathesis handles variable extraction via OpenAPI link expressions
 
-The OpenAPI spec must define links with sufficient detail to express data flow. Sparse link definitions produce shallow chains.
-
-**Example OpenAPI link:**
-```yaml
-paths:
-  /items:
-    post:
-      operationId: createItem
-      responses:
-        '201':
-          links:
-            GetItem:
-              operationId: getItem
-              parameters:
-                id: '$response.body#/id'
-```
-
-### Variable Extraction [SPECIFIED]
-
-Schemathesis handles variable extraction automatically via OpenAPI link expressions (e.g., `$response.body#/id`). The state machine maintains "bundles" that store extracted values between steps.
-
-When executing chains for api-parity:
-1. Execute step on Target A, extract variables from A's response
-2. Execute same operation on Target B, extract variables from B's response
-3. Compare responses—if mismatch, stop chain and record
-4. If parity, continue; each target's next step uses its own extracted variables
-
-Both targets follow the same chain of operations, but with their own data. If A's POST returns `{"id": "abc"}` and B's returns `{"id": "xyz"}`, A's GET hits `/items/abc` while B's hits `/items/xyz`.
-
-**Mismatch vs error:** If both return 404, that's parity—chain continues. If A returns 404 and B returns 200, that's a mismatch—chain stops.
-
-### Replay Behavior [SPECIFIED]
-
-Replay re-executes the full chain, including CREATE operations. Uses fresh Schemathesis generation (not original values) to avoid uniqueness constraint failures. See DESIGN.md "Replay Regenerates Unique Fields".
-
-**Consequence:** Replay tests the failure pattern, not exact bytes. If a specific value caused the mismatch, replay may not reproduce it exactly—but it tests the same operation with valid data.
+**Replay:** Re-executes full chain with fresh generated values (not original). Tests failure pattern, not exact bytes. See DESIGN.md "Replay Regenerates Unique Fields".
 
 ---
 
@@ -646,45 +482,14 @@ OpenAPI Spec ──→ Schemathesis ──→ RequestCase/ChainCase
 
 ## Testing Infrastructure [SPECIFIED]
 
-Integration tests use a mock FastAPI server that implements a test OpenAPI spec designed to exercise all comparison scenarios.
+Mock FastAPI server (`tests/integration/mock_server.py`) with two variants for differential testing:
+- **Variant A**: Standard behavior
+- **Variant B**: Controlled differences (prices within tolerance, shuffled arrays, etc.)
 
-### Test Fixtures
-
-| File | Purpose |
-|------|---------|
-| `tests/fixtures/test_api.yaml` | OpenAPI spec with volatile fields, numeric tolerances, unordered arrays, chains |
-| `tests/fixtures/comparison_rules.json` | Comparison rules exercising all predefined types |
-
-### Mock Server Variants
-
-The mock server (`tests/integration/mock_server.py`) runs in two variants:
-
-- **Variant A** (`--variant a`): Standard behavior
-- **Variant B** (`--variant b`): Controlled differences for testing comparison logic
-  - Prices differ by 0.001 (within 0.01 tolerance)
-  - Arrays shuffled (tests unordered comparison)
-  - User scores differ slightly (tests numeric tolerance)
-
-### Running Tests
-
-```bash
-# All tests
-pytest
-
-# Integration tests only
-pytest tests/integration/
-
-# CEL evaluator tests only
-pytest tests/test_cel_evaluator.py
-```
-
-### Pytest Fixtures
-
-- `mock_server_a` / `mock_server_b`: Single server on random port (function-scoped)
-- `dual_servers`: Both variants for differential testing (function-scoped)
-- `test_api_spec` / `comparison_rules_path`: Paths to fixture files (session-scoped)
-
-Each test gets fresh server processes via subprocess isolation.
+**Key files:**
+- `tests/fixtures/test_api.yaml` — OpenAPI spec exercising comparison scenarios
+- `tests/fixtures/comparison_rules.json` — Rules for all predefined types
+- `tests/conftest.py` — Pytest fixtures (`dual_servers`, `mock_server_a`, etc.)
 
 ---
 

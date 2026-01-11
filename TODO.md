@@ -23,6 +23,8 @@ Document the level of detail required in OpenAPI link definitions for effective 
 
 - **OpenAPI Spec as Field Authority** — JSON Schema validator choice, additionalProperties handling
 
+See ARCHITECTURE.md for component-level `[NEEDS SPEC]` items: CLI Frontend, Case Generator, Executor, Artifact Writer, Runtime Config Loading, Error Classification.
+
 ---
 
 ## Implementation Notes from Validation
