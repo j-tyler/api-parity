@@ -735,30 +735,38 @@ def _run_stateful_explore(
         print(f"[Chain {stats.total_chains}] {chain_desc}")
 
         try:
-            # Execute chain against both targets
-            execution_a, execution_b = executor.execute_chain(chain)
-
-            # Compare each step
+            # Track comparison results as we execute
             step_diffs = []
-            mismatch_step = -1
+            step_ops = []
+            mismatch_found = False
 
-            for i, (step_a, step_b) in enumerate(zip(execution_a.steps, execution_b.steps)):
-                rules = get_operation_rules(
-                    comparison_rules, step_a.request.operation_id
-                )
-                result = comparator.compare(step_a.response, step_b.response, rules)
+            def on_step(response_a, response_b):
+                """Compare responses after each step; return False to stop on mismatch."""
+                nonlocal mismatch_found
+                step_idx = len(step_diffs)
+                op_id = chain.steps[step_idx].request_template.operation_id
+                step_ops.append(op_id)
+
+                rules = get_operation_rules(comparison_rules, op_id)
+                result = comparator.compare(response_a, response_b, rules)
                 step_diffs.append(result)
 
-                if not result.match and mismatch_step < 0:
-                    mismatch_step = i
+                if not result.match:
+                    mismatch_found = True
+                    return False  # Stop chain execution
+                return True  # Continue
+
+            # Execute chain, stopping at first mismatch
+            execution_a, execution_b = executor.execute_chain(chain, on_step=on_step)
 
             # Determine overall result
-            if mismatch_step < 0:
+            if not mismatch_found:
                 stats.chain_matches += 1
                 print("  MATCH (all steps)")
             else:
                 stats.chain_mismatches += 1
-                mismatch_op = chain.steps[mismatch_step].request_template.operation_id
+                mismatch_step = len(step_diffs) - 1
+                mismatch_op = step_ops[mismatch_step]
                 print(f"  MISMATCH at step {mismatch_step} ({mismatch_op}): {step_diffs[mismatch_step].summary}")
 
                 # Write chain mismatch bundle

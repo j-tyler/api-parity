@@ -9,12 +9,10 @@ See ARCHITECTURE.md "Executor" for specifications.
 from __future__ import annotations
 
 import base64
-import copy
 import time
-from typing import Any
+from typing import Any, Callable
 
 import httpx
-from jsonpath_ng import parse as jsonpath_parse
 
 from api_parity.models import (
     ChainCase,
@@ -126,58 +124,70 @@ class Executor:
     def execute_chain(
         self,
         chain: ChainCase,
+        on_step: Callable[[ResponseCase, ResponseCase], bool] | None = None,
     ) -> tuple[ChainExecution, ChainExecution]:
         """Execute a chain against both targets.
 
         Each step is executed against both targets before proceeding to the next.
-        Variables extracted from responses are used to populate subsequent requests.
-        The chain uses Target A's responses for variable extraction (both targets
-        receive the same request parameters).
+        Each target uses its own extracted response data for subsequent steps
+        (per DESIGN.md "Live Chain Generation").
 
         Args:
             chain: The chain to execute.
+            on_step: Optional callback called after each step with (response_a, response_b).
+                     Return False to stop execution (per DESIGN.md "Chain Stops at First Mismatch").
+                     Return True to continue.
 
         Returns:
             Tuple of (execution_a, execution_b) containing step-by-step traces.
+            If stopped early via on_step, contains only executed steps.
 
         Raises:
             RequestError: If a request fails due to connection/timeout.
         """
         steps_a: list[ChainStepExecution] = []
         steps_b: list[ChainStepExecution] = []
-        extracted_vars: dict[str, Any] = {}
+        extracted_vars_a: dict[str, Any] = {}
+        extracted_vars_b: dict[str, Any] = {}
 
         for step in chain.steps:
-            # Populate request template with extracted variables
-            request = self._apply_variables(step.request_template, extracted_vars)
+            # Each target gets request populated with its own extracted variables
+            request_a = self._apply_variables(step.request_template, extracted_vars_a)
+            request_b = self._apply_variables(step.request_template, extracted_vars_b)
 
-            timeout = self._get_timeout(request.operation_id)
+            timeout = self._get_timeout(request_a.operation_id)
 
             # Execute against both targets
             response_a = self._execute_single(
-                self._client_a, request, timeout, "Target A"
+                self._client_a, request_a, timeout, "Target A"
             )
             response_b = self._execute_single(
-                self._client_b, request, timeout, "Target B"
+                self._client_b, request_b, timeout, "Target B"
             )
 
-            # Extract variables from Target A's response for subsequent steps
-            step_extracted = self._extract_variables(response_a)
-            extracted_vars.update(step_extracted)
+            # Extract variables from each target's own response
+            extracted_a = self._extract_variables(response_a)
+            extracted_b = self._extract_variables(response_b)
+            extracted_vars_a.update(extracted_a)
+            extracted_vars_b.update(extracted_b)
 
             # Record step executions
             steps_a.append(ChainStepExecution(
                 step_index=step.step_index,
-                request=request,
+                request=request_a,
                 response=response_a,
-                extracted=step_extracted,
+                extracted=extracted_a,
             ))
             steps_b.append(ChainStepExecution(
                 step_index=step.step_index,
-                request=request,
+                request=request_b,
                 response=response_b,
-                extracted={},  # Only Target A's extractions are used
+                extracted=extracted_b,
             ))
+
+            # Check if caller wants to stop (mismatch detected)
+            if on_step is not None and not on_step(response_a, response_b):
+                break
 
         return (
             ChainExecution(steps=steps_a),
