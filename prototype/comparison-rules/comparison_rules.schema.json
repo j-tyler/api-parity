@@ -44,13 +44,9 @@
 
         "headers": {
           "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "include": {
-              "type": "array",
-              "items": {"type": "string"},
-              "description": "Header names to compare. Others are ignored."
-            }
+          "description": "Per-header comparison rules. Keys are header names (case-insensitive). Unlisted headers are ignored.",
+          "additionalProperties": {
+            "$ref": "#/$defs/field_comparison"
           }
         },
 

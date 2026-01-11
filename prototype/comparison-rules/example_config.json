@@ -5,7 +5,7 @@
   "default_rules": {
     "status_code": {"predefined": "exact_match"},
     "headers": {
-      "include": ["content-type"]
+      "content-type": {"predefined": "exact_match"}
     },
     "body": {
       "ignored_paths": [],

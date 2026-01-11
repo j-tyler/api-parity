@@ -461,13 +461,25 @@ When `presence` is omitted, it defaults to `parity`. When only `presence` is spe
 
 **When body comparison applies:** Body rules only apply to successful (2xx) responses with JSON content. Error responses (4xx, 5xx) are compared by status code only—if both targets return the same status code class, that's parity. Body content of error responses is not compared.
 
+**Header comparison:** Headers use explicit rules, same as body fields. Each header you care about gets a rule; unlisted headers are ignored. Header names are case-insensitive.
+
+```json
+"headers": {
+  "content-type": {"predefined": "exact_match"},
+  "x-request-id": {"predefined": "uuid_format"},
+  "cache-control": {"predefined": "exact_match"}
+}
+```
+
 **Full example:**
 ```json
 {
   "version": "1",
   "default_rules": {
     "status_code": {"predefined": "exact_match"},
-    "headers": {"include": ["content-type"]},
+    "headers": {
+      "content-type": {"predefined": "exact_match"}
+    },
     "body": {
       "ignored_paths": [],
       "field_rules": {}
