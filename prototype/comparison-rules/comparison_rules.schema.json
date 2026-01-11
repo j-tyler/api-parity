@@ -58,11 +58,6 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "mode": {
-              "type": "string",
-              "enum": ["json_structural", "text_exact", "binary_hash", "ignore"],
-              "description": "Overall body comparison strategy."
-            },
             "ignored_paths": {
               "type": "array",
               "items": {"type": "string"},
