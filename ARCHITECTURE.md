@@ -208,11 +208,9 @@ Represents one HTTP request that can be executed, recorded, and replayed.
 | body_base64 | string | Body as base64 if binary (mutually exclusive with body) |
 | media_type | string | Content-Type, e.g., `application/json` |
 
-**Header and query structure:** Values are stored as arrays to support repeated parameters. Example: `{"Accept": ["application/json", "text/plain"]}` for a request with two Accept headers.
+**Header and query structure:** Values are arrays to support repeated parameters (e.g., `{"Accept": ["application/json", "text/plain"]}`).
 
-**Why separate path_template, path_parameters, AND rendered_path?** `path_template` and `path_parameters` preserve information about which parameter values caused failures. `rendered_path` provides the actual URL path for execution and debugging without requiring computation.
-
-**Why include operation_id?** Required for looking up comparison rules and for meaningful error messages.
+**Why all three path fields?** `path_template` + `path_parameters` preserve which values caused failures; `rendered_path` gives the actual URL without computation. `operation_id` is required for comparison rule lookup.
 
 **Example:**
 ```json
@@ -441,7 +439,7 @@ A JSON file you write to tell api-parity how responses should be compared. You d
 - `operation_rules` — per-operationId overrides (completely replaces default for any key it defines)
 - `field_rules` — JSONPath → comparison rule mapping
 
-**Specifying comparisons:** Use a predefined from the library (`comparison_library.json`) or write custom CEL. Predefineds expand to CEL at load time; the runtime only evaluates CEL expressions.
+**Specifying comparisons:** Use a predefined from `prototype/comparison-rules/comparison_library.json` or write custom CEL. Predefineds expand to CEL at load time.
 
 ```json
 {"predefined": "numeric_tolerance", "tolerance": 0.01}   // use predefined
@@ -450,7 +448,7 @@ A JSON file you write to tell api-parity how responses should be compared. You d
 
 In CEL expressions, `a` is the value from Target A, `b` is from Target B.
 
-**JSONPath semantics:** Uses `jsonpath-ng` library. Paths with wildcards (`[*]`) expand to match each element—the rule is applied to each matched pair in array order.
+**JSONPath semantics:** Paths with wildcards (`[*]`) expand to match each element—the rule applies to each matched pair in array order.
 
 Example: Given `$.users[*].score` with `{"predefined": "numeric_tolerance", "tolerance": 0.05}`:
 - A has `$.users` = `[{"score": 0.95}, {"score": 0.87}]`
@@ -461,16 +459,16 @@ Array length mismatches are caught by presence parity on missing indices. To com
 
 **Default behavior for unspecified fields:** Fields without explicit `field_rules` entries are compared for presence parity only—both responses must have the field, or both must lack it. Values are not compared. This lets fields the user doesn't care about be whatever, as long as they're whatever in both.
 
-**Field presence:** Each field rule can specify a `presence` property to control existence requirements. Presence is checked before value comparison (in Python, not CEL).
+**Field presence:** Controls existence requirements (checked before value comparison):
 
 | Presence | Meaning |
 |----------|---------|
-| `parity` | Both must have field, or both must lack it (default) |
-| `required` | Both must have field—fails if either lacks it |
-| `forbidden` | Both must lack field—fails if either has it |
-| `optional` | Compare values if both have field; pass if either lacks it |
+| `parity` | Both have field, or both lack it (default) |
+| `required` | Both must have field |
+| `forbidden` | Both must lack field |
+| `optional` | Compare if both have field; pass if either lacks it |
 
-**Null handling:** A field present with `null` value is treated as "present" for presence checks. The distinction is between `{"name": null}` (present, value is null) and `{}` (missing). In CEL expressions, `a` and `b` receive the actual `null` value when the field is null.
+**Null handling:** `{"name": null}` is "present"; `{}` is "missing". CEL receives the actual `null` value.
 
 ```json
 {"presence": "required", "predefined": "uuid_format"}     // must exist, check format
@@ -478,7 +476,7 @@ Array length mismatches are caught by presence parity on missing indices. To com
 {"presence": "optional", "predefined": "exact_match"}     // compare only if present
 ```
 
-When `presence` is omitted, it defaults to `parity`. When only `presence` is specified (no `predefined` or `expr`), value comparison is skipped after presence check passes.
+Default is `parity`. Specifying only `presence` (no `predefined` or `expr`) skips value comparison.
 
 **When body comparison applies:** Body rules only apply to successful (2xx) responses with JSON content. Error responses (4xx, 5xx) are compared by status code only—if both targets return the same status code class, that's parity. Body content of error responses is not compared.
 
@@ -513,7 +511,7 @@ When `presence` is omitted, it defaults to `parity`. When only `presence` is spe
         "field_rules": {
           "$.request_id": {"predefined": "ignore"},
           "$.id": {"presence": "required", "predefined": "uuid_format"},
-          "$.created_at": {"predefined": "timestamp_within_5s"},
+          "$.created_at": {"predefined": "epoch_seconds_tolerance", "seconds": 5},
           "$.balance": {"predefined": "numeric_tolerance", "tolerance": 0.01},
           "$.legacy_field": {"presence": "forbidden"},
           "$.nickname": {"presence": "optional", "predefined": "exact_match"}
@@ -537,7 +535,7 @@ When `presence` is omitted, it defaults to `parity`. When only `presence` is spe
   "$.users": {"expr": "size(a) == size(b) && a.all(ax, b.exists(bx, ax.id == bx.id && ax.name == bx.name))"}
   ```
 
-See `comparison_library.json` for all available predefineds with descriptions.
+See `prototype/comparison-rules/comparison_library.json` for all available predefineds.
 
 ### Error Classification [SPECIFIED]
 
@@ -598,17 +596,9 @@ Both targets follow the same chain of operations, but with their own data. If A'
 
 ### Replay Behavior [SPECIFIED]
 
-Replay re-executes the full chain, including CREATE operations.
+Replay re-executes the full chain, including CREATE operations. Uses fresh Schemathesis generation (not original values) to avoid uniqueness constraint failures. See DESIGN.md "Replay Regenerates Unique Fields".
 
-**Unique field regeneration:** Fresh Schemathesis generation, not original values. The mismatch bundle stores operation_id and path_template; replay generates new case data for that operation. See DESIGN.md "Replay Regenerates Unique Fields" for rationale.
-
-**Consequence:** Replay tests the pattern of the failure, not exact bytes. If a specific value caused the original mismatch, replay may not reproduce it exactly—but it will test the same operation with valid data. This is an acceptable tradeoff; the alternative (reusing original values) causes uniqueness constraint failures on CREATE operations.
-
-**What the bundle provides:**
-- `case.json`: Operation identity (operation_id, path_template)
-- `target_*.json`: Original requests/responses for debugging
-- `diff.json`: Which comparison failed and why
-- `metadata.json`: Seed value for reproducibility (if same seed regenerates similar data)
+**Consequence:** Replay tests the failure pattern, not exact bytes. If a specific value caused the mismatch, replay may not reproduce it exactly—but it tests the same operation with valid data.
 
 ---
 
@@ -659,5 +649,5 @@ OpenAPI Spec ──→ Schemathesis ──→ RequestCase/ChainCase
 
 Architecture informed by analysis of:
 - [Schemathesis GitHub](https://github.com/schemathesis/schemathesis) — Case class, Response class, VCR cassettes
-- [Schemathesis PyPI](https://pypi.org/project/schemathesis/) — v4.7.5 features
+- [Schemathesis PyPI](https://pypi.org/project/schemathesis/) — v4.8.0 features
 - [Schemathesis stateful testing issue #864](https://github.com/schemathesis/schemathesis/issues/864) — CLI stateful approach

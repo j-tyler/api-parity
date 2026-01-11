@@ -293,11 +293,11 @@ class TestCELEvaluatorPredefinedExpressions:
             assert evaluator.evaluate(expr, {"a": 1.005, "b": 1.009}) is True
             assert evaluator.evaluate(expr, {"a": 1.0, "b": 1.02}) is False
 
-    def test_timestamp_within_5s(self):
-        """Test timestamp comparison logic."""
+    def test_epoch_seconds_tolerance(self):
+        """Test epoch timestamp comparison logic."""
         with CELEvaluator() as evaluator:
-            # For timestamps, we compare as integers (Unix timestamps)
-            # timestamp_within_5s expands to: (a - b) <= 5 && (b - a) <= 5
+            # epoch_seconds_tolerance with seconds=5 expands to:
+            # (a - b) <= 5 && (b - a) <= 5
             expr = "(a - b) <= 5 && (b - a) <= 5"
             assert evaluator.evaluate(expr, {"a": 1000, "b": 1003}) is True
             assert evaluator.evaluate(expr, {"a": 1000, "b": 1010}) is False

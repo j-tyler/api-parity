@@ -19,7 +19,7 @@
           "$.request_id": {"predefined": "ignore"},
           "$.id": {"predefined": "uuid_format"},
           "$.created_at": {"predefined": "iso_timestamp_format"},
-          "$.updated_at": {"predefined": "timestamp_within_5s"},
+          "$.updated_at": {"predefined": "epoch_seconds_tolerance", "seconds": 5},
           "$.deprecated_field": {"presence": "forbidden"}
         }
       }

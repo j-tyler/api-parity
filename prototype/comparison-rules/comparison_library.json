@@ -21,22 +21,16 @@
       "expr": "(a - b) <= tolerance && (b - a) <= tolerance"
     },
 
-    "timestamp_tolerance": {
-      "description": "Unix timestamps (seconds) within N seconds of each other.",
+    "epoch_seconds_tolerance": {
+      "description": "Unix epoch timestamps (seconds) within N seconds of each other.",
       "params": ["seconds"],
       "expr": "(a - b) <= seconds && (b - a) <= seconds"
     },
 
-    "timestamp_within_5s": {
-      "description": "Unix timestamps within 5 seconds. Convenience for common case.",
-      "params": [],
-      "expr": "(a - b) <= 5 && (b - a) <= 5"
-    },
-
-    "timestamp_within_30s": {
-      "description": "Unix timestamps within 30 seconds. Convenience for common case.",
-      "params": [],
-      "expr": "(a - b) <= 30 && (b - a) <= 30"
+    "epoch_millis_tolerance": {
+      "description": "Unix epoch timestamps (milliseconds) within N milliseconds of each other.",
+      "params": ["millis"],
+      "expr": "(a - b) <= millis && (b - a) <= millis"
     },
 
     "unordered_array": {
@@ -76,9 +70,15 @@
     },
 
     "uuid_format": {
-      "description": "Both values are valid UUID v4 format. Actual values not compared.",
+      "description": "Both values are valid UUID format (any version). Actual values not compared.",
       "params": [],
-      "expr": "a.matches('^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') && b.matches('^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')"
+      "expr": "a.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') && b.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')"
+    },
+
+    "uuid_v4_format": {
+      "description": "Both values are valid UUID v4 format (random). Actual values not compared.",
+      "params": [],
+      "expr": "a.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$') && b.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$')"
     },
 
     "iso_timestamp_format": {
