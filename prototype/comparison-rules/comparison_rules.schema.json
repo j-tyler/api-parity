@@ -33,6 +33,13 @@
   },
 
   "$defs": {
+    "presence": {
+      "type": "string",
+      "enum": ["parity", "required", "forbidden", "optional"],
+      "default": "parity",
+      "description": "Field existence requirement. parity: both have or both lack (default). required: both must have. forbidden: both must lack. optional: compare if both have, pass if either lacks."
+    },
+
     "comparison_rules": {
       "type": "object",
       "additionalProperties": false,
@@ -44,13 +51,9 @@
 
         "headers": {
           "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "include": {
-              "type": "array",
-              "items": {"type": "string"},
-              "description": "Header names to compare. Others are ignored."
-            }
+          "description": "Per-header comparison rules. Keys are header names (case-insensitive). Unlisted headers are ignored.",
+          "additionalProperties": {
+            "$ref": "#/$defs/field_comparison"
           }
         },
 
@@ -58,16 +61,6 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "mode": {
-              "type": "string",
-              "enum": ["json_structural", "text_exact", "binary_hash", "ignore"],
-              "description": "Overall body comparison strategy."
-            },
-            "ignored_paths": {
-              "type": "array",
-              "items": {"type": "string"},
-              "description": "JSONPath expressions for fields to skip entirely."
-            },
             "field_rules": {
               "type": "object",
               "description": "Per-field comparison rules. Keys are JSONPath expressions.",
@@ -82,6 +75,7 @@
 
     "field_comparison": {
       "oneOf": [
+        {"$ref": "#/$defs/presence_only"},
         {"$ref": "#/$defs/predefined_ignore"},
         {"$ref": "#/$defs/predefined_exact_match"},
         {"$ref": "#/$defs/predefined_numeric_tolerance"},
@@ -106,12 +100,23 @@
       ]
     },
 
+    "presence_only": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["presence"],
+      "properties": {
+        "presence": {"$ref": "#/$defs/presence"}
+      },
+      "description": "Presence check only, no value comparison."
+    },
+
     "predefined_ignore": {
       "type": "object",
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "ignore"}
+        "predefined": {"const": "ignore"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -120,7 +125,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "exact_match"}
+        "predefined": {"const": "exact_match"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -130,7 +136,8 @@
       "required": ["predefined", "tolerance"],
       "properties": {
         "predefined": {"const": "numeric_tolerance"},
-        "tolerance": {"type": "number", "exclusiveMinimum": 0}
+        "tolerance": {"type": "number", "exclusiveMinimum": 0},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -140,7 +147,8 @@
       "required": ["predefined", "seconds"],
       "properties": {
         "predefined": {"const": "timestamp_tolerance"},
-        "seconds": {"type": "number", "exclusiveMinimum": 0}
+        "seconds": {"type": "number", "exclusiveMinimum": 0},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -149,7 +157,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "timestamp_within_5s"}
+        "predefined": {"const": "timestamp_within_5s"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -158,7 +167,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "timestamp_within_30s"}
+        "predefined": {"const": "timestamp_within_30s"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -167,7 +177,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "unordered_array"}
+        "predefined": {"const": "unordered_array"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -176,7 +187,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "array_length"}
+        "predefined": {"const": "array_length"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -186,7 +198,8 @@
       "required": ["predefined", "tolerance"],
       "properties": {
         "predefined": {"const": "array_length_tolerance"},
-        "tolerance": {"type": "integer", "minimum": 0}
+        "tolerance": {"type": "integer", "minimum": 0},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -196,7 +209,8 @@
       "required": ["predefined", "length"],
       "properties": {
         "predefined": {"const": "string_prefix"},
-        "length": {"type": "integer", "minimum": 1}
+        "length": {"type": "integer", "minimum": 1},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -205,7 +219,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "string_nonempty"}
+        "predefined": {"const": "string_nonempty"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -215,7 +230,8 @@
       "required": ["predefined", "pattern"],
       "properties": {
         "predefined": {"const": "both_match_regex"},
-        "pattern": {"type": "string", "minLength": 1}
+        "pattern": {"type": "string", "minLength": 1},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -224,7 +240,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "uuid_format"}
+        "predefined": {"const": "uuid_format"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -233,7 +250,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "iso_timestamp_format"}
+        "predefined": {"const": "iso_timestamp_format"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -242,7 +260,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "both_null"}
+        "predefined": {"const": "both_null"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -251,7 +270,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "both_null_or_equal"}
+        "predefined": {"const": "both_null_or_equal"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -260,7 +280,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "type_match"}
+        "predefined": {"const": "type_match"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -269,7 +290,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "both_positive"}
+        "predefined": {"const": "both_positive"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -278,7 +300,8 @@
       "additionalProperties": false,
       "required": ["predefined"],
       "properties": {
-        "predefined": {"const": "same_sign"}
+        "predefined": {"const": "same_sign"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -289,7 +312,8 @@
       "properties": {
         "predefined": {"const": "both_in_range"},
         "min": {"type": "number"},
-        "max": {"type": "number"}
+        "max": {"type": "number"},
+        "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
@@ -302,7 +326,8 @@
           "type": "string",
           "minLength": 1,
           "description": "Custom CEL expression. Variables 'a' and 'b' are the values from target A and B."
-        }
+        },
+        "presence": {"$ref": "#/$defs/presence"}
       }
     }
   }

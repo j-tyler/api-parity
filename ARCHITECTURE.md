@@ -185,9 +185,9 @@ Go:     {"id":"<uuid>","ok":false,"error":"undeclared reference to 'undefined_va
 
 ---
 
-## Data Models [NEEDS SPEC]
+## Internal Data Models [SPECIFIED]
 
-These models are aligned with Schemathesis's internal structures to enable direct integration. Schemathesis uses a `Case` class with separate path parameters, and a `Response` class with normalized fields.
+Python classes (Pydantic v2) representing HTTP requests and responses as they flow through the tool. The Executor creates these when sending requests; the Artifact Writer serializes them to mismatch bundles on disk.
 
 ### RequestCase
 
@@ -286,15 +286,15 @@ Execution of one step on one target.
 
 **Chain execution semantics:** Both targets execute the same chain operations, but each uses its own extracted data. If POST returns `{"id": "abc"}` on Target A and `{"id": "xyz"}` on Target B, subsequent GET uses `/items/abc` for A and `/items/xyz` for B.
 
-### Open Questions
+### Resolved Questions
 
-1. **Schema format:** Should these be JSON Schema definitions? TypeScript types? Python dataclasses?
+1. **Schema format:** Pydantic v2 models. See DESIGN.md "Pydantic v2 for Data Models" for rationale.
 
-**Resolved:** Variable extraction is handled by Schemathesis state machine internals. The `extracted` field in ChainStepExecution stores values pulled from responses per OpenAPI link definitions. We don't need to implement custom extraction.
+2. **Variable extraction:** Handled by Schemathesis state machine internals. The `extracted` field in ChainStepExecution stores values pulled from responses per OpenAPI link definitions. We don't need to implement custom extraction.
 
 ---
 
-## Mismatch Report Bundle [NEEDS SPEC]
+## Mismatch Report Bundle [SPECIFIED]
 
 On mismatch, produce a bundle containing everything needed for replay and analysis. This format intentionally differs from Schemathesis's VCR cassettes because we need to store parallel execution on two targets, not sequential interactions with one.
 
@@ -346,7 +346,9 @@ For stateful chains (uses ChainExecution structure):
 }
 ```
 
-### diff.json [NEEDS SPEC]
+### diff.json [SPECIFIED]
+
+Structured comparison result. Not a traditional diff—records which comparisons passed/failed and the values involved.
 
 ```json
 {
@@ -361,7 +363,8 @@ For stateful chains (uses ChainExecution structure):
         {
           "path": "$.status",
           "target_a": "active",
-          "target_b": "pending"
+          "target_b": "pending",
+          "rule": "exact_match"
         }
       ]
     }
@@ -369,10 +372,13 @@ For stateful chains (uses ChainExecution structure):
 }
 ```
 
-**Open Questions:**
-1. What diff library/format to use for body comparison?
-2. How to represent header differences (order-sensitive? case-sensitive?)?
-3. How to handle binary body diffs (hash comparison only?)?
+**Fields:**
+- `mismatch_type`: First component that failed (`status_code`, `headers`, `body`)
+- `summary`: Human-readable one-liner for logs
+- `details`: Per-component results with `match` boolean
+- `differences`: Array of failed comparisons with JSONPath, both values, and which rule failed
+
+Header differences use the same format with header name as path. Body comparison only applies to 2xx JSON responses (see "When body comparison applies" in Per-Endpoint Comparison Rules).
 
 ### metadata.json
 
@@ -395,9 +401,9 @@ For stateful chains (uses ChainExecution structure):
 
 ---
 
-## Runtime Configuration [NEEDS SPEC]
+## Runtime Configuration [SPECIFIED]
 
-The `--config` file supplies target definitions and comparison rules.
+The `--config` file supplies target definitions, comparison rules reference, and execution settings.
 
 ### Required Fields
 
@@ -412,6 +418,8 @@ targets:
     headers:
       Authorization: "Bearer ${STAGING_TOKEN}"
 
+comparison_rules: ./comparison_rules.json  # path to comparison rules file
+
 rate_limit:
   requests_per_second: 10
 
@@ -422,35 +430,93 @@ secrets:
     - "$.api_key"
 ```
 
+The `comparison_rules` field references a separate JSON file (see "Per-Endpoint Comparison Rules" below). Keeping rules in a separate file allows reuse across different runtime configs and keeps concerns separated.
+
 ### Per-Endpoint Comparison Rules [SPECIFIED]
 
-Users must define comparison rules per operationId. No heuristic guessing.
+A JSON file you write to tell api-parity how responses should be compared. You define rules per OpenAPI `operationId`—the tool does not guess which fields are timestamps, UUIDs, or otherwise volatile.
 
-**Format:** JSON file optimized for LLM authorship and human readability. See DESIGN.md for rationale.
+**File structure:**
+- `default_rules` — applied to all operations
+- `operation_rules` — per-operationId overrides (completely replaces default for any key it defines)
+- `field_rules` — JSONPath → comparison rule mapping
 
-**Engine:** All comparisons evaluate as CEL (Common Expression Language) expressions at runtime via a Go subprocess running cel-go. Predefined comparisons (e.g., `numeric_tolerance`, `unordered_array`) expand to CEL during config loading. See "CEL Evaluator Component" for implementation details.
+**Specifying comparisons:** Use a predefined from the library (`comparison_library.json`) or write custom CEL. Predefineds expand to CEL at load time; the runtime only evaluates CEL expressions.
 
-**Example:**
+```json
+{"predefined": "numeric_tolerance", "tolerance": 0.01}   // use predefined
+{"expr": "a.startsWith(b.substring(0, 5))"}              // custom CEL
+```
+
+In CEL expressions, `a` is the value from Target A, `b` is from Target B.
+
+**JSONPath semantics:** Uses `jsonpath-ng` library. Paths with wildcards (`[*]`) expand to match each element—the rule is applied to each matched pair in array order.
+
+Example: Given `$.users[*].score` with `{"predefined": "numeric_tolerance", "tolerance": 0.05}`:
+- A has `$.users` = `[{"score": 0.95}, {"score": 0.87}]`
+- B has `$.users` = `[{"score": 0.96}, {"score": 0.88}]`
+- Compares: `$.users[0].score` (0.95 vs 0.96 ✓), `$.users[1].score` (0.87 vs 0.88 ✓)
+
+Array length mismatches are caught by presence parity on missing indices. To compare an array as a whole (e.g., unordered), target the array directly: `"$.users": {"predefined": "unordered_array"}`.
+
+**Default behavior for unspecified fields:** Fields without explicit `field_rules` entries are compared for presence parity only—both responses must have the field, or both must lack it. Values are not compared. This lets fields the user doesn't care about be whatever, as long as they're whatever in both.
+
+**Field presence:** Each field rule can specify a `presence` property to control existence requirements. Presence is checked before value comparison (in Python, not CEL).
+
+| Presence | Meaning |
+|----------|---------|
+| `parity` | Both must have field, or both must lack it (default) |
+| `required` | Both must have field—fails if either lacks it |
+| `forbidden` | Both must lack field—fails if either has it |
+| `optional` | Compare values if both have field; pass if either lacks it |
+
+**Null handling:** A field present with `null` value is treated as "present" for presence checks. The distinction is between `{"name": null}` (present, value is null) and `{}` (missing). In CEL expressions, `a` and `b` receive the actual `null` value when the field is null.
+
+```json
+{"presence": "required", "predefined": "uuid_format"}     // must exist, check format
+{"presence": "forbidden"}                                  // must not exist
+{"presence": "optional", "predefined": "exact_match"}     // compare only if present
+```
+
+When `presence` is omitted, it defaults to `parity`. When only `presence` is specified (no `predefined` or `expr`), value comparison is skipped after presence check passes.
+
+**When body comparison applies:** Body rules only apply to successful (2xx) responses with JSON content. Error responses (4xx, 5xx) are compared by status code only—if both targets return the same status code class, that's parity. Body content of error responses is not compared.
+
+**Header comparison:** Headers use explicit rules, same as body fields. Each header you care about gets a rule; unlisted headers are ignored. Header names are case-insensitive.
+
+```json
+"headers": {
+  "content-type": {"predefined": "exact_match"},
+  "x-request-id": {"predefined": "uuid_format"},
+  "cache-control": {"predefined": "exact_match"}
+}
+```
+
+**Multi-value headers:** When a header has multiple values (e.g., `Set-Cookie`), only the first value is compared. In CEL expressions, `a` and `b` are the first header values from Target A and B respectively. This is a known limitation—if you need to compare all values of a multi-value header, the workaround is to check specific values exist in application logic rather than in api-parity rules.
+
+**Full example:**
 ```json
 {
   "version": "1",
   "default_rules": {
     "status_code": {"predefined": "exact_match"},
-    "headers": {"include": ["content-type"]},
+    "headers": {
+      "content-type": {"predefined": "exact_match"}
+    },
     "body": {
-      "mode": "json_structural",
-      "ignored_paths": [],
       "field_rules": {}
     }
   },
   "operation_rules": {
     "createUser": {
       "body": {
-        "ignored_paths": ["$.request_id"],
         "field_rules": {
-          "$.id": {"predefined": "uuid_format"},
+          "$.request_id": {"predefined": "ignore"},
+          "$.id": {"presence": "required", "predefined": "uuid_format"},
           "$.created_at": {"predefined": "timestamp_within_5s"},
-          "$.balance": {"predefined": "numeric_tolerance", "tolerance": 0.01}
+          "$.balance": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.legacy_field": {"presence": "forbidden"},
+          "$.nickname": {"presence": "optional", "predefined": "exact_match"}
         }
       }
     }
@@ -458,33 +524,42 @@ Users must define comparison rules per operationId. No heuristic guessing.
 }
 ```
 
-**Resolved questions:**
-1. **Inheritance model:** Operation rules inherit from default_rules with override semantics (not merge).
-2. **Array ordering:** Use `unordered_array` predefined for set semantics, default is ordered.
-3. **Floating point:** Use `numeric_tolerance` predefined with `tolerance` parameter.
-4. **Field-level functions:** Use predefined comparisons or custom CEL expressions.
+**Common patterns:**
+- Ignore volatile fields: `{"predefined": "ignore"}`
+- Tolerate float rounding: `{"predefined": "numeric_tolerance", "tolerance": 0.01}`
+- Unordered arrays: `{"predefined": "unordered_array"}` (unique elements only)
+- Format-only check: `{"predefined": "uuid_format"}` or `{"predefined": "iso_timestamp_format"}`
+- Require field exists: `{"presence": "required"}` (value not compared)
+- Forbid deprecated field: `{"presence": "forbidden"}`
+- Compare only if present: `{"presence": "optional", "predefined": "exact_match"}`
+- Unordered array with volatile nested fields—use custom CEL to compare only stable fields:
+  ```json
+  "$.users": {"expr": "size(a) == size(b) && a.all(ax, b.exists(bx, ax.id == bx.id && ax.name == bx.name))"}
+  ```
 
-**Implementation:** See `prototype/comparison-rules/` for working validation and inlining.
-See DESIGN.md "CEL as Comparison Engine" and "Predefined Comparison Library" for full design.
+See `comparison_library.json` for all available predefineds with descriptions.
 
-### Error Classification [NEEDS SPEC]
+### Error Classification [SPECIFIED]
 
-Default behavior:
-- 500-class errors: Not recorded as mismatches (assumed transient)
-- Differing 400-class errors: Recorded (indicates behavioral difference)
+Error responses follow the status code class rule from "When body comparison applies":
+- Same status code class (e.g., both 4xx, both 5xx) → parity
+- Different status code classes (e.g., 4xx vs 5xx, or 2xx vs 4xx) → mismatch
 
-**Concept:**
+**Additional behavior for 5xx:**
+- Both return 5xx → parity, but not recorded (assumed transient/infrastructure).
+- One returns 5xx, other returns different class → mismatch, recorded.
+
+**Configurable overrides:**
 ```yaml
 error_classification:
-  ignore_status_codes: [500, 502, 503, 504]
-  record_on_difference: [400, 401, 403, 404, 422]
+  ignore_when_both: [500, 502, 503, 504]  # skip test case if both return these
 ```
 
-**Open Question:** What if A returns 500 and B returns 400? Is that a mismatch or ignored?
+This keeps infrastructure noise out of artifacts while catching real behavioral differences.
 
 ---
 
-## Stateful Chains [PARTIALLY SPECIFIED]
+## Stateful Chains [SPECIFIED]
 
 ### Link-Based Generation
 
@@ -521,14 +596,19 @@ Both targets follow the same chain of operations, but with their own data. If A'
 
 **Mismatch vs error:** If both return 404, that's parity—chain continues. If A returns 404 and B returns 200, that's a mismatch—chain stops.
 
-### Replay Behavior [NEEDS SPEC]
+### Replay Behavior [SPECIFIED]
 
 Replay re-executes the full chain, including CREATE operations.
 
-**Open Questions:**
-1. How are unique fields regenerated? From fresh Schemathesis generation? From templates in the bundle?
-2. What if the regenerated data triggers a different code path than the original?
-3. Should replay support "dry run" mode that shows what would be sent without executing?
+**Unique field regeneration:** Fresh Schemathesis generation, not original values. The mismatch bundle stores operation_id and path_template; replay generates new case data for that operation. See DESIGN.md "Replay Regenerates Unique Fields" for rationale.
+
+**Consequence:** Replay tests the pattern of the failure, not exact bytes. If a specific value caused the original mismatch, replay may not reproduce it exactly—but it will test the same operation with valid data. This is an acceptable tradeoff; the alternative (reusing original values) causes uniqueness constraint failures on CREATE operations.
+
+**What the bundle provides:**
+- `case.json`: Operation identity (operation_id, path_template)
+- `target_*.json`: Original requests/responses for debugging
+- `diff.json`: Which comparison failed and why
+- `metadata.json`: Seed value for reproducibility (if same seed regenerates similar data)
 
 ---
 

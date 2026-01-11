@@ -36,16 +36,16 @@ Document the level of detail required in OpenAPI link definitions for effective 
 
 Several sections in ARCHITECTURE.md are marked [NEEDS SPEC] and need design work before implementation:
 
-- **Data Models** — Schema format (JSON Schema, TypeScript, Python dataclasses?)
-- **Mismatch Report Bundle / diff.json** — Diff library/algorithm, header comparison rules
-- **Error Classification** — Edge cases like A=500/B=400
-- **Stateful Chains / Replay Behavior** — Unique field regeneration mechanism
 - **OpenAPI Spec as Field Authority** — JSON Schema validator choice, additionalProperties handling
 
 **Resolved:**
 - ~~Runtime Configuration / Comparison Rules~~ — Now [SPECIFIED]. See DESIGN.md "Comparison Rules Format", "CEL as Comparison Engine", "Predefined Comparison Library". Prototype at `prototype/comparison-rules/`.
 - ~~Stateful Chains / Variable Extraction~~ — Handled by state machine bundles
 - ~~Stateful Chains / Link-Based Generation~~ — Now [SPECIFIED] in ARCHITECTURE.md
+- ~~Data Models~~ — Pydantic v2. See DESIGN.md "Pydantic v2 for Data Models".
+- ~~Mismatch Report Bundle / diff.json~~ — Now [SPECIFIED]. Structured comparison output, not traditional diff.
+- ~~Error Classification~~ — Now [SPECIFIED]. Cross-class = mismatch, same 5xx class = skip.
+- ~~Stateful Chains / Replay Behavior~~ — Now [SPECIFIED]. Fresh Schemathesis generation.
 
 ---
 
