@@ -498,6 +498,10 @@ When `presence` is omitted, it defaults to `parity`. When only `presence` is spe
 - Require field exists: `{"presence": "required"}` (value not compared)
 - Forbid deprecated field: `{"presence": "forbidden"}`
 - Compare only if present: `{"presence": "optional", "predefined": "exact_match"}`
+- Unordered array with volatile nested fields—use custom CEL to compare only stable fields:
+  ```json
+  "$.users": {"expr": "size(a) == size(b) && a.all(ax, b.exists(bx, ax.id == bx.id && ax.name == bx.name))"}
+  ```
 
 See `comparison_library.json` for all available predefineds with descriptions.
 
