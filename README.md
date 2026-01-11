@@ -4,7 +4,7 @@ Differential fuzzing tool for comparing two API implementations against an OpenA
 
 ## Status
 
-**In development** — CEL evaluator subprocess implemented and tested. Core CLI pending. See ARCHITECTURE.md and DESIGN.md for technical details.
+**In development** — CEL evaluator subprocess and integration test infrastructure implemented. Core CLI pending. See ARCHITECTURE.md and DESIGN.md for technical details.
 
 **Languages:** Python (primary), Go (CEL evaluator subprocess)
 

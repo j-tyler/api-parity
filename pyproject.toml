@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "api-parity"
+version = "0.1.0"
+description = "Differential fuzzing tool for comparing API implementations"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "schemathesis>=4.8.0",
+    "pydantic>=2.0",
+    "httpx>=0.25",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.20",
+]
+
+# Entry point will be added when CLI is implemented
+# [project.scripts]
+# api-parity = "api_parity.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["api_parity*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
