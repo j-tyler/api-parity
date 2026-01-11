@@ -393,17 +393,6 @@ class SecretsConfig(BaseModel):
     )
 
 
-class ErrorClassificationConfig(BaseModel):
-    """Error classification configuration."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    ignore_when_both: list[int] = Field(
-        default_factory=list,
-        description="Status codes to skip when both targets return them",
-    )
-
-
 class RuntimeConfig(BaseModel):
     """Top-level runtime configuration file structure."""
 
@@ -413,9 +402,6 @@ class RuntimeConfig(BaseModel):
     comparison_rules: str = Field(description="Path to comparison rules JSON file")
     rate_limit: RateLimitConfig | None = Field(default=None, description="Rate limiting settings")
     secrets: SecretsConfig | None = Field(default=None, description="Secret redaction settings")
-    error_classification: ErrorClassificationConfig | None = Field(
-        default=None, description="Error classification settings"
-    )
 
 
 # =============================================================================

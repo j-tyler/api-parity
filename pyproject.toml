@@ -33,9 +33,8 @@ dev = [
     "uvicorn[standard]>=0.20",
 ]
 
-# Entry point will be added when CLI is implemented
-# [project.scripts]
-# api-parity = "api_parity.cli:main"
+[project.scripts]
+api-parity = "api_parity.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["api_parity*"]
