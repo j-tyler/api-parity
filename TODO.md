@@ -19,24 +19,27 @@ Document the level of detail required in OpenAPI link definitions for effective 
 
 ---
 
-## CLI Explore/Replay Implementation
+## CLI Replay Implementation
 
-The CLI argument parsing is complete, but `explore` and `replay` subcommands are placeholder stubs that print configuration and exit. Implementation requires:
+The `explore` subcommand is fully implemented with:
+- Config file loading with environment variable substitution
+- Integration with Case Generator (Schemathesis)
+- Integration with Executor (httpx)
+- Integration with Comparator and CEL Evaluator
+- Integration with Artifact Writer for mismatch bundles
 
-1. Config file loading and merging with CLI args
-2. Integration with Case Generator (Schemathesis)
-3. Integration with Executor
-4. Integration with Comparator and Artifact Writer
-
-See ARCHITECTURE.md CLI Frontend [NEEDS SPEC] for design questions to resolve before implementation.
+The `replay` subcommand remains a placeholder stub. Implementation requires:
+1. Loading mismatch bundles from disk
+2. Re-executing saved request cases
+3. Comparing new responses to detect if mismatches persist
 
 ---
 
 ## Specification Work Required
 
 - **OpenAPI Spec as Field Authority** — JSON Schema validator choice, additionalProperties handling
-
-See ARCHITECTURE.md for component-level `[NEEDS SPEC]` items: CLI Frontend, Case Generator, Executor, Artifact Writer, Runtime Config Loading.
+- **Stateful Chain Generation** — Case Generator and Executor support stateless only; chain testing via OpenAPI links not yet implemented
+- **Rate Limiting** — Executor does not implement rate limiting in v0
 
 ---
 

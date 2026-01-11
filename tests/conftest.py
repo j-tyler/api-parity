@@ -138,3 +138,12 @@ def dual_servers():
     with MockServer(port_a, variant="a") as server_a:
         with MockServer(port_b, variant="b") as server_b:
             yield {"a": server_a, "b": server_b}
+
+
+@pytest.fixture(scope="function")
+def cel_evaluator_exists():
+    """Check that the CEL evaluator binary exists, skip if not."""
+    cel_path = PROJECT_ROOT / "cel-evaluator"
+    if not cel_path.exists():
+        pytest.skip("CEL evaluator binary not built. Run: go build -o cel-evaluator ./cmd/cel-evaluator")
+    return cel_path
