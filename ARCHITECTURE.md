@@ -294,7 +294,7 @@ Execution of one step on one target.
 
 ---
 
-## Mismatch Report Bundle [NEEDS SPEC]
+## Mismatch Report Bundle [SPECIFIED]
 
 On mismatch, produce a bundle containing everything needed for replay and analysis. This format intentionally differs from Schemathesis's VCR cassettes because we need to store parallel execution on two targets, not sequential interactions with one.
 
@@ -401,9 +401,9 @@ Header differences use the same format with header name as path. Body comparison
 
 ---
 
-## Runtime Configuration [NEEDS SPEC]
+## Runtime Configuration [SPECIFIED]
 
-The `--config` file supplies target definitions and comparison rules.
+The `--config` file supplies target definitions, comparison rules reference, and execution settings.
 
 ### Required Fields
 
@@ -418,6 +418,8 @@ targets:
     headers:
       Authorization: "Bearer ${STAGING_TOKEN}"
 
+comparison_rules: ./comparison_rules.json  # path to comparison rules file
+
 rate_limit:
   requests_per_second: 10
 
@@ -427,6 +429,8 @@ secrets:
     - "$.token"
     - "$.api_key"
 ```
+
+The `comparison_rules` field references a separate JSON file (see "Per-Endpoint Comparison Rules" below). Keeping rules in a separate file allows reuse across different runtime configs and keeps concerns separated.
 
 ### Per-Endpoint Comparison Rules [SPECIFIED]
 
