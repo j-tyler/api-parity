@@ -645,6 +645,50 @@ OpenAPI Spec ──→ Schemathesis ──→ RequestCase/ChainCase
 
 ---
 
+## Testing Infrastructure [SPECIFIED]
+
+Integration tests use a mock FastAPI server that implements a test OpenAPI spec designed to exercise all comparison scenarios.
+
+### Test Fixtures
+
+| File | Purpose |
+|------|---------|
+| `tests/fixtures/test_api.yaml` | OpenAPI spec with volatile fields, numeric tolerances, unordered arrays, chains |
+| `tests/fixtures/comparison_rules.json` | Comparison rules exercising all predefined types |
+
+### Mock Server Variants
+
+The mock server (`tests/integration/mock_server.py`) runs in two variants:
+
+- **Variant A** (`--variant a`): Standard behavior
+- **Variant B** (`--variant b`): Controlled differences for testing comparison logic
+  - Prices differ by 0.001 (within 0.01 tolerance)
+  - Arrays shuffled (tests unordered comparison)
+  - User scores differ slightly (tests numeric tolerance)
+
+### Running Tests
+
+```bash
+# All tests
+pytest
+
+# Integration tests only
+pytest tests/integration/
+
+# CEL evaluator tests only
+pytest tests/test_cel_evaluator.py
+```
+
+### Pytest Fixtures
+
+- `mock_server_a` / `mock_server_b`: Single server on random port (function-scoped)
+- `dual_servers`: Both variants for differential testing (function-scoped)
+- `test_api_spec` / `comparison_rules_path`: Paths to fixture files (session-scoped)
+
+Each test gets fresh server processes via subprocess isolation.
+
+---
+
 ## Sources
 
 Architecture informed by analysis of:

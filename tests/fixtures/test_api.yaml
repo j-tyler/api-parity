@@ -1,0 +1,599 @@
+openapi: "3.0.3"
+info:
+  title: api-parity Integration Test API
+  version: "1.0.0"
+  description: |
+    Test API designed to exercise all api-parity comparison scenarios:
+    - Volatile fields (UUIDs, timestamps, request IDs)
+    - Numeric tolerance (prices, scores)
+    - Array comparisons (ordered, unordered)
+    - Header comparisons
+    - Stateful chains via OpenAPI links
+    - Error responses
+
+servers:
+  - url: http://localhost:9999
+
+paths:
+  /widgets:
+    get:
+      operationId: listWidgets
+      summary: List all widgets
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [gadgets, tools, parts]
+        - name: min_price
+          in: query
+          schema:
+            type: number
+            minimum: 0
+        - name: max_price
+          in: query
+          schema:
+            type: number
+            minimum: 0
+        - name: in_stock
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: List of widgets
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+            X-Total-Count:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [widgets, total, generated_at]
+                properties:
+                  widgets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Widget"
+                  total:
+                    type: integer
+                  generated_at:
+                    type: string
+                    format: date-time
+
+    post:
+      operationId: createWidget
+      summary: Create a new widget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WidgetCreate"
+      responses:
+        "201":
+          description: Widget created
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Widget"
+          links:
+            GetWidget:
+              operationId: getWidget
+              parameters:
+                widget_id: "$response.body#/id"
+            UpdateWidget:
+              operationId: updateWidget
+              parameters:
+                widget_id: "$response.body#/id"
+            DeleteWidget:
+              operationId: deleteWidget
+              parameters:
+                widget_id: "$response.body#/id"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /widgets/{widget_id}:
+    get:
+      operationId: getWidget
+      summary: Get widget by ID
+      parameters:
+        - name: widget_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Widget details
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Widget"
+          links:
+            UpdateWidget:
+              operationId: updateWidget
+              parameters:
+                widget_id: "$response.body#/id"
+            DeleteWidget:
+              operationId: deleteWidget
+              parameters:
+                widget_id: "$response.body#/id"
+        "404":
+          description: Widget not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    put:
+      operationId: updateWidget
+      summary: Update a widget
+      parameters:
+        - name: widget_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WidgetUpdate"
+      responses:
+        "200":
+          description: Widget updated
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Widget"
+          links:
+            GetWidget:
+              operationId: getWidget
+              parameters:
+                widget_id: "$response.body#/id"
+        "404":
+          description: Widget not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    delete:
+      operationId: deleteWidget
+      summary: Delete a widget
+      parameters:
+        - name: widget_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Widget deleted
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+        "404":
+          description: Widget not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /users/{user_id}/profile:
+    get:
+      operationId: getUserProfile
+      summary: Get user profile with computed scores
+      description: |
+        Returns user profile with scores that may vary slightly between
+        implementations (floating point differences).
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: User profile
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Create an order
+      description: |
+        Creates an order with server-generated fields (order_id, timestamps,
+        confirmation codes) that differ between implementations.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderCreate"
+      responses:
+        "201":
+          description: Order created
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+            X-Confirmation-Code:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+          links:
+            GetOrder:
+              operationId: getOrder
+              parameters:
+                order_id: "$response.body#/id"
+        "400":
+          description: Invalid order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /orders/{order_id}:
+    get:
+      operationId: getOrder
+      summary: Get order by ID
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Order details
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          description: Order not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Health check endpoint
+      description: Returns server health with timing info that always differs.
+      responses:
+        "200":
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, timestamp, uptime_seconds]
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy]
+                  timestamp:
+                    type: string
+                    format: date-time
+                  uptime_seconds:
+                    type: number
+                  version:
+                    type: string
+
+components:
+  schemas:
+    Widget:
+      type: object
+      required: [id, name, price, category, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Server-generated UUID
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        price:
+          type: number
+          format: float
+          minimum: 0.01
+          description: Price may have floating-point rounding differences
+        category:
+          type: string
+          enum: [gadgets, tools, parts]
+        in_stock:
+          type: boolean
+        stock_count:
+          type: integer
+          minimum: 0
+        tags:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+          description: Tags may be returned in different order
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Arbitrary metadata object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    WidgetCreate:
+      type: object
+      required: [name, price, category]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        price:
+          type: number
+          format: float
+          minimum: 0.01
+        category:
+          type: string
+          enum: [gadgets, tools, parts]
+        in_stock:
+          type: boolean
+          default: true
+        stock_count:
+          type: integer
+          minimum: 0
+          default: 0
+        tags:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+        metadata:
+          type: object
+          additionalProperties: true
+
+    WidgetUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        price:
+          type: number
+          format: float
+          minimum: 0.01
+        in_stock:
+          type: boolean
+        stock_count:
+          type: integer
+          minimum: 0
+        tags:
+          type: array
+          items:
+            type: string
+          maxItems: 10
+        metadata:
+          type: object
+          additionalProperties: true
+
+    UserProfile:
+      type: object
+      required: [id, username, roles, scores]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [admin, user, guest, moderator]
+          description: Roles may be returned in any order
+        scores:
+          type: object
+          required: [reputation, activity, trust]
+          properties:
+            reputation:
+              type: number
+              format: float
+              minimum: 0
+              maximum: 100
+              description: Computed score with possible rounding differences
+            activity:
+              type: number
+              format: float
+              minimum: 0
+              maximum: 100
+            trust:
+              type: number
+              format: float
+              minimum: 0
+              maximum: 1
+        last_login:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    Order:
+      type: object
+      required: [id, user_id, items, total, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        request_id:
+          type: string
+          format: uuid
+          description: Internal request tracking ID (always different)
+        confirmation_code:
+          type: string
+          description: Random confirmation code (always different)
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+        subtotal:
+          type: number
+          format: float
+        tax:
+          type: number
+          format: float
+        total:
+          type: number
+          format: float
+          description: Total may have small rounding differences
+        status:
+          type: string
+          enum: [pending, confirmed, shipped, delivered, cancelled]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OrderCreate:
+      type: object
+      required: [user_id, items]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [widget_id, quantity]
+            properties:
+              widget_id:
+                type: string
+                format: uuid
+              quantity:
+                type: integer
+                minimum: 1
+                maximum: 100
+
+    OrderItem:
+      type: object
+      required: [widget_id, name, quantity, unit_price, subtotal]
+      properties:
+        widget_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        quantity:
+          type: integer
+        unit_price:
+          type: number
+          format: float
+        subtotal:
+          type: number
+          format: float
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        timestamp:
+          type: string
+          format: date-time
+        request_id:
+          type: string
+          format: uuid

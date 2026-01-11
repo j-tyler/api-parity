@@ -1,0 +1,172 @@
+{
+  "version": "1",
+  "description": "Comparison rules for api-parity integration test API. Exercises all predefined comparison types.",
+
+  "default_rules": {
+    "status_code": {"predefined": "exact_match"},
+    "headers": {
+      "content-type": {"predefined": "exact_match"},
+      "x-request-id": {"predefined": "uuid_format"}
+    },
+    "body": {
+      "field_rules": {}
+    }
+  },
+
+  "operation_rules": {
+    "listWidgets": {
+      "headers": {
+        "x-total-count": {"predefined": "exact_match"}
+      },
+      "body": {
+        "field_rules": {
+          "$.generated_at": {"predefined": "iso_timestamp_format"},
+          "$.total": {"predefined": "exact_match"},
+          "$.widgets[*].id": {"presence": "required", "predefined": "uuid_format"},
+          "$.widgets[*].name": {"predefined": "exact_match"},
+          "$.widgets[*].price": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.widgets[*].category": {"predefined": "exact_match"},
+          "$.widgets[*].in_stock": {"predefined": "exact_match"},
+          "$.widgets[*].stock_count": {"predefined": "exact_match"},
+          "$.widgets[*].tags": {"predefined": "unordered_array"},
+          "$.widgets[*].created_at": {"predefined": "iso_timestamp_format"},
+          "$.widgets[*].updated_at": {"presence": "optional", "predefined": "iso_timestamp_format"}
+        }
+      }
+    },
+
+    "createWidget": {
+      "body": {
+        "field_rules": {
+          "$.id": {"presence": "required", "predefined": "uuid_format"},
+          "$.name": {"predefined": "exact_match"},
+          "$.description": {"presence": "optional", "predefined": "exact_match"},
+          "$.price": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.category": {"predefined": "exact_match"},
+          "$.in_stock": {"predefined": "exact_match"},
+          "$.stock_count": {"predefined": "exact_match"},
+          "$.tags": {"predefined": "unordered_array"},
+          "$.created_at": {"predefined": "iso_timestamp_format"},
+          "$.updated_at": {"presence": "optional", "predefined": "iso_timestamp_format"}
+        }
+      }
+    },
+
+    "getWidget": {
+      "headers": {
+        "etag": {"predefined": "string_nonempty"}
+      },
+      "body": {
+        "field_rules": {
+          "$.id": {"predefined": "uuid_format"},
+          "$.name": {"predefined": "exact_match"},
+          "$.description": {"presence": "optional", "predefined": "exact_match"},
+          "$.price": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.category": {"predefined": "exact_match"},
+          "$.in_stock": {"predefined": "exact_match"},
+          "$.stock_count": {"predefined": "exact_match"},
+          "$.tags": {"predefined": "unordered_array"},
+          "$.created_at": {"predefined": "iso_timestamp_format"},
+          "$.updated_at": {"presence": "optional", "predefined": "iso_timestamp_format"}
+        }
+      }
+    },
+
+    "updateWidget": {
+      "body": {
+        "field_rules": {
+          "$.id": {"predefined": "uuid_format"},
+          "$.name": {"predefined": "exact_match"},
+          "$.description": {"presence": "optional", "predefined": "exact_match"},
+          "$.price": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.category": {"predefined": "exact_match"},
+          "$.in_stock": {"predefined": "exact_match"},
+          "$.stock_count": {"predefined": "exact_match"},
+          "$.tags": {"predefined": "unordered_array"},
+          "$.created_at": {"predefined": "iso_timestamp_format"},
+          "$.updated_at": {"presence": "required", "predefined": "iso_timestamp_format"}
+        }
+      }
+    },
+
+    "deleteWidget": {
+      "body": {
+        "field_rules": {}
+      }
+    },
+
+    "getUserProfile": {
+      "body": {
+        "field_rules": {
+          "$.id": {"predefined": "uuid_format"},
+          "$.username": {"predefined": "exact_match"},
+          "$.email": {"presence": "optional", "predefined": "exact_match"},
+          "$.roles": {"predefined": "unordered_array"},
+          "$.scores.reputation": {"predefined": "numeric_tolerance", "tolerance": 0.1},
+          "$.scores.activity": {"predefined": "numeric_tolerance", "tolerance": 0.1},
+          "$.scores.trust": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.last_login": {"presence": "optional", "predefined": "iso_timestamp_format"},
+          "$.created_at": {"predefined": "iso_timestamp_format"}
+        }
+      }
+    },
+
+    "createOrder": {
+      "headers": {
+        "x-confirmation-code": {"predefined": "string_nonempty"}
+      },
+      "body": {
+        "field_rules": {
+          "$.id": {"presence": "required", "predefined": "uuid_format"},
+          "$.user_id": {"predefined": "uuid_format"},
+          "$.request_id": {"predefined": "ignore"},
+          "$.confirmation_code": {"predefined": "ignore"},
+          "$.items[*].widget_id": {"predefined": "uuid_format"},
+          "$.items[*].name": {"predefined": "exact_match"},
+          "$.items[*].quantity": {"predefined": "exact_match"},
+          "$.items[*].unit_price": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.items[*].subtotal": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.subtotal": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.tax": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.total": {"predefined": "numeric_tolerance", "tolerance": 0.02},
+          "$.status": {"predefined": "exact_match"},
+          "$.created_at": {"predefined": "iso_timestamp_format"},
+          "$.updated_at": {"presence": "optional", "predefined": "iso_timestamp_format"}
+        }
+      }
+    },
+
+    "getOrder": {
+      "body": {
+        "field_rules": {
+          "$.id": {"predefined": "uuid_format"},
+          "$.user_id": {"predefined": "uuid_format"},
+          "$.request_id": {"predefined": "ignore"},
+          "$.confirmation_code": {"predefined": "ignore"},
+          "$.items[*].widget_id": {"predefined": "uuid_format"},
+          "$.items[*].name": {"predefined": "exact_match"},
+          "$.items[*].quantity": {"predefined": "exact_match"},
+          "$.items[*].unit_price": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.items[*].subtotal": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.subtotal": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.tax": {"predefined": "numeric_tolerance", "tolerance": 0.01},
+          "$.total": {"predefined": "numeric_tolerance", "tolerance": 0.02},
+          "$.status": {"predefined": "exact_match"},
+          "$.created_at": {"predefined": "iso_timestamp_format"},
+          "$.updated_at": {"presence": "optional", "predefined": "iso_timestamp_format"}
+        }
+      }
+    },
+
+    "healthCheck": {
+      "body": {
+        "field_rules": {
+          "$.status": {"predefined": "exact_match"},
+          "$.timestamp": {"predefined": "iso_timestamp_format"},
+          "$.uptime_seconds": {"predefined": "both_positive"},
+          "$.version": {"presence": "optional", "predefined": "exact_match"}
+        }
+      }
+    }
+  }
+}
