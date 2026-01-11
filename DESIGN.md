@@ -356,6 +356,27 @@ Data models (RequestCase, ResponseCase, ChainCase, etc.) use Pydantic v2, not pl
 
 ---
 
+# Body Comparison Scope and Content-Type Inference
+
+Keywords: body comparison mode content-type json error responses
+Date: 20260111
+
+Body comparison rules (`ignored_paths`, `field_rules`) only apply to successful (2xx) responses with JSON content. The comparison strategy is inferred from the response's `Content-Type` header, not user configuration.
+
+**Why no `body.mode` config:**
+
+1. OpenAPI spec already declares response content types—user shouldn't repeat this.
+2. Actual response has `Content-Type` header—tool can infer parsing strategy.
+3. If spec says JSON but response isn't JSON, that's already a schema violation (caught by "OpenAPI Spec as Field Authority").
+
+**Error response handling:**
+
+Error responses (4xx, 5xx) are compared by status code only. If both targets return the same status code, that's parity—body content is not compared. Rationale: if both reject a request with 400, the API behavior is equivalent regardless of error message format.
+
+This removes unnecessary configuration and keeps comparison rules focused on the fields users care about in successful responses.
+
+---
+
 # Stdin/Stdout IPC for CEL Subprocess
 
 Keywords: ipc stdin stdout pipes subprocess protocol ndjson unix sockets

@@ -459,6 +459,8 @@ In CEL expressions, `a` is the value from Target A, `b` is from Target B.
 
 When `presence` is omitted, it defaults to `parity`. When only `presence` is specified (no `predefined` or `expr`), value comparison is skipped after presence check passes.
 
+**When body comparison applies:** Body rules only apply to successful (2xx) responses with JSON content. Error responses (4xx, 5xx) are compared by status code only—if both targets return the same status code class, that's parity. Body content of error responses is not compared.
+
 **Full example:**
 ```json
 {
@@ -467,7 +469,6 @@ When `presence` is omitted, it defaults to `parity`. When only `presence` is spe
     "status_code": {"predefined": "exact_match"},
     "headers": {"include": ["content-type"]},
     "body": {
-      "mode": "json_structural",
       "ignored_paths": [],
       "field_rules": {}
     }
