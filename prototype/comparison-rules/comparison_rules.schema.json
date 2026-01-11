@@ -79,9 +79,8 @@
         {"$ref": "#/$defs/predefined_ignore"},
         {"$ref": "#/$defs/predefined_exact_match"},
         {"$ref": "#/$defs/predefined_numeric_tolerance"},
-        {"$ref": "#/$defs/predefined_timestamp_tolerance"},
-        {"$ref": "#/$defs/predefined_timestamp_within_5s"},
-        {"$ref": "#/$defs/predefined_timestamp_within_30s"},
+        {"$ref": "#/$defs/predefined_epoch_seconds_tolerance"},
+        {"$ref": "#/$defs/predefined_epoch_millis_tolerance"},
         {"$ref": "#/$defs/predefined_unordered_array"},
         {"$ref": "#/$defs/predefined_array_length"},
         {"$ref": "#/$defs/predefined_array_length_tolerance"},
@@ -89,6 +88,7 @@
         {"$ref": "#/$defs/predefined_string_nonempty"},
         {"$ref": "#/$defs/predefined_both_match_regex"},
         {"$ref": "#/$defs/predefined_uuid_format"},
+        {"$ref": "#/$defs/predefined_uuid_v4_format"},
         {"$ref": "#/$defs/predefined_iso_timestamp_format"},
         {"$ref": "#/$defs/predefined_both_null"},
         {"$ref": "#/$defs/predefined_both_null_or_equal"},
@@ -141,33 +141,24 @@
       }
     },
 
-    "predefined_timestamp_tolerance": {
+    "predefined_epoch_seconds_tolerance": {
       "type": "object",
       "additionalProperties": false,
       "required": ["predefined", "seconds"],
       "properties": {
-        "predefined": {"const": "timestamp_tolerance"},
+        "predefined": {"const": "epoch_seconds_tolerance"},
         "seconds": {"type": "number", "exclusiveMinimum": 0},
         "presence": {"$ref": "#/$defs/presence"}
       }
     },
 
-    "predefined_timestamp_within_5s": {
+    "predefined_epoch_millis_tolerance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["predefined"],
+      "required": ["predefined", "millis"],
       "properties": {
-        "predefined": {"const": "timestamp_within_5s"},
-        "presence": {"$ref": "#/$defs/presence"}
-      }
-    },
-
-    "predefined_timestamp_within_30s": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["predefined"],
-      "properties": {
-        "predefined": {"const": "timestamp_within_30s"},
+        "predefined": {"const": "epoch_millis_tolerance"},
+        "millis": {"type": "number", "exclusiveMinimum": 0},
         "presence": {"$ref": "#/$defs/presence"}
       }
     },
@@ -241,6 +232,16 @@
       "required": ["predefined"],
       "properties": {
         "predefined": {"const": "uuid_format"},
+        "presence": {"$ref": "#/$defs/presence"}
+      }
+    },
+
+    "predefined_uuid_v4_format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"const": "uuid_v4_format"},
         "presence": {"$ref": "#/$defs/presence"}
       }
     },

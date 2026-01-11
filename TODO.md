@@ -13,19 +13,6 @@ v0 supports simple header-based auth configured manually in runtime config (see 
 
 ---
 
-## ~~Validate Schemathesis Link Support~~ (COMPLETED 20260108)
-
-Validation complete. Key findings now documented in DESIGN.md and ARCHITECTURE.md.
-
-Results:
-- ✅ 6-step chains validated (70+ unique operation sequences)
-- ✅ Variable extraction works via state machine bundles and link definitions
-- ✅ Incomplete links = shorter chains (expected behavior)
-- ✅ GenerationMode.POSITIVE produces schema-valid data only
-- ⚠️ Schemathesis continues after errors by default; api-parity stops on mismatch (see DESIGN.md)
-
----
-
 ## User Documentation for OpenAPI Links
 
 Document the level of detail required in OpenAPI link definitions for effective chain testing. Users need to understand that sparse link definitions produce shallow chains.
@@ -34,42 +21,7 @@ Document the level of detail required in OpenAPI link definitions for effective 
 
 ## Specification Work Required
 
-Several sections in ARCHITECTURE.md are marked [NEEDS SPEC] and need design work before implementation:
-
 - **OpenAPI Spec as Field Authority** — JSON Schema validator choice, additionalProperties handling
-
-**Resolved:**
-- ~~Runtime Configuration / Comparison Rules~~ — Now [SPECIFIED]. See DESIGN.md "Comparison Rules Format", "CEL as Comparison Engine", "Predefined Comparison Library". Prototype at `prototype/comparison-rules/`.
-- ~~Stateful Chains / Variable Extraction~~ — Handled by state machine bundles
-- ~~Stateful Chains / Link-Based Generation~~ — Now [SPECIFIED] in ARCHITECTURE.md
-- ~~Data Models~~ — Pydantic v2. See DESIGN.md "Pydantic v2 for Data Models".
-- ~~Mismatch Report Bundle / diff.json~~ — Now [SPECIFIED]. Structured comparison output, not traditional diff.
-- ~~Error Classification~~ — Now [SPECIFIED]. Cross-class = mismatch, same 5xx class = skip.
-- ~~Stateful Chains / Replay Behavior~~ — Now [SPECIFIED]. Fresh Schemathesis generation.
-
----
-
-## ~~CEL Runtime Validation~~ (SUPERSEDED 20260110)
-
-Decision made: Use cel-go via Go subprocess. Python CEL libraries are not an option due to untrusted dependency constraints.
-
-See DESIGN.md "CEL Evaluation via Go Subprocess" and "Stdin/Stdout IPC for CEL Subprocess" for full design. See ARCHITECTURE.md "CEL Evaluator Component" for implementation details.
-
----
-
-## ~~CEL Evaluator Implementation~~ (COMPLETED 20260111)
-
-Implementation complete. Go subprocess and Python integration working.
-
-Results:
-- ✅ Go evaluator at `cmd/cel-evaluator/main.go` with cel-go v0.21.0
-- ✅ Python wrapper at `api_parity/cel_evaluator.py` with subprocess management
-- ✅ 31 integration tests passing (basic operations, error handling, lifecycle)
-- ✅ NDJSON protocol with ready handshake, request/response correlation
-- ✅ Automatic subprocess restart on crash (max 3 attempts)
-- ✅ 5-second evaluation timeout in Go
-
-**Build:** `go build -o cel-evaluator cmd/cel-evaluator`
 
 ---
 

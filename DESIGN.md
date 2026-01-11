@@ -9,9 +9,7 @@ This document records architectural and design decisions made in the api-parity 
 Keywords: format structure template decision record
 Date: 20260108
 
-Design decisions use a simple, grep-friendly format. Each decision starts with an H1 heading containing a descriptive name. Below that, a Keywords line lists searchable terms for finding relevant decisions when this document grows large. The Date line uses YYYYMMDD format for easy chronological sorting. Finally, one or more paragraphs explain the problem, the decision made, and the reasoning behind it.
-
-This format was chosen over more structured alternatives (like ADR templates with separate Context/Decision/Rationale sections) because it's more natural to write and read. The keywords line solves discoverability, the date provides ordering, and free-form paragraphs let the author explain things in whatever way makes sense for that particular decision.
+Each decision: H1 heading, Keywords line (for grep), Date (YYYYMMDD), then free-form paragraphs explaining problem/decision/reasoning. Chosen over structured ADR templates for natural readability.
 
 ---
 
@@ -96,15 +94,6 @@ Eventually consistent APIs (where GET may return stale data for some time after 
 
 ---
 
-# Exit Code Conventions
-
-Keywords: exit codes CLI return status
-Date: 20260108
-
-Exit codes follow Unix conventions: 0 for success (no mismatches), 1 for mismatches found, 2 for tool error. The original design proposed swapping 1 and 2, but this conflicts with standard tools like diff and grep. Following conventions reduces surprise for users integrating with CI/scripts.
-
----
-
 # Secret Redaction is User-Configured
 
 Keywords: secrets redaction security credentials configuration
@@ -163,9 +152,7 @@ State machine auto-discovers transitions from OpenAPI links. Note: Schemathesis 
 Keywords: chains stateful execution generation live
 Date: 20260108
 
-Chains are generated live, not pre-generated offline. Each target executes the same sequence of operations but uses its own extracted response data for subsequent steps. If A's POST returns id "abc" and B's returns "xyz", A's chain continues with "abc" while B's continues with "xyz".
-
-This was chosen over offline generation because chain steps depend on runtime response data (e.g., created resource IDs). Pre-generating chains would require mocking responses, which defeats the purpose of differential testing against real APIs.
+Chains are generated live, not pre-generated offline. Each target executes the same operation sequence but uses its own extracted response data for subsequent steps. If A's POST returns id "abc" and B's returns "xyz", A's GET uses "abc" while B's uses "xyz". Pre-generation would require mocking responses, defeating differential testing.
 
 ---
 
@@ -255,7 +242,7 @@ Date: 20260110
 
 A predefined comparison library ships with api-parity. It contains named comparisons that expand to CEL expressions during config loading.
 
-**Location:** `comparison_library.json` at a well-known path. LLMs discover available comparisons by reading this file. The file is self-documenting with descriptions for each predefined.
+**Location:** `prototype/comparison-rules/comparison_library.json`. Self-documenting with descriptions for each predefined.
 
 **Design: No optional parameters.** Each predefined has a fixed signature. Parameterized comparisons require all parameters. If you want different behavior, use a different predefined or write custom CEL.
 
@@ -294,17 +281,6 @@ See `prototype/comparison-rules/` for working implementation with validation and
 
 ---
 
-# CEL Runtime Selection (DECIDED 20260110)
-
-Keywords: cel runtime python library cel-go cel-python implementation
-Date: 20260110
-
-**Decision:** Use cel-go via a Go subprocess. Python CEL libraries (cel-python, common-expression-language) cannot be used because they lack required security review for production use. cel-go, as Google's reference implementation with widespread production use (Kubernetes, Envoy, Firebase), meets the trust bar.
-
-See "CEL Evaluation via Go Subprocess" and "Stdin/Stdout IPC for CEL Subprocess" below for full design.
-
----
-
 # CEL Evaluation via Go Subprocess
 
 Keywords: cel go subprocess ipc python hybrid architecture
@@ -320,10 +296,10 @@ No Go equivalent to Schemathesis exists. Go has OpenAPI parsers (kin-openapi) an
 
 **Architecture:**
 - Python: Main application (CLI, Schemathesis integration, HTTP execution, artifact writing)
-- Go: Single-purpose CEL evaluator subprocess (~60 lines)
-- Interface: `CELEvaluator` protocol in Python, implementation calls subprocess
+- Go: Single-purpose CEL evaluator subprocess (`cmd/cel-evaluator/main.go`)
+- Interface: `CELEvaluator` class in Python (`api_parity/cel_evaluator.py`), calls subprocess
 
-The Go subprocess is not a "hybrid architecture" in the complex sense—it's a small, focused helper behind a clean interface. The implementation detail (subprocess vs hypothetical future Python CEL library) is hidden from the rest of the codebase.
+The Go subprocess is a focused helper behind a clean interface. The implementation detail (subprocess vs hypothetical future Python CEL library) is hidden from the rest of the codebase. See ARCHITECTURE.md "CEL Evaluator Component" for the IPC protocol.
 
 ---
 
@@ -373,12 +349,6 @@ The Python↔Go CEL evaluator uses stdin/stdout pipes with newline-delimited JSO
 | Multi-client | No | Yes |
 | Our requirement | Single client | Single client |
 
-Sockets win for multi-client scenarios (multiple Python workers sharing one evaluator). We have single-client: one Python process, one Go subprocess. Pipes are simpler.
+Sockets win for multi-client scenarios. We have single-client (one Python process, one Go subprocess), so pipes are simpler. Both sides buffer I/O—flush after each write. EOF signals subprocess crash.
 
-**Technical details:**
-
-Pipes are unidirectional. Stdin/stdout requires two pipes for bidirectional communication. Data flows: Python writes → kernel buffer → Go reads (and vice versa for responses).
-
-Both Python and Go buffer I/O in userspace. Messages must be flushed after each write. EOF signals subprocess crash.
-
-See ARCHITECTURE.md "IPC Protocol" for the message format specification.
+See ARCHITECTURE.md "IPC Protocol" for the message format.
