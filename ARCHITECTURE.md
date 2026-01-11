@@ -69,11 +69,21 @@ api-parity replay \
   --out ./artifacts/replay
 ```
 
+### Mode C: List Operations
+
+Discovery command to show all operationIds from an OpenAPI spec along with their response links. Helps users identify operationIds for `--exclude` and `--operation-timeout` flags.
+
+```
+api-parity list-operations --spec openapi.yaml
+```
+
 ### Exit Codes
 
-- `0`: No mismatches (or all replays match)
-- `1`: Mismatches found
-- `2`: Tool error
+All modes use standard UNIX exit codes:
+- `0`: Successful completion
+- Non-zero: Error (invalid arguments, file not found, spec parse error, etc.)
+
+Finding mismatches during explore is expected behavior, not an error. Mismatch count is reported in output, not exit code.
 
 ---
 
@@ -220,21 +230,6 @@ Models exist (`api_parity/models.py`: `RuntimeConfig`, `ComparisonRulesFile`, `C
 1. How to implement `${ENV_VAR}` substitution in YAML? Regex replacement before parse? Custom YAML loader?
 2. Where does config loading live? Separate module? CLI?
 3. How to resolve relative paths in `comparison_rules` field?
-
----
-
-## Error Classification [NEEDS SPEC]
-
-Model exists (`api_parity/models.py`: `ErrorClassificationConfig`). Implementation not done.
-
-**Behavior specified in "Per-Endpoint Comparison Rules":**
-- Same status code class (both 4xx, both 5xx) → parity
-- Both return codes in `ignore_when_both` list → skip test case entirely
-
-**Open questions:**
-
-1. Where does this logic live? Comparator? Executor? Separate component?
-2. How does "skip test case" integrate with artifact writing (nothing written) vs "parity" (logged but not written)?
 
 ---
 
@@ -419,7 +414,6 @@ JSON file defining how responses are compared. Model: `ComparisonRulesFile` in `
 ### Error Classification
 
 - Same status code class (both 4xx, both 5xx) → parity
-- Both in `ignore_when_both` list → skip test case
 - Different classes → mismatch
 
 ---

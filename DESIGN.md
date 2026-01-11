@@ -387,3 +387,26 @@ Rationale:
 3. **Consistency** — Both configuration errors (unknown predefined) and runtime errors (CEL type mismatch) are handled the same way.
 
 This is distinct from `CELSubprocessError` (Go process crashed), which does propagate as an exception since it indicates infrastructure failure, not configuration/data issues.
+
+---
+
+# CLI Arguments Override Config File
+
+Keywords: cli config precedence override arguments runtime
+Date: 20260111
+
+Every configuration option can be specified in the configuration file. If the same option is also passed as a CLI argument, the CLI argument takes precedence for that run.
+
+**Why this design:**
+- Config files capture stable, shared defaults (target URLs, auth headers, comparison rules)
+- CLI flags enable one-off overrides without editing files (different seed, limited cases for debugging)
+- Standard pattern familiar from tools like docker, kubectl, terraform
+
+**Precedence order (highest to lowest):**
+1. CLI arguments
+2. Config file values
+3. Built-in defaults
+
+**Example:** Config file specifies `max_cases: 10000`. Running with `--max-cases 10` overrides just for that run. The config file remains unchanged.
+
+**Implementation note:** Parse CLI args, load config file, merge with CLI taking precedence, validate the merged result. Validation happens once on the merged config, not separately.

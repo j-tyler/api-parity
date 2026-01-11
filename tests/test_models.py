@@ -22,7 +22,6 @@ from api_parity.models import (
     ComparisonResult,
     ComparisonRulesFile,
     ComponentResult,
-    ErrorClassificationConfig,
     FieldDifference,
     FieldRule,
     MismatchMetadata,
@@ -525,9 +524,6 @@ class TestRuntimeConfig:
             comparison_rules="./rules.json",
             rate_limit=RateLimitConfig(requests_per_second=10.0),
             secrets=SecretsConfig(redact_fields=["$.password", "$.api_key"]),
-            error_classification=ErrorClassificationConfig(
-                ignore_when_both=[500, 502, 503]
-            ),
         )
         json_str = config.model_dump_json()
         restored = RuntimeConfig.model_validate_json(json_str)
