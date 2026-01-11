@@ -346,7 +346,9 @@ For stateful chains (uses ChainExecution structure):
 }
 ```
 
-### diff.json [NEEDS SPEC]
+### diff.json [SPECIFIED]
+
+Structured comparison result. Not a traditional diff—records which comparisons passed/failed and the values involved.
 
 ```json
 {
@@ -361,7 +363,8 @@ For stateful chains (uses ChainExecution structure):
         {
           "path": "$.status",
           "target_a": "active",
-          "target_b": "pending"
+          "target_b": "pending",
+          "rule": "exact_match"
         }
       ]
     }
@@ -369,10 +372,13 @@ For stateful chains (uses ChainExecution structure):
 }
 ```
 
-**Open Questions:**
-1. What diff library/format to use for body comparison?
-2. How to represent header differences (order-sensitive? case-sensitive?)?
-3. How to handle binary body diffs (hash comparison only?)?
+**Fields:**
+- `mismatch_type`: First component that failed (`status_code`, `headers`, `body`)
+- `summary`: Human-readable one-liner for logs
+- `details`: Per-component results with `match` boolean
+- `differences`: Array of failed comparisons with JSONPath, both values, and which rule failed
+
+Header differences use the same format with header name as path. Body comparison only applies to 2xx JSON responses (see "When body comparison applies" in Per-Endpoint Comparison Rules).
 
 ### metadata.json
 
