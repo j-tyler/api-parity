@@ -327,6 +327,35 @@ The Go subprocess is not a "hybrid architecture" in the complex sense—it's a s
 
 ---
 
+# Pydantic v2 for Data Models
+
+Keywords: pydantic dataclass model serialization validation schema json
+Date: 20260111
+
+Data models (RequestCase, ResponseCase, ChainCase, etc.) use Pydantic v2, not plain dataclasses or JSON Schema definitions.
+
+**Why Pydantic over alternatives:**
+
+| Requirement | Plain dataclasses | JSON Schema | Pydantic v2 |
+|-------------|-------------------|-------------|-------------|
+| Python objects | ✓ | ✗ (needs codegen) | ✓ |
+| JSON serialization | Manual | N/A | Built-in |
+| Validation on load | Manual | Separate library | Built-in |
+| Computed fields | Property decorator | ✗ | `@computed_field` |
+| Mutual exclusion | Manual | `oneOf` | `@model_validator` |
+
+**Key features used:**
+
+- `model_dump()` / `model_dump_json()` for artifact writing
+- `Model.model_validate_json()` for replay bundle loading
+- `@computed_field` for `rendered_path` (derived from template + parameters)
+- `@model_validator` for mutual exclusion (`body` vs `body_base64`)
+- Type hints for LLM agent ergonomics (immediate feedback on field types)
+
+**CEL evaluator integration:** The CEL evaluator expects `dict[str, Any]` for data bindings. Pydantic's `model_dump()` produces this directly.
+
+---
+
 # Stdin/Stdout IPC for CEL Subprocess
 
 Keywords: ipc stdin stdout pipes subprocess protocol ndjson unix sockets

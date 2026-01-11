@@ -185,7 +185,7 @@ Go:     {"id":"<uuid>","ok":false,"error":"undeclared reference to 'undefined_va
 
 ---
 
-## Data Models [NEEDS SPEC]
+## Data Models [SPECIFIED]
 
 These models are aligned with Schemathesis's internal structures to enable direct integration. Schemathesis uses a `Case` class with separate path parameters, and a `Response` class with normalized fields.
 
@@ -286,11 +286,11 @@ Execution of one step on one target.
 
 **Chain execution semantics:** Both targets execute the same chain operations, but each uses its own extracted data. If POST returns `{"id": "abc"}` on Target A and `{"id": "xyz"}` on Target B, subsequent GET uses `/items/abc` for A and `/items/xyz` for B.
 
-### Open Questions
+### Resolved Questions
 
-1. **Schema format:** Should these be JSON Schema definitions? TypeScript types? Python dataclasses?
+1. **Schema format:** Pydantic v2 models. See DESIGN.md "Pydantic v2 for Data Models" for rationale.
 
-**Resolved:** Variable extraction is handled by Schemathesis state machine internals. The `extracted` field in ChainStepExecution stores values pulled from responses per OpenAPI link definitions. We don't need to implement custom extraction.
+2. **Variable extraction:** Handled by Schemathesis state machine internals. The `extracted` field in ChainStepExecution stores values pulled from responses per OpenAPI link definitions. We don't need to implement custom extraction.
 
 ---
 
