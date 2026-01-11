@@ -482,6 +482,8 @@ When `presence` is omitted, it defaults to `parity`. When only `presence` is spe
 }
 ```
 
+**Multi-value headers:** When a header has multiple values (e.g., `Set-Cookie`), only the first value is compared. In CEL expressions, `a` and `b` are the first header values from Target A and B respectively. This is a known limitation—if you need to compare all values of a multi-value header, the workaround is to check specific values exist in application logic rather than in api-parity rules.
+
 **Full example:**
 ```json
 {

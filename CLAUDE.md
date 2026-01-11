@@ -159,6 +159,8 @@ These issues were discovered during comparison rules design. Don't repeat them:
 
 4. **No `inherit_defaults` field** — Operation rules don't have an explicit inheritance flag. They always implicitly inherit unless they override.
 
+5. **Multi-value headers use first value only** — When headers have multiple values (e.g., `Set-Cookie`), only the first value is compared. The same `field_comparison` pattern as body fields is used, with `a` and `b` representing first values from each target.
+
 ## CEL Evaluator Gotchas
 
 These patterns apply when working with the Go CEL subprocess:
