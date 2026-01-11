@@ -440,6 +440,15 @@ A JSON file you write to tell api-parity how responses should be compared. You d
 
 In CEL expressions, `a` is the value from Target A, `b` is from Target B.
 
+**JSONPath semantics:** Uses `jsonpath-ng` library. Paths with wildcards (`[*]`) expand to match each element—the rule is applied to each matched pair in array order.
+
+Example: Given `$.users[*].score` with `{"predefined": "numeric_tolerance", "tolerance": 0.05}`:
+- A has `$.users` = `[{"score": 0.95}, {"score": 0.87}]`
+- B has `$.users` = `[{"score": 0.96}, {"score": 0.88}]`
+- Compares: `$.users[0].score` (0.95 vs 0.96 ✓), `$.users[1].score` (0.87 vs 0.88 ✓)
+
+Array length mismatches are caught by presence parity on missing indices. To compare an array as a whole (e.g., unordered), target the array directly: `"$.users": {"predefined": "unordered_array"}`.
+
 **Default behavior for unspecified fields:** Fields without explicit `field_rules` entries are compared for presence parity only—both responses must have the field, or both must lack it. Values are not compared. This lets fields the user doesn't care about be whatever, as long as they're whatever in both.
 
 **Field presence:** Each field rule can specify a `presence` property to control existence requirements. Presence is checked before value comparison (in Python, not CEL).
