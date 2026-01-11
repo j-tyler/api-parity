@@ -138,16 +138,22 @@ The CEL Evaluator is a Go subprocess that evaluates CEL expressions for the Comp
 
 Python CEL libraries are unavailable (untrusted dependencies). The reference CEL implementation is cel-go. A subprocess isolates Go code behind a simple interface.
 
+### Building
+
+```bash
+go build -o cel-evaluator cmd/cel-evaluator
+```
+
 ### Interface
 
-Python side:
+Python side (`api_parity/cel_evaluator.py`):
 ```python
-class CELEvaluator(Protocol):
-    def evaluate(self, expression: str, data: dict) -> bool: ...
+class CELEvaluator:
+    def evaluate(self, expression: str, data: dict[str, Any]) -> bool: ...
     def close(self) -> None: ...
 ```
 
-The Comparator calls `evaluate()` for each field comparison. It has no knowledge of the subprocess—just a function that takes an expression and data, returns a boolean.
+The Comparator calls `evaluate()` for each field comparison. It has no knowledge of the subprocess—just a function that takes an expression and data, returns a boolean. Use as context manager for automatic cleanup: `with CELEvaluator() as e: ...`
 
 ### IPC Protocol
 

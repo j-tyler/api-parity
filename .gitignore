@@ -1,0 +1,24 @@
+# Binary (built at root level)
+/cel-evaluator
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test/coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
