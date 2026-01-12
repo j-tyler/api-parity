@@ -425,3 +425,20 @@ The `dual_servers` pytest fixture is session-scoped, meaning mock servers start 
 **Why this is acceptable:** Integration tests check CLI output strings (MATCH/MISMATCH), not server database contents. Tests don't assert on exact widget counts or depend on pristine server state. Widget accumulation from previous tests doesn't affect correctness.
 
 **If isolation becomes necessary:** Either add a `POST /reset` endpoint to the mock server, or create a separate function-scoped fixture for tests that need pristine state.
+
+---
+
+# Dynamic Link Field Extraction
+
+Keywords: links openapi fields extraction chains stateful dynamic parsing
+Date: 20260112
+
+Link field names are dynamically parsed from OpenAPI link expressions rather than hardcoded. At initialization, CaseGenerator extracts all `$response.body#/...` references from the spec and stores the JSONPointer paths (e.g., `id`, `resource_uuid`, `data/nested_id`). These paths are used in two places:
+
+1. **Chain discovery** — Synthetic responses include placeholder values for all referenced fields so Schemathesis can resolve link expressions and discover chain paths.
+
+2. **Chain execution** — The Executor receives the parsed `link_fields` set and extracts those specific fields from real responses for variable substitution in subsequent chain steps.
+
+This design enables stateful chain testing with arbitrary field names. An API using `resource_uuid` instead of `id` works without configuration changes. The alternative (hardcoding common field names like `id`, `user_id`, `created_at`) would fail silently for any API using non-standard names.
+
+**Implementation note:** The OpenAPI spec is parsed twice at startup—once by Schemathesis (for generation) and once manually (for link extraction). Schemathesis doesn't expose the raw spec dict through its API, so separate parsing is required. The cost is minimal (one extra file read at startup).

@@ -69,6 +69,45 @@ ARCHITECTURE.md helps new agents efficiently understand the project without clog
 2. Update TODO.md if you identified future work
 3. Commit with clear, descriptive messages (Linux Kernel style)
 
+## CRITICAL: Keep Documentation in Sync with Implementation
+
+**This is a CRITICAL severity requirement. Outdated documentation creates wrong code.**
+
+In an AI-agent-maintained codebase, each agent session starts with fresh context. Agents read ARCHITECTURE.md and DESIGN.md to understand the system before making changes. If documentation describes interfaces, parameters, or behaviors that don't match the actual code:
+
+1. The next agent will write code that doesn't work
+2. The agent will trust the docs and not verify against actual implementation
+3. Wrong assumptions compound into architectural drift
+
+**After ANY code change that affects documented interfaces:**
+
+| Changed | Update |
+|---------|--------|
+| Constructor parameters | ARCHITECTURE.md interface section |
+| Method signatures | ARCHITECTURE.md interface section |
+| New design decisions | DESIGN.md with Keywords/Date/Reasoning |
+| Terminology changes | All markdown files (grep to find all occurrences) |
+| New features | ARCHITECTURE.md component behavior section |
+
+**Documentation must explain WHY, not just WHAT:**
+
+Documenting what code does is insufficient. The next agent can read the code to see what it does. What they cannot see is WHY it was designed that way. Without the reasoning:
+- Agent sees "spec is parsed twice" and "fixes" it by removing the second parse
+- Agent doesn't know Schemathesis doesn't expose raw spec, so the "fix" breaks link extraction
+- Hours wasted debugging a "fix" that was actually a regression
+
+**Where to put WHY:**
+- **Inline comments** — Local implementation choices affecting one file. Why this algorithm, why this fallback, why this ordering.
+- **DESIGN.md** — Significant decisions affecting multiple files or the system's architecture. Don't flood DESIGN.md with local implementation details.
+
+**Example of documentation drift causing bugs:**
+- ARCHITECTURE.md shows `Executor.__init__(target_a, target_b, timeout)`
+- Implementation adds `link_fields` parameter
+- Next agent reads ARCHITECTURE.md, writes code without `link_fields`
+- Chain execution silently fails to extract variables
+
+This is not a "nice to have"—it's as critical as writing correct code.
+
 ## Code Style
 
 - Keep code clarity high. Use inline comments for WHY, never for WHAT

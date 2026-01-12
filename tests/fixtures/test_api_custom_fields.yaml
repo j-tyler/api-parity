@@ -1,0 +1,363 @@
+openapi: "3.0.3"
+info:
+  title: Custom Fields Test API
+  version: "1.0.0"
+  description: |
+    Test API with non-standard field names in OpenAPI links.
+    Uses resource_uuid and entity_identifier instead of common id/user_id.
+    This verifies that dynamic link field extraction works.
+
+servers:
+  - url: http://localhost:9999
+
+paths:
+  /resources:
+    post:
+      operationId: createResource
+      summary: Create a new resource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourceCreate"
+      responses:
+        "201":
+          description: Resource created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+          links:
+            GetResource:
+              operationId: getResource
+              parameters:
+                resource_id: "$response.body#/resource_uuid"
+            UpdateResource:
+              operationId: updateResource
+              parameters:
+                resource_id: "$response.body#/resource_uuid"
+
+  /resources/{resource_id}:
+    get:
+      operationId: getResource
+      summary: Get resource by ID
+      parameters:
+        - name: resource_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Resource details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+          links:
+            UpdateResource:
+              operationId: updateResource
+              parameters:
+                resource_id: "$response.body#/resource_uuid"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    put:
+      operationId: updateResource
+      summary: Update a resource
+      parameters:
+        - name: resource_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourceUpdate"
+      responses:
+        "200":
+          description: Resource updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /entities:
+    post:
+      operationId: createEntity
+      summary: Create a new entity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EntityCreate"
+      responses:
+        "201":
+          description: Entity created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Entity"
+          links:
+            GetEntity:
+              operationId: getEntity
+              parameters:
+                entity_id: "$response.body#/entity_identifier"
+
+  /entities/{entity_id}:
+    get:
+      operationId: getEntity
+      summary: Get entity by ID
+      parameters:
+        - name: entity_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Entity details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Entity"
+        "404":
+          description: Entity not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /nested:
+    post:
+      operationId: createNested
+      summary: Create a nested resource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        "201":
+          description: Nested resource created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NestedResponse"
+          links:
+            GetNested:
+              operationId: getNested
+              parameters:
+                nested_id: "$response.body#/data/nested_id"
+
+  /nested/{nested_id}:
+    get:
+      operationId: getNested
+      summary: Get nested resource by ID
+      parameters:
+        - name: nested_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Nested resource details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NestedResponse"
+
+  /batches:
+    post:
+      operationId: createBatch
+      summary: Create a batch with multiple items
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchCreate"
+      responses:
+        "201":
+          description: Batch created with items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResponse"
+          links:
+            GetFirstItem:
+              operationId: getBatchItem
+              description: Link using array index path
+              parameters:
+                item_id: "$response.body#/items/0/item_id"
+
+  /batches/items/{item_id}:
+    get:
+      operationId: getBatchItem
+      summary: Get a batch item by ID
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Batch item details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchItem"
+        "404":
+          description: Item not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    Resource:
+      type: object
+      required: [resource_uuid, name, status]
+      properties:
+        resource_uuid:
+          type: string
+          format: uuid
+          description: Non-standard ID field name
+        name:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive]
+        created_at:
+          type: string
+          format: date-time
+
+    ResourceCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive]
+          default: active
+
+    ResourceUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive]
+
+    Entity:
+      type: object
+      required: [entity_identifier, label]
+      properties:
+        entity_identifier:
+          type: string
+          description: Another non-standard ID field name
+        label:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    EntityCreate:
+      type: object
+      required: [label]
+      properties:
+        label:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    NestedResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [nested_id, value]
+          properties:
+            nested_id:
+              type: string
+              format: uuid
+              description: ID nested inside data object
+            value:
+              type: string
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+
+    BatchCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        item_count:
+          type: integer
+          default: 3
+
+    BatchResponse:
+      type: object
+      required: [batch_id, items]
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchItem"
+          description: Array of items - link extracts items/0/item_id
+
+    BatchItem:
+      type: object
+      required: [item_id, index]
+      properties:
+        item_id:
+          type: string
+          format: uuid
+          description: ID extracted via array index path
+        index:
+          type: integer
+        value:
+          type: string
