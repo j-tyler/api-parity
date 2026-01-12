@@ -347,9 +347,23 @@ artifacts/mismatches/
 
 ## Documentation
 
-- **ARCHITECTURE.md** — System structure, data models, component design
-- **DESIGN.md** — Decisions and reasoning
-- **TODO.md** — Planned work and open questions
+### User Guides
+
+| Document | Description |
+|----------|-------------|
+| [Quickstart](docs/quickstart.md) | Get running in 5 minutes |
+| [Configuration](docs/configuration.md) | Runtime config and CLI options |
+| [Comparison Rules](docs/comparison-rules.md) | How to define field comparison logic |
+| [OpenAPI Links](docs/openapi-links.md) | Enable stateful chain testing |
+| [Troubleshooting](docs/troubleshooting.md) | Common errors and fixes |
+
+### Technical Reference
+
+| Document | Description |
+|----------|-------------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System structure, data models, interfaces |
+| [DESIGN.md](DESIGN.md) | Decisions and reasoning |
+| [TODO.md](TODO.md) | Planned work and open questions |
 
 ## License
 
