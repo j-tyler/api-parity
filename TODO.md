@@ -13,12 +13,6 @@ v0 supports simple header-based auth configured manually in runtime config (see 
 
 ---
 
-## User Documentation for OpenAPI Links
-
-Document the level of detail required in OpenAPI link definitions for effective chain testing. Users need to understand that sparse link definitions produce shallow chains.
-
----
-
 ## CLI Replay Implementation
 
 The `explore` subcommand is fully implemented for both stateless and stateful modes.

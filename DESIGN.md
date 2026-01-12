@@ -442,3 +442,67 @@ Link field names are dynamically parsed from OpenAPI link expressions rather tha
 This design enables stateful chain testing with arbitrary field names. An API using `resource_uuid` instead of `id` works without configuration changes. The alternative (hardcoding common field names like `id`, `user_id`, `created_at`) would fail silently for any API using non-standard names.
 
 **Implementation note:** The OpenAPI spec is parsed twice at startup—once by Schemathesis (for generation) and once manually (for link extraction). Schemathesis doesn't expose the raw spec dict through its API, so separate parsing is required. The cost is minimal (one extra file read at startup).
+
+---
+
+# Source-Only Distribution
+
+Keywords: distribution packaging pypi installation build binary go cel
+Date: 20260112
+
+api-parity is distributed as source code only, not as a PyPI package. Users clone the repository and run `./scripts/build.sh` to install.
+
+**Why not PyPI:**
+
+1. **Go binary requirement** — The CEL evaluator is a Go binary that must be compiled for the user's platform. PyPI wheels can include platform-specific binaries, but this requires maintaining build infrastructure for Linux x64, macOS x64/arm64, Windows x64, and potentially more. This complexity isn't justified for a tool with a small user base.
+
+2. **Simple alternative exists** — Users who can install Go (required for any serious backend work) can build from source in under a minute. The `build.sh` script handles everything.
+
+3. **Dependency on Go at build time, not runtime** — Once built, the tool runs with Python + the compiled binary. Go is only needed once.
+
+**Trade-offs accepted:**
+
+- Higher friction for first-time installation (must have Go installed)
+- No `pip install api-parity` convenience
+- Users must `git pull` and rebuild for updates
+
+**If adoption grows significantly**, reconsider pre-built binaries distributed via GitHub Releases (download binary matching platform, place in PATH). This is simpler than full PyPI wheel infrastructure.
+
+---
+
+# Pinned Dependencies for Reproducible Builds
+
+Keywords: dependencies versions pinning reproducible builds pip go modules
+Date: 20260112
+
+All dependencies are pinned to exact versions. This is critical for a build-from-source project where users build at different times.
+
+**Where pins are defined:**
+- Python: `pyproject.toml` uses `==` version specifiers
+- Go: `go.mod` specifies exact versions, `go.sum` contains cryptographic checksums
+
+**Why exact pins, not ranges:**
+
+1. **Reproducibility** — User building today gets same behavior as user building next month. Range specifiers (`>=4.8.0`) can silently pull newer versions with breaking changes.
+
+2. **Debuggability** — When a user reports a bug, we know exactly what versions they have. No "what version of pydantic did pip resolve?" ambiguity.
+
+3. **Security auditability** — Pinned versions can be scanned for known vulnerabilities. Floating ranges make auditing impossible.
+
+4. **Build-from-source contract** — Since we don't publish binaries, the source repository IS the distribution. It must be self-contained and deterministic.
+
+**Update process:**
+
+1. Create branch for dependency updates
+2. Update pins in `pyproject.toml` and/or `go.mod`
+3. Run `go mod tidy` for Go
+4. Run full test suite
+5. If tests pass, merge and document changes
+
+**Trade-offs accepted:**
+
+- Manual effort to update dependencies
+- Users don't automatically get security patches (must pull new version)
+- Potential for stale dependencies if not actively maintained
+
+The reproducibility guarantee outweighs these costs for a build-from-source tool.
