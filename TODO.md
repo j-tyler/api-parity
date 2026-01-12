@@ -38,7 +38,6 @@ The `replay` subcommand remains a placeholder stub. Implementation requires:
 ## Specification Work Required
 
 - **OpenAPI Spec as Field Authority** — JSON Schema validator choice, additionalProperties handling
-- **Stateful Chain Generation** — Case Generator and Executor support stateless only; chain testing via OpenAPI links not yet implemented
 - **Rate Limiting** — Executor does not implement rate limiting in v0
 
 ---

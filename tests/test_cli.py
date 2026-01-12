@@ -421,6 +421,9 @@ class TestDataclassConversion:
             exclude=["getUser"],
             timeout=60.0,
             operation_timeout=[("slowOp", 120.0)],
+            stateful=False,
+            max_chains=None,
+            max_steps=6,
         )
         args = parse_explore_args(namespace)
         assert isinstance(args, ExploreArgs)
@@ -429,6 +432,34 @@ class TestDataclassConversion:
         assert args.exclude == ["getUser"]
         assert args.timeout == 60.0
         assert args.operation_timeout == {"slowOp": 120.0}
+        assert args.stateful is False
+        assert args.max_chains is None
+        assert args.max_steps == 6
+
+    def test_parse_explore_args_stateful_mode(self):
+        """Test parse_explore_args handles stateful mode flags."""
+        import argparse
+        namespace = argparse.Namespace(
+            command="explore",
+            spec=Path("spec.yaml"),
+            config=Path("config.yaml"),
+            target_a="a",
+            target_b="b",
+            out=Path("./out"),
+            seed=None,
+            max_cases=None,
+            validate=False,
+            exclude=[],
+            timeout=30.0,
+            operation_timeout=[],
+            stateful=True,
+            max_chains=50,
+            max_steps=10,
+        )
+        args = parse_explore_args(namespace)
+        assert args.stateful is True
+        assert args.max_chains == 50
+        assert args.max_steps == 10
 
     def test_parse_replay_args_converts_correctly(self):
         """Test parse_replay_args converts namespace to dataclass."""
