@@ -186,6 +186,26 @@ git diff main..HEAD
 - **Run shell commands** with `Bash` tool for git, python, pip, etc.
 - **Explore codebase** with `Task` tool (subagent_type=Explore) for open-ended searches
 
+### Scanning Document Structure Before Reading
+
+Before reading a long markdown file, scan its headings to understand structure:
+
+```bash
+grep -n "^##" docs/troubleshooting.md
+```
+
+This shows section names and line numbers without filling context with content. Use this to:
+1. Decide if the document has what you need
+2. Read only the relevant section with `Read` tool's `offset` and `limit` parameters
+3. Avoid loading 200+ lines when you only need 20
+
+Example: Looking for CEL errors in troubleshooting.md:
+```bash
+grep -n "^##" docs/troubleshooting.md
+# Output shows "## CEL Expression Errors" at line 86
+# Now read just that section instead of the whole file
+```
+
 ### Custom Slash Commands
 
 Commands are defined in `.claude/commands/*.md`. To run a command like `/foo`, read `.claude/commands/foo.md` and execute the logic manually.
