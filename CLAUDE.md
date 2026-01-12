@@ -229,6 +229,15 @@ These patterns apply when working with the Go CEL subprocess:
 
 7. **Expression timeout** — The Go CEL evaluator has a 5-second timeout per expression (see `evaluationTimeout` in `cmd/cel-evaluator/main.go`). If evaluation exceeds this, it returns `{"ok":false,"error":"evaluation timeout exceeded"}`. The Comparator treats this as a mismatch with `rule: "error: evaluation timeout exceeded"`. No special handling needed—timeout errors flow through the normal error path.
 
+8. **Always use timeouts on blocking I/O** — Never call `readline()`, `read()`, or `wait()` on subprocess pipes without a timeout. Use `select.select()` before blocking reads:
+   ```python
+   ready, _, _ = select.select([proc.stdout], [], [], timeout_seconds)
+   if not ready:
+       raise TimeoutError("subprocess response timeout")
+   line = proc.stdout.readline()  # Now safe, data is available
+   ```
+   Without this, a hung subprocess causes the entire process to freeze indefinitely. The CELEvaluator uses `EVALUATION_TIMEOUT = 10.0` seconds for this purpose.
+
 ## Running Tests
 
 **Build the CEL evaluator before running tests.** Many tests require the Go CEL binary. Without it, tests fail with `CELSubprocessError: CEL evaluator binary not found`.

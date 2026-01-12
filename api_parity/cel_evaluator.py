@@ -51,6 +51,10 @@ class CELEvaluator:
     # Timeout for subprocess startup (seconds)
     STARTUP_TIMEOUT = 5.0
 
+    # Timeout for individual evaluation (seconds)
+    # Go CEL evaluator has internal 5s timeout, so use 10s to allow for IPC overhead
+    EVALUATION_TIMEOUT = 10.0
+
     def __init__(self, binary_path: str | Path | None = None):
         """Initialize the CEL evaluator.
 
@@ -163,6 +167,15 @@ class CELEvaluator:
             # Send request
             self._process.stdin.write(json.dumps(request) + "\n")
             self._process.stdin.flush()
+
+            # Wait for response with timeout to prevent indefinite blocking
+            ready, _, _ = select.select(
+                [self._process.stdout], [], [], self.EVALUATION_TIMEOUT
+            )
+            if not ready:
+                raise CELEvaluationError(
+                    f"CEL evaluation timeout ({self.EVALUATION_TIMEOUT}s)"
+                )
 
             # Read response
             response_line = self._process.stdout.readline()
