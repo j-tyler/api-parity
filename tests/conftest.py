@@ -135,7 +135,10 @@ class MockServer:
                 self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self._process.kill()
-                self._process.wait(timeout=5)
+                try:
+                    self._process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass  # Process is unkillable, nothing more we can do
             self._process = None
 
     def __enter__(self) -> "MockServer":
