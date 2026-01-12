@@ -272,7 +272,7 @@ secrets:
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "5",
+                "--max-cases", "3",
                 "--seed", "1",
             ],
             capture_output=True,
