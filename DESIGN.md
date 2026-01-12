@@ -467,3 +467,42 @@ api-parity is distributed as source code only, not as a PyPI package. Users clon
 - Users must `git pull` and rebuild for updates
 
 **If adoption grows significantly**, reconsider pre-built binaries distributed via GitHub Releases (download binary matching platform, place in PATH). This is simpler than full PyPI wheel infrastructure.
+
+---
+
+# Pinned Dependencies for Reproducible Builds
+
+Keywords: dependencies versions pinning reproducible builds pip go modules
+Date: 20260112
+
+All dependencies are pinned to exact versions. This is critical for a build-from-source project where users build at different times.
+
+**Where pins are defined:**
+- Python: `pyproject.toml` uses `==` version specifiers
+- Go: `go.mod` specifies exact versions, `go.sum` contains cryptographic checksums
+
+**Why exact pins, not ranges:**
+
+1. **Reproducibility** — User building today gets same behavior as user building next month. Range specifiers (`>=4.8.0`) can silently pull newer versions with breaking changes.
+
+2. **Debuggability** — When a user reports a bug, we know exactly what versions they have. No "what version of pydantic did pip resolve?" ambiguity.
+
+3. **Security auditability** — Pinned versions can be scanned for known vulnerabilities. Floating ranges make auditing impossible.
+
+4. **Build-from-source contract** — Since we don't publish binaries, the source repository IS the distribution. It must be self-contained and deterministic.
+
+**Update process:**
+
+1. Create branch for dependency updates
+2. Update pins in `pyproject.toml` and/or `go.mod`
+3. Run `go mod tidy` for Go
+4. Run full test suite
+5. If tests pass, merge and document changes
+
+**Trade-offs accepted:**
+
+- Manual effort to update dependencies
+- Users don't automatically get security patches (must pull new version)
+- Potential for stale dependencies if not actively maintained
+
+The reproducibility guarantee outweighs these costs for a build-from-source tool.
