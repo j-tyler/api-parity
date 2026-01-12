@@ -675,3 +675,111 @@ class TestChainEdgeCases:
 
         chain = ChainCase(chain_id="empty-chain", steps=[])
         assert len(chain.steps) == 0
+
+
+# =============================================================================
+# Custom Field Names Tests
+# =============================================================================
+
+
+class TestCustomFieldNames:
+    """Tests for chain generation and execution with non-standard field names.
+
+    Verifies that the dynamic link field extraction works for field names
+    not in the old hardcoded list (id, user_id, order_id, widget_id, item_id).
+    """
+
+    def test_generator_extracts_custom_field_names(self, tmp_path: Path):
+        """CaseGenerator extracts custom field names from spec links."""
+        from api_parity.case_generator import CaseGenerator
+
+        spec_path = Path(__file__).parent.parent / "fixtures" / "test_api_custom_fields.yaml"
+        generator = CaseGenerator(spec_path)
+
+        link_fields = generator.get_link_fields()
+
+        # Custom field names should be extracted
+        assert "resource_uuid" in link_fields
+        assert "entity_identifier" in link_fields
+        assert "data/nested_id" in link_fields
+
+        # Standard 'id' should NOT be in this spec (it uses custom names)
+        assert "id" not in link_fields
+
+    def test_chain_generation_with_custom_fields(self, tmp_path: Path):
+        """Chain generation works with specs using custom field names."""
+        from api_parity.case_generator import CaseGenerator
+
+        spec_path = Path(__file__).parent.parent / "fixtures" / "test_api_custom_fields.yaml"
+        generator = CaseGenerator(spec_path)
+
+        # Chain generation should not raise - the synthetic responses should
+        # include the custom field names for link resolution
+        try:
+            chains = generator.generate_chains(max_chains=3, max_steps=3)
+            # Should generate some chains (exact count varies)
+            # The important thing is it doesn't fail
+        except Exception as e:
+            pytest.fail(f"Chain generation failed with custom fields: {e}")
+
+    def test_executor_extracts_custom_fields(self):
+        """Executor extracts custom field names from responses."""
+        from api_parity.case_generator import extract_by_jsonpointer
+        from api_parity.executor import Executor
+        from api_parity.models import ResponseCase, TargetConfig
+
+        # Create executor with custom link fields
+        target = TargetConfig(base_url="http://localhost:9999")
+        executor = Executor(
+            target, target,
+            link_fields={"resource_uuid", "entity_identifier", "data/nested_id"}
+        )
+
+        # Test extraction from a response with custom fields
+        response = ResponseCase(
+            status_code=201,
+            body={
+                "resource_uuid": "abc-123-def",
+                "entity_identifier": "entity-456",
+                "name": "test",
+                "data": {
+                    "nested_id": "nested-789"
+                }
+            },
+            elapsed_ms=50.0,
+        )
+
+        extracted = executor._extract_variables(response)
+
+        # Custom fields should be extracted
+        assert extracted["resource_uuid"] == "abc-123-def"
+        assert extracted["entity_identifier"] == "entity-456"
+
+        # Nested field should be extracted by full path and last segment
+        assert extracted["data/nested_id"] == "nested-789"
+        assert extracted["nested_id"] == "nested-789"
+
+        # Standard fields NOT in link_fields should NOT be extracted
+        assert "name" not in extracted
+
+        executor.close()
+
+    def test_custom_fields_spec_openapi_valid(self):
+        """Custom fields test spec is valid OpenAPI."""
+        import yaml
+
+        spec_path = Path(__file__).parent.parent / "fixtures" / "test_api_custom_fields.yaml"
+        with open(spec_path) as f:
+            spec = yaml.safe_load(f)
+
+        # Basic structure validation
+        assert spec["openapi"] == "3.0.3"
+        assert "paths" in spec
+        assert "/resources" in spec["paths"]
+        assert "/entities" in spec["paths"]
+
+        # Verify links use custom field names
+        create_resource = spec["paths"]["/resources"]["post"]
+        links = create_resource["responses"]["201"]["links"]
+        get_resource_link = links["GetResource"]
+        assert get_resource_link["parameters"]["resource_id"] == "$response.body#/resource_uuid"

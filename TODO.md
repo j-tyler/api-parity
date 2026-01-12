@@ -21,12 +21,7 @@ Document the level of detail required in OpenAPI link definitions for effective 
 
 ## CLI Replay Implementation
 
-The `explore` subcommand is fully implemented with:
-- Config file loading with environment variable substitution
-- Integration with Case Generator (Schemathesis)
-- Integration with Executor (httpx)
-- Integration with Comparator and CEL Evaluator
-- Integration with Artifact Writer for mismatch bundles
+The `explore` subcommand is fully implemented for both stateless and stateful modes.
 
 The `replay` subcommand remains a placeholder stub. Implementation requires:
 1. Loading mismatch bundles from disk

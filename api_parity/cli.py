@@ -592,6 +592,7 @@ def run_explore(args: ExploreArgs) -> int:
             target_b_config,
             default_timeout=args.timeout,
             operation_timeouts=args.operation_timeout,
+            link_fields=generator.get_link_fields(),
         ) as executor:
 
             if args.stateful:

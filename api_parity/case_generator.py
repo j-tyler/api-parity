@@ -10,12 +10,14 @@ See ARCHITECTURE.md "Case Generator Component" for specifications.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
 import requests
 import schemathesis
+import yaml
 from hypothesis import Phase, settings
 from hypothesis.errors import HypothesisException
 from hypothesis.stateful import run_state_machine_as_test
@@ -23,6 +25,88 @@ from schemathesis.core.transport import Response as SchemathesisResponse
 from schemathesis.specs.openapi.stateful import OpenAPIStateMachine
 
 from api_parity.models import ChainCase, ChainStep, RequestCase
+
+
+# Pattern to extract field references from OpenAPI link expressions
+# Matches: $response.body#/fieldname or $response.body#/nested/path
+LINK_BODY_PATTERN = re.compile(r'\$response\.body#/(.+)$')
+
+
+def extract_link_fields_from_spec(spec: dict) -> set[str]:
+    """Extract all field names referenced by OpenAPI link expressions.
+
+    Parses the OpenAPI spec to find all link definitions and extracts the
+    field names they reference via $response.body#/... expressions.
+
+    Args:
+        spec: Parsed OpenAPI specification dict.
+
+    Returns:
+        Set of field names (top-level) referenced by links.
+    """
+    fields: set[str] = set()
+
+    paths = spec.get("paths", {})
+    for path_item in paths.values():
+        if not isinstance(path_item, dict):
+            continue
+        for method_or_key, operation in path_item.items():
+            # Skip non-operation keys like 'parameters', '$ref'
+            if not isinstance(operation, dict) or method_or_key.startswith("$"):
+                continue
+            responses = operation.get("responses", {})
+            for response in responses.values():
+                if not isinstance(response, dict):
+                    continue
+                links = response.get("links", {})
+                for link in links.values():
+                    if not isinstance(link, dict):
+                        continue
+                    parameters = link.get("parameters", {})
+                    for param_expr in parameters.values():
+                        if not isinstance(param_expr, str):
+                            continue
+                        match = LINK_BODY_PATTERN.match(param_expr)
+                        if match:
+                            # Extract the full JSONPointer path
+                            json_pointer = match.group(1)
+                            # Store the full pointer for nested extraction
+                            fields.add(json_pointer)
+
+    return fields
+
+
+def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
+    """Extract a value from nested data using a JSONPointer path.
+
+    Args:
+        data: The data structure to extract from (dict or list).
+        pointer: JSONPointer path without leading slash (e.g., "id" or "data/items/0/id").
+
+    Returns:
+        The extracted value, or None if path doesn't exist.
+    """
+    if not pointer:
+        return data
+
+    parts = pointer.split("/")
+    current = data
+
+    for part in parts:
+        if current is None:
+            return None
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list):
+            try:
+                index = int(part)
+                current = current[index] if 0 <= index < len(current) else None
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+
+    return current
 
 
 class CaseGeneratorError(Exception):
@@ -60,6 +144,27 @@ class CaseGenerator:
             self._schema = schemathesis.openapi.from_path(str(spec_path))
         except Exception as e:
             raise CaseGeneratorError(f"Failed to load OpenAPI spec: {e}") from e
+
+        # Load raw spec to extract link field references
+        try:
+            with open(spec_path) as f:
+                if spec_path.suffix.lower() in (".yaml", ".yml"):
+                    self._raw_spec = yaml.safe_load(f)
+                else:
+                    self._raw_spec = json.load(f)
+        except Exception as e:
+            raise CaseGeneratorError(f"Failed to parse spec for link extraction: {e}") from e
+
+        # Extract field names referenced by OpenAPI links
+        self._link_fields = extract_link_fields_from_spec(self._raw_spec)
+
+    def get_link_fields(self) -> set[str]:
+        """Get the set of field names referenced by OpenAPI links.
+
+        Returns:
+            Set of JSONPointer paths referenced by link expressions.
+        """
+        return self._link_fields
 
     def get_operations(self) -> list[dict[str, Any]]:
         """Get all operations from the spec.
@@ -288,14 +393,19 @@ class CaseGenerator:
                 current_steps = []
 
             def call(self, case, **kwargs) -> SchemathesisResponse:
-                """Capture the case instead of making HTTP request."""
+                """Capture the case instead of making HTTP request.
+
+                During chain discovery, we don't make real HTTP calls. Instead we
+                return synthetic responses with placeholder data so Schemathesis
+                can resolve OpenAPI links and discover possible chain paths.
+                """
                 nonlocal current_steps, step_counter
 
                 # Extract operation info
                 op_id = case.operation.definition.raw.get("operationId", "unknown")
                 if op_id in generator_self._exclude:
-                    # Still need to return a mock response for excluded operations
-                    return self._mock_response(case)
+                    # Return synthetic response for excluded operations
+                    return self._synthetic_response(case)
 
                 # Convert to our RequestCase
                 request_case = generator_self._convert_case(case, op_id)
@@ -309,47 +419,100 @@ class CaseGenerator:
                 current_steps.append(step)
                 step_counter += 1
 
-                return self._mock_response(case)
+                return self._synthetic_response(case)
 
-            def _mock_response(self, case) -> SchemathesisResponse:
-                """Generate mock response for link resolution."""
-                mock_body = self._generate_mock_body()
+            def _synthetic_response(self, case) -> SchemathesisResponse:
+                """Generate synthetic response for link resolution during chain discovery.
 
-                # Create a mock PreparedRequest
+                This is NOT a mock for testing - it's a placeholder response that
+                allows Schemathesis to resolve OpenAPI link expressions and discover
+                possible chain paths. Real HTTP execution happens later in the Executor.
+                """
+                synthetic_body = self._generate_synthetic_body()
+
+                # Create placeholder request object (required by Schemathesis)
                 req = requests.Request(
                     method=case.method,
-                    url=f"http://mock{case.path}",
+                    url=f"http://placeholder{case.path}",
                 )
                 prepared = req.prepare()
 
                 return SchemathesisResponse(
                     status_code=201 if case.method == "POST" else 200,
                     headers={"content-type": ["application/json"]},
-                    content=json.dumps(mock_body).encode(),
+                    content=json.dumps(synthetic_body).encode(),
                     request=prepared,
                     elapsed=0.1,
                     verify=False,
                     http_version="1.1",
                 )
 
-            def _generate_mock_body(self) -> dict:
-                """Generate mock response body with common fields for link resolution.
+            def _generate_synthetic_body(self) -> dict:
+                """Generate synthetic response body for link resolution.
 
-                Note: Only generates common field names (id, user_id, etc.). OpenAPI
-                links referencing other field names won't resolve during generation.
+                Creates placeholder values for all fields referenced by OpenAPI links
+                so Schemathesis can resolve link expressions during chain discovery.
+                Real response data comes from actual HTTP execution in the Executor.
                 """
-                return {
-                    "id": str(uuid.uuid4()),
-                    "name": "Mock Item",
-                    "price": 9.99,
-                    "status": "pending",
-                    "user_id": str(uuid.uuid4()),
-                    "order_id": str(uuid.uuid4()),
-                    "widget_id": str(uuid.uuid4()),
-                    "items": [{"id": str(uuid.uuid4())} for _ in range(3)],
-                    "total": 3,
-                    "created_at": "2024-01-01T00:00:00Z",
-                }
+                body: dict = {}
+
+                # Add all fields referenced by links in the spec
+                for field_pointer in generator_self._link_fields:
+                    self._set_by_jsonpointer(body, field_pointer, str(uuid.uuid4()))
+
+                # Add common non-ID fields for general compatibility
+                body.setdefault("name", "Placeholder")
+                body.setdefault("price", 9.99)
+                body.setdefault("status", "pending")
+                body.setdefault("total", 3)
+                body.setdefault("created_at", "2024-01-01T00:00:00Z")
+
+                # Ensure nested items have IDs if items array exists
+                if "items" not in body:
+                    body["items"] = [{"id": str(uuid.uuid4())} for _ in range(3)]
+
+                return body
+
+            def _set_by_jsonpointer(self, data: dict, pointer: str, value: Any) -> None:
+                """Set a value in nested data using a JSONPointer path.
+
+                Creates intermediate dicts/lists as needed. Handles both dict keys
+                and array indices in the path (e.g., "items/0/id" creates
+                {"items": [{"id": value}]}).
+                """
+                parts = pointer.split("/")
+                current = data
+
+                for i, part in enumerate(parts[:-1]):
+                    next_part = parts[i + 1]
+                    is_next_array = next_part.isdigit()
+
+                    if isinstance(current, list):
+                        # Current is a list - part must be an array index
+                        idx = int(part)
+                        while len(current) <= idx:
+                            current.append({})
+                        # Ensure element is correct type for next access
+                        if is_next_array and not isinstance(current[idx], list):
+                            current[idx] = []
+                        elif not is_next_array and not isinstance(current[idx], dict):
+                            current[idx] = {}
+                        current = current[idx]
+                    else:
+                        # Current is a dict - part is a key
+                        if part not in current:
+                            current[part] = [] if is_next_array else {}
+                        current = current[part]
+
+                # Set the final value
+                final_part = parts[-1]
+                if isinstance(current, list) and final_part.isdigit():
+                    idx = int(final_part)
+                    while len(current) <= idx:
+                        current.append({})
+                    current[idx] = value
+                else:
+                    current[final_part] = value
 
         # Get the state machine class from schema
         try:

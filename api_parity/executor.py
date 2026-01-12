@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import httpx
 
+from api_parity.case_generator import extract_by_jsonpointer
 from api_parity.models import (
     ChainCase,
     ChainExecution,
@@ -53,6 +54,7 @@ class Executor:
         target_b: TargetConfig,
         default_timeout: float = 30.0,
         operation_timeouts: dict[str, float] | None = None,
+        link_fields: set[str] | None = None,
     ) -> None:
         """Initialize the executor.
 
@@ -61,11 +63,15 @@ class Executor:
             target_b: Configuration for target B.
             default_timeout: Default timeout in seconds for requests.
             operation_timeouts: Per-operation timeout overrides.
+            link_fields: Set of JSONPointer paths to extract from responses
+                         for chain variable substitution. Parsed from OpenAPI
+                         link expressions (e.g., "id", "data/item/id").
         """
         self._target_a = target_a
         self._target_b = target_b
         self._default_timeout = default_timeout
         self._operation_timeouts = operation_timeouts or {}
+        self._link_fields = link_fields or set()
 
         # Create HTTP clients for each target
         self._client_a = httpx.Client(
@@ -308,9 +314,14 @@ class Executor:
         return result
 
     def _extract_variables(self, response: ResponseCase) -> dict[str, Any]:
-        """Extract commonly needed variables from a response.
+        """Extract variables from a response for chain substitution.
 
-        Extracts 'id' and other common fields that OpenAPI links typically reference.
+        Extracts fields referenced by OpenAPI link expressions. Uses the
+        link_fields set parsed from the spec at initialization.
+
+        Variables are stored under their full JSONPointer path. Additionally,
+        if the last segment is unique (no collision with other paths), it's
+        also stored under just the last segment for simpler references.
 
         Args:
             response: Response to extract from.
@@ -323,12 +334,28 @@ class Executor:
         if not isinstance(response.body, dict):
             return extracted
 
-        # Common fields that links typically reference
-        common_fields = ["id", "user_id", "order_id", "widget_id", "item_id"]
+        # First pass: extract all values under full pointer paths
+        for field_pointer in self._link_fields:
+            value = extract_by_jsonpointer(response.body, field_pointer)
+            if value is not None:
+                extracted[field_pointer] = value
 
-        for field in common_fields:
-            if field in response.body:
-                extracted[field] = response.body[field]
+        # Second pass: add last-segment shortcuts only if no collision
+        # e.g., "data/item/id" also stores under "id" if no other path ends in "id"
+        last_segments: dict[str, list[str]] = {}
+        for field_pointer in self._link_fields:
+            last_segment = field_pointer.split("/")[-1]
+            if last_segment != field_pointer:  # Only for nested paths
+                last_segments.setdefault(last_segment, []).append(field_pointer)
+
+        for last_segment, pointers in last_segments.items():
+            if len(pointers) == 1:
+                # No collision - safe to add shortcut
+                pointer = pointers[0]
+                if pointer in extracted:
+                    extracted[last_segment] = extracted[pointer]
+            # If len(pointers) > 1, there's a collision - skip shortcut to avoid
+            # silent data loss. Users must use full path.
 
         return extracted
 

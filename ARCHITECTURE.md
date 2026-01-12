@@ -257,7 +257,7 @@ The `seed` parameter enables reproducible generation via Hypothesis `derandomize
 
 The `generate_chains()` method uses Schemathesis's state machine to discover multi-step sequences from OpenAPI links. Chains are captured without making HTTP calls—the Executor handles actual execution.
 
-**Field name limitation:** During generation, mock responses contain only common field names: `id`, `user_id`, `order_id`, `widget_id`, `item_id`, `name`, `price`, `status`, `items`, `total`, `created_at`. OpenAPI links referencing other field names (e.g., `$response.body#/resource_uuid`) won't resolve, limiting which chains can be generated.
+**Dynamic field extraction:** Link field names are dynamically parsed from the OpenAPI spec at initialization. The CaseGenerator extracts all field paths referenced by link expressions (e.g., `$response.body#/resource_uuid`) and uses them for synthetic response generation during chain discovery. This enables chain generation with any field names, not just common ones like `id`.
 
 ---
 
@@ -275,6 +275,7 @@ class Executor:
         target_b: TargetConfig,
         default_timeout: float = 30.0,
         operation_timeouts: dict[str, float] | None = None,
+        link_fields: set[str] | None = None,
     ): ...
 
     def execute(self, request: RequestCase) -> tuple[ResponseCase, ResponseCase]: ...
@@ -306,7 +307,7 @@ Connection errors, timeouts, and other request failures raise `RequestError`. Th
 
 The `execute_chain()` method executes multi-step chains against both targets. Each target maintains its own extracted variables—if Target A's POST returns `id: "abc"` and Target B's returns `id: "xyz"`, subsequent steps use the respective IDs. The optional `on_step` callback allows stopping at first mismatch (returns `False` to stop, `True` to continue).
 
-**Extracted fields:** Only `id`, `user_id`, `order_id`, `widget_id`, `item_id` are extracted from responses for variable substitution. APIs using other field names for identifiers will need code changes to support chain execution.
+**Dynamic field extraction:** The Executor receives a `link_fields` parameter (parsed from the OpenAPI spec by CaseGenerator) specifying which fields to extract from responses. This enables chain execution with any field names referenced by OpenAPI links, including nested paths like `data/nested_id`.
 
 Rate limiting is not implemented in v0.
 
