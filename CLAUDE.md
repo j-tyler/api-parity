@@ -292,8 +292,31 @@ These patterns apply when working with the Go CEL subprocess:
 # Build CEL evaluator first
 go build -o cel-evaluator ./cmd/cel-evaluator
 
-# Then run tests
-pytest tests/
+# Run tests - ALWAYS use these flags
+python -m pytest tests/ -x -q --tb=short
+```
+
+### CRITICAL: Always Use `-x -q --tb=short`
+
+**This is mandatory.** Never run pytest without these flags:
+
+| Flag | Purpose |
+|------|---------|
+| `-x` | Stop on first failure. Prevents cascading failures from filling context. |
+| `-q` | Quiet mode. Shows dots instead of test names. Passing tests don't matter. |
+| `--tb=short` | Short tracebacks. Shows only what's needed to diagnose failures. |
+
+**Why this matters:** Verbose test output fills context with useless information. A full test run with `-v` can produce 500+ lines of passing test names. With `-x -q --tb=short`, a passing run is ~5 lines. A failing run shows only the failure.
+
+```bash
+# WRONG - fills context with noise
+pytest tests/ -v
+
+# WRONG - no stop on first failure, cascading failures fill context
+pytest tests/ -q --tb=short
+
+# RIGHT - minimal output, stops on first failure
+python -m pytest tests/ -x -q --tb=short
 ```
 
 Tests that require the CEL binary use the `cel_evaluator_exists` fixture or `pytestmark = pytest.mark.skipif(...)` to skip gracefully when the binary is missing. If you add new tests that use `CELEvaluator`, include this skip mechanism.

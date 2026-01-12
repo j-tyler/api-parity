@@ -161,25 +161,12 @@ def comparison_rules_path() -> Path:
     return FIXTURES_DIR / "comparison_rules.json"
 
 
-@pytest.fixture(scope="function")
-def mock_server_a() -> MockServer:
-    """Start mock server variant A on a random port."""
-    reservation = PortReservation()
-    with MockServer(reservation, variant="a") as server:
-        yield server
-
-
-@pytest.fixture(scope="function")
-def mock_server_b() -> MockServer:
-    """Start mock server variant B on a random port."""
-    reservation = PortReservation()
-    with MockServer(reservation, variant="b") as server:
-        yield server
-
-
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def dual_servers():
-    """Start both server variants for differential testing."""
+    """Start both server variants for differential testing.
+
+    Session-scoped: servers start once per test session for performance.
+    """
     reservation_a = PortReservation()
     reservation_b = PortReservation()
 

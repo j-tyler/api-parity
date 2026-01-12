@@ -410,3 +410,18 @@ Every configuration option can be specified in the configuration file. If the sa
 **Example:** Config file specifies `max_cases: 10000`. Running with `--max-cases 10` overrides just for that run. The config file remains unchanged.
 
 **Implementation note:** Parse CLI args, load config file, merge with CLI taking precedence, validate the merged result. Validation happens once on the merged config, not separately.
+
+---
+
+# Session-Scoped Test Server Fixtures
+
+Keywords: pytest fixtures session dual_servers integration tests performance
+Date: 20260112
+
+The `dual_servers` pytest fixture is session-scoped, meaning mock servers start once per test session rather than once per test function.
+
+**Trade-off:** Test speed (~50% faster) vs test isolation (shared server state).
+
+**Why this is acceptable:** Integration tests check CLI output strings (MATCH/MISMATCH), not server database contents. Tests don't assert on exact widget counts or depend on pristine server state. Widget accumulation from previous tests doesn't affect correctness.
+
+**If isolation becomes necessary:** Either add a `POST /reset` endpoint to the mock server, or create a separate function-scoped fixture for tests that need pristine state.
