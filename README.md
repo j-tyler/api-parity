@@ -12,12 +12,54 @@ Differential fuzzing tool for comparing two API implementations against an OpenA
 
 API migration is hard. You have a working API, you're rewriting it, and you need to know: does the new implementation behave exactly like the old one? Existing tools solve pieces of this problem but don't combine them for migration workflows. api-parity focuses specifically on differential testing between two implementations with replayable failure artifacts.
 
+## Installation
+
+api-parity is distributed as source and must be built locally. This is required because the tool includes a Go binary (CEL evaluator) that must be compiled for your platform.
+
+### Prerequisites
+
+- **Python 3.10+** — Primary runtime
+- **Go 1.21+** — Required to build the CEL evaluator binary
+- **pip** — Python package installer
+
+### Build from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/j-tyler/api-parity.git
+cd api-parity
+
+# Run the build script (installs Python deps + builds Go binary)
+./scripts/build.sh
+
+# Verify installation
+api-parity --help
+```
+
+The build script will:
+1. Check that Python 3.10+ and Go 1.21+ are installed
+2. Install the Python package in development mode (`pip install -e .`)
+3. Build the CEL evaluator binary (`./cel-evaluator`)
+4. Verify the installation works
+
+### Manual Build
+
+If you prefer to build manually:
+
+```bash
+# Install Python package
+pip install -e .
+
+# Build CEL evaluator
+go build -o cel-evaluator ./cmd/cel-evaluator
+
+# Verify
+api-parity --help
+```
+
 ## Quick Start
 
 ```bash
-# Install (development - package not yet published to PyPI)
-pip install -e .
-
 # Explore: generate tests and find mismatches
 api-parity explore \
   --spec openapi.yaml \
@@ -26,7 +68,7 @@ api-parity explore \
   --target-b staging \
   --out ./artifacts
 
-# Replay: re-run saved mismatches to verify fixes
+# Replay: re-run saved mismatches to verify fixes (coming soon)
 api-parity replay \
   --config config.yaml \
   --target-a production \

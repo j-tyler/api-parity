@@ -442,3 +442,28 @@ Link field names are dynamically parsed from OpenAPI link expressions rather tha
 This design enables stateful chain testing with arbitrary field names. An API using `resource_uuid` instead of `id` works without configuration changes. The alternative (hardcoding common field names like `id`, `user_id`, `created_at`) would fail silently for any API using non-standard names.
 
 **Implementation note:** The OpenAPI spec is parsed twice at startup—once by Schemathesis (for generation) and once manually (for link extraction). Schemathesis doesn't expose the raw spec dict through its API, so separate parsing is required. The cost is minimal (one extra file read at startup).
+
+---
+
+# Source-Only Distribution
+
+Keywords: distribution packaging pypi installation build binary go cel
+Date: 20260112
+
+api-parity is distributed as source code only, not as a PyPI package. Users clone the repository and run `./scripts/build.sh` to install.
+
+**Why not PyPI:**
+
+1. **Go binary requirement** — The CEL evaluator is a Go binary that must be compiled for the user's platform. PyPI wheels can include platform-specific binaries, but this requires maintaining build infrastructure for Linux x64, macOS x64/arm64, Windows x64, and potentially more. This complexity isn't justified for a tool with a small user base.
+
+2. **Simple alternative exists** — Users who can install Go (required for any serious backend work) can build from source in under a minute. The `build.sh` script handles everything.
+
+3. **Dependency on Go at build time, not runtime** — Once built, the tool runs with Python + the compiled binary. Go is only needed once.
+
+**Trade-offs accepted:**
+
+- Higher friction for first-time installation (must have Go installed)
+- No `pip install api-parity` convenience
+- Users must `git pull` and rebuild for updates
+
+**If adoption grows significantly**, reconsider pre-built binaries distributed via GitHub Releases (download binary matching platform, place in PATH). This is simpler than full PyPI wheel infrastructure.
