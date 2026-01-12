@@ -5,11 +5,22 @@ These tests verify:
 2. Various data types (numbers, strings, arrays, objects)
 3. Error handling for invalid expressions
 4. Subprocess lifecycle management
+
+Requires: CEL evaluator binary (go build -o cel-evaluator ./cmd/cel-evaluator)
 """
+
+from pathlib import Path
 
 import pytest
 
 from api_parity.cel_evaluator import CELEvaluator, CELEvaluationError, CELSubprocessError
+
+# Skip entire module if CEL binary not built
+CEL_BINARY = Path(__file__).parent.parent / "cel-evaluator"
+pytestmark = pytest.mark.skipif(
+    not CEL_BINARY.exists(),
+    reason="CEL evaluator binary not built. Run: go build -o cel-evaluator ./cmd/cel-evaluator"
+)
 
 
 class TestCELEvaluatorBasic:
@@ -233,9 +244,9 @@ class TestCELEvaluatorLifecycle:
             result = evaluator.evaluate("a == b", {"a": 1, "b": 1})
             assert result is True
 
-            # Kill the subprocess
+            # Kill the subprocess (with timeout to prevent hanging)
             evaluator._process.send_signal(signal.SIGKILL)
-            evaluator._process.wait()
+            evaluator._process.wait(timeout=5)
 
             # Next evaluation should trigger restart and succeed
             result = evaluator.evaluate("a == b", {"a": 2, "b": 2})
@@ -250,16 +261,16 @@ class TestCELEvaluatorLifecycle:
 
         evaluator = CELEvaluator()
         try:
-            # Kill subprocess MAX_RESTARTS times
+            # Kill subprocess MAX_RESTARTS times (with timeout to prevent hanging)
             for i in range(CELEvaluator.MAX_RESTARTS):
                 evaluator._process.send_signal(signal.SIGKILL)
-                evaluator._process.wait()
+                evaluator._process.wait(timeout=5)
                 # This should trigger a restart
                 evaluator.evaluate("a == b", {"a": 1, "b": 1})
 
             # Kill one more time - should exceed limit
             evaluator._process.send_signal(signal.SIGKILL)
-            evaluator._process.wait()
+            evaluator._process.wait(timeout=5)
 
             with pytest.raises(CELSubprocessError) as exc_info:
                 evaluator.evaluate("a == b", {"a": 1, "b": 1})
