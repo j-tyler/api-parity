@@ -135,7 +135,7 @@ class MockServer:
                 self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self._process.kill()
-                self._process.wait()
+                self._process.wait(timeout=5)
             self._process = None
 
     def __enter__(self) -> "MockServer":

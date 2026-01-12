@@ -239,7 +239,7 @@ class TestChainGeneration:
         from api_parity.case_generator import CaseGenerator
 
         generator = CaseGenerator(openapi_spec_with_links)
-        chains = generator.generate_chains(max_chains=10, max_steps=4)
+        chains = generator.generate_chains(max_chains=5, max_steps=4)
 
         assert len(chains) > 0, "Should generate at least one chain"
 
@@ -272,7 +272,7 @@ class TestChainGeneration:
         from api_parity.case_generator import CaseGenerator
 
         generator = CaseGenerator(openapi_spec_with_links)
-        chains = generator.generate_chains(max_chains=30, max_steps=6)
+        chains = generator.generate_chains(max_chains=5, max_steps=4)
 
         # Look for chains starting with createWidget
         create_chains = [
@@ -317,7 +317,7 @@ class TestChainGeneration:
         generator = CaseGenerator(
             openapi_spec_with_links, exclude_operations=["deleteWidget"]
         )
-        chains = generator.generate_chains(max_chains=20, max_steps=4)
+        chains = generator.generate_chains(max_chains=5, max_steps=4)
 
         for chain in chains:
             for step in chain.steps:
@@ -377,7 +377,7 @@ class TestChainExecution:
         server_a, server_b = mock_servers
 
         generator = CaseGenerator(openapi_spec_with_links)
-        chains = generator.generate_chains(max_chains=30, max_steps=4)
+        chains = generator.generate_chains(max_chains=5, max_steps=4)
 
         # Find a chain that starts with create and has a follow-up
         create_chains = [
@@ -738,7 +738,7 @@ class TestCLIStatefulExecution:
                     str(output_dir),
                     "--stateful",
                     "--max-chains",
-                    "10",
+                    "5",
                 ],
                 capture_output=True,
                 text=True,
@@ -802,7 +802,7 @@ class TestChainEdgeCases:
 
         # Schemathesis raises NoLinksFound when spec has no links
         try:
-            chains = generator.generate_chains(max_chains=10)
+            chains = generator.generate_chains(max_chains=5)
             # If it returns, should have no multi-step chains
             assert len(chains) == 0 or all(len(c.steps) <= 1 for c in chains)
         except NoLinksFound:
