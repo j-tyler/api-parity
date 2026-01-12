@@ -4,7 +4,7 @@ import json
 import subprocess
 import sys
 
-from tests.conftest import MockServer, find_free_port
+from tests.conftest import MockServer, PortReservation
 from tests.integration.explore_helpers import (
     COMPARISON_RULES,
     PROJECT_ROOT,
@@ -87,18 +87,18 @@ comparison_rules: {rules_path}
     def test_both_servers_same_variant_all_match(self, tmp_path, cel_evaluator_exists):
         """Test that comparing same variant server to itself produces all matches."""
         # Start two instances of variant A
-        port_a = find_free_port()
-        port_b = find_free_port()
+        reservation_a = PortReservation()
+        reservation_b = PortReservation()
 
-        with MockServer(port_a, variant="a") as server_a:
-            with MockServer(port_b, variant="a") as server_b:
+        with MockServer(reservation_a, variant="a") as server_a:
+            with MockServer(reservation_b, variant="a") as server_b:
                 config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{port_a}"
+    base_url: "http://127.0.0.1:{server_a.port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{port_b}"
+    base_url: "http://127.0.0.1:{server_b.port}"
     headers: {{}}
 comparison_rules: {COMPARISON_RULES}
 """

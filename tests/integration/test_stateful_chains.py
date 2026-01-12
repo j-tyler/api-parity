@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 import yaml
 
-from tests.conftest import MockServer, find_free_port
+from tests.conftest import MockServer, PortReservation
 
 
 # =============================================================================
@@ -27,19 +27,13 @@ from tests.conftest import MockServer, find_free_port
 @pytest.fixture
 def mock_servers():
     """Start two mock servers (target A and target B) for testing."""
-    port_a = find_free_port()
-    port_b = find_free_port()
+    reservation_a = PortReservation()
+    reservation_b = PortReservation()
 
-    server_a = MockServer(port_a, variant="a")
-    server_b = MockServer(port_b, variant="a")  # Same variant for parity
-
-    server_a.start()
-    server_b.start()
-
-    yield server_a, server_b
-
-    server_a.stop()
-    server_b.stop()
+    # Use context managers to ensure cleanup even if start() fails
+    with MockServer(reservation_a, variant="a") as server_a:
+        with MockServer(reservation_b, variant="a") as server_b:  # Same variant for parity
+            yield server_a, server_b
 
 
 @pytest.fixture
@@ -681,90 +675,81 @@ class TestCLIStatefulExecution:
     ):
         """Stateful explore writes mismatch bundles when targets differ."""
         # Use variant A and variant B servers which have controlled differences
-        port_a = find_free_port()
-        port_b = find_free_port()
+        reservation_a = PortReservation()
+        reservation_b = PortReservation()
 
-        server_a = MockServer(port_a, variant="a")
-        server_b = MockServer(port_b, variant="b")  # Different variant
-
-        server_a.start()
-        server_b.start()
-
-        try:
-            config_path = tmp_path / "config.yaml"
-            with open(config_path, "w") as f:
-                yaml.dump(
-                    {
-                        "targets": {
-                            "target_a": {
-                                "base_url": f"http://127.0.0.1:{server_a.port}"
+        with MockServer(reservation_a, variant="a") as server_a:
+            with MockServer(reservation_b, variant="b") as server_b:
+                config_path = tmp_path / "config.yaml"
+                with open(config_path, "w") as f:
+                    yaml.dump(
+                        {
+                            "targets": {
+                                "target_a": {
+                                    "base_url": f"http://127.0.0.1:{server_a.port}"
+                                },
+                                "target_b": {
+                                    "base_url": f"http://127.0.0.1:{server_b.port}"
+                                },
                             },
-                            "target_b": {
-                                "base_url": f"http://127.0.0.1:{server_b.port}"
-                            },
+                            "comparison_rules": "rules.json",
                         },
-                        "comparison_rules": "rules.json",
-                    },
-                    f,
+                        f,
+                    )
+
+                rules_path = tmp_path / "rules.json"
+                with open(rules_path, "w") as f:
+                    json.dump(
+                        {
+                            "version": "1",
+                            "default_rules": {"status_code": {"predefined": "exact"}},
+                        },
+                        f,
+                    )
+
+                output_dir = tmp_path / "output"
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "api_parity.cli",
+                        "explore",
+                        "--spec",
+                        str(openapi_spec_with_links),
+                        "--config",
+                        str(config_path),
+                        "--target-a",
+                        "target_a",
+                        "--target-b",
+                        "target_b",
+                        "--out",
+                        str(output_dir),
+                        "--stateful",
+                        "--max-chains",
+                        "5",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
                 )
 
-            rules_path = tmp_path / "rules.json"
-            with open(rules_path, "w") as f:
-                json.dump(
-                    {
-                        "version": "1",
-                        "default_rules": {"status_code": {"predefined": "exact"}},
-                    },
-                    f,
-                )
+                # Summary should be written
+                assert (output_dir / "summary.json").exists()
 
-            output_dir = tmp_path / "output"
+                # Check for mismatches in output
+                if "MISMATCH" in result.stdout:
+                    # Should have mismatch bundles in mismatches directory
+                    mismatches_dir = output_dir / "mismatches"
+                    if mismatches_dir.exists():
+                        bundles = list(mismatches_dir.iterdir())
+                        assert len(bundles) > 0, "Should have at least one mismatch bundle"
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "api_parity.cli",
-                    "explore",
-                    "--spec",
-                    str(openapi_spec_with_links),
-                    "--config",
-                    str(config_path),
-                    "--target-a",
-                    "target_a",
-                    "--target-b",
-                    "target_b",
-                    "--out",
-                    str(output_dir),
-                    "--stateful",
-                    "--max-chains",
-                    "5",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-
-            # Summary should be written
-            assert (output_dir / "summary.json").exists()
-
-            # Check for mismatches in output
-            if "MISMATCH" in result.stdout:
-                # Should have mismatch bundles in mismatches directory
-                mismatches_dir = output_dir / "mismatches"
-                if mismatches_dir.exists():
-                    bundles = list(mismatches_dir.iterdir())
-                    assert len(bundles) > 0, "Should have at least one mismatch bundle"
-
-                    # Check bundle structure
-                    bundle = bundles[0]
-                    assert (bundle / "chain.json").exists() or (
-                        bundle / "case.json"
-                    ).exists()
-
-        finally:
-            server_a.stop()
-            server_b.stop()
+                        # Check bundle structure
+                        bundle = bundles[0]
+                        assert (bundle / "chain.json").exists() or (
+                            bundle / "case.json"
+                        ).exists()
 
 
 # =============================================================================

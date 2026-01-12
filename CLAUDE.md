@@ -151,6 +151,59 @@ git diff main..HEAD
 
 Commands are defined in `.claude/commands/*.md`. To run a command like `/foo`, read `.claude/commands/foo.md` and execute the logic manually.
 
+## CRITICAL: No Blocking Code Without Timeouts
+
+**This is a hard rule. No exceptions.**
+
+Any code that can block indefinitely will eventually hang the entire process, making debugging impossible and requiring manual intervention. This includes:
+
+- `subprocess.Popen.wait()` — use `wait(timeout=N)`
+- `subprocess.Popen.communicate()` — use `communicate(timeout=N)`
+- `file.read()` on pipes — use `select.select()` first
+- `file.readline()` on pipes — use `select.select()` first
+- `socket.recv()` — use `socket.settimeout()` or `select.select()`
+- `queue.get()` — use `get(timeout=N)`
+- Any blocking I/O on subprocess pipes
+
+**Pattern for safe pipe reads:**
+```python
+import select
+
+# WRONG - can hang forever
+line = proc.stdout.readline()
+
+# RIGHT - timeout prevents hang
+ready, _, _ = select.select([proc.stdout], [], [], timeout_seconds)
+if not ready:
+    raise TimeoutError("read timeout")
+line = proc.stdout.readline()  # Safe only if subprocess writes complete lines atomically
+```
+
+**Pattern for safe subprocess cleanup:**
+```python
+# WRONG - can hang forever
+proc.wait()
+
+# RIGHT - timeout with escalation to SIGKILL
+proc.terminate()
+try:
+    proc.wait(timeout=5)
+except subprocess.TimeoutExpired:
+    proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass  # Process is unkillable, nothing more we can do
+```
+
+**If there's no timeout parameter available**, you must use a different approach:
+1. Use `select.select()` with timeout before any blocking read
+2. Use non-blocking I/O with polling
+3. Use a separate thread with `threading.Timer` to kill the operation
+4. Redesign to avoid the blocking call entirely
+
+**When writing tests:** Use `PortReservation` (not `find_free_port()`) for server ports—`find_free_port()` has a race window where another process can grab the port before your server binds. Always use context managers for resource cleanup. See `tests/conftest.py` for patterns.
+
 ## Schemathesis Gotchas
 
 These issues were discovered during prototype validation. Don't repeat them:
@@ -229,14 +282,7 @@ These patterns apply when working with the Go CEL subprocess:
 
 7. **Expression timeout** — The Go CEL evaluator has a 5-second timeout per expression (see `evaluationTimeout` in `cmd/cel-evaluator/main.go`). If evaluation exceeds this, it returns `{"ok":false,"error":"evaluation timeout exceeded"}`. The Comparator treats this as a mismatch with `rule: "error: evaluation timeout exceeded"`. No special handling needed—timeout errors flow through the normal error path.
 
-8. **Always use timeouts on blocking I/O** — Never call `readline()`, `read()`, or `wait()` on subprocess pipes without a timeout. Use `select.select()` before blocking reads:
-   ```python
-   ready, _, _ = select.select([proc.stdout], [], [], timeout_seconds)
-   if not ready:
-       raise TimeoutError("subprocess response timeout")
-   line = proc.stdout.readline()  # Now safe, data is available
-   ```
-   Without this, a hung subprocess causes the entire process to freeze indefinitely. The CELEvaluator uses `EVALUATION_TIMEOUT = 10.0` seconds for this purpose.
+8. **Always use timeouts on blocking I/O** — See "CRITICAL: No Blocking Code Without Timeouts" above. The CELEvaluator uses `select.select()` before every `readline()` call with `EVALUATION_TIMEOUT = 10.0` seconds. This is not optional.
 
 ## Running Tests
 

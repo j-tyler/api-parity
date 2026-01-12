@@ -97,7 +97,11 @@ class CELEvaluator:
 
         ready_line = self._process.stdout.readline()
         if not ready_line:
-            stderr = self._process.stderr.read()
+            # Read stderr with timeout to avoid blocking
+            stderr = ""
+            stderr_ready, _, _ = select.select([self._process.stderr], [], [], 1.0)
+            if stderr_ready:
+                stderr = self._process.stderr.read(4096)  # Read available data, don't block
             raise CELSubprocessError(f"CEL subprocess died during startup: {stderr}")
 
         try:
