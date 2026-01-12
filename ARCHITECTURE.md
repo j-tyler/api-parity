@@ -53,8 +53,13 @@ api-parity explore \
   --target-b <name> \
   --out ./artifacts \
   [--seed 123] \
-  [--max-cases 1000]
+  [--max-cases 1000] \
+  [--stateful] \
+  [--max-chains 20] \
+  [--max-steps 6]
 ```
+
+**Stateful mode:** When `--stateful` is passed, the tool generates multi-step chains using OpenAPI links instead of single requests. `--max-chains` controls how many chains to generate (default 20), and `--max-steps` controls maximum steps per chain (default 6).
 
 ### Mode B: Replay
 
@@ -182,14 +187,31 @@ The `explore` subcommand orchestrates:
 
 ### Progress Reporting
 
-Prints per-case progress during run, summary stats at end:
+Prints per-case progress during run, summary stats at end.
 
+**Stateless mode:**
 ```
 [1] createWidget: POST /widgets MATCH
 [2] getWidget: GET /widgets/{id} MISMATCH: body differs at $.price
 
 ============================================================
 Total cases: 2
+  Matches:    1
+  Mismatches: 1
+  Errors:     0
+Summary written to: ./artifacts/summary.json
+```
+
+**Stateful mode:**
+```
+[Chain 1] createWidget → getWidget → updateWidget
+  MATCH (all steps)
+[Chain 2] createWidget → deleteWidget → getWidget
+  MISMATCH at step 2 (getWidget): status_code differs
+  Bundle: ./artifacts/mismatches/20260112T...
+
+============================================================
+Total chains: 2
   Matches:    1
   Mismatches: 1
   Errors:     0
@@ -209,6 +231,7 @@ class CaseGenerator:
     def __init__(self, spec_path: Path, exclude_operations: list[str] | None = None): ...
     def get_operations(self) -> list[dict[str, Any]]: ...
     def generate(self, max_cases: int | None = None, seed: int | None = None) -> Iterator[RequestCase]: ...
+    def generate_chains(self, max_chains: int | None = None, max_steps: int = 6, seed: int | None = None) -> list[ChainCase]: ...
 ```
 
 ### Usage
@@ -230,9 +253,11 @@ When `max_cases` is specified, cases are distributed across operations:
 
 The `seed` parameter enables reproducible generation via Hypothesis `derandomize=True` mode. Same seed produces same test case sequence.
 
-### Current Scope
+### Chain Generation
 
-Stateless generation only (single requests). Stateful chain generation via OpenAPI links is planned but not yet implemented.
+The `generate_chains()` method uses Schemathesis's state machine to discover multi-step sequences from OpenAPI links. Chains are captured without making HTTP calls—the Executor handles actual execution.
+
+**Field name limitation:** During generation, mock responses contain only common field names: `id`, `user_id`, `order_id`, `widget_id`, `item_id`, `name`, `price`, `status`, `items`, `total`, `created_at`. OpenAPI links referencing other field names (e.g., `$response.body#/resource_uuid`) won't resolve, limiting which chains can be generated.
 
 ---
 
@@ -253,6 +278,7 @@ class Executor:
     ): ...
 
     def execute(self, request: RequestCase) -> tuple[ResponseCase, ResponseCase]: ...
+    def execute_chain(self, chain: ChainCase, on_step: Callable[[ResponseCase, ResponseCase], bool] | None = None) -> tuple[ChainExecution, ChainExecution]: ...
     def close(self) -> None: ...
 ```
 
@@ -276,9 +302,13 @@ Requests execute serially: Target A first, then Target B. No concurrent requests
 
 Connection errors, timeouts, and other request failures raise `RequestError`. The CLI catches these and records as errors (skipped test cases), not mismatches.
 
-### Current Scope
+### Chain Execution
 
-Stateless execution only (`execute()`). Chain execution (`execute_chain()`) for stateful testing is planned but not yet implemented. Rate limiting is not implemented in v0.
+The `execute_chain()` method executes multi-step chains against both targets. Each target maintains its own extracted variables—if Target A's POST returns `id: "abc"` and Target B's returns `id: "xyz"`, subsequent steps use the respective IDs. The optional `on_step` callback allows stopping at first mismatch (returns `False` to stop, `True` to continue).
+
+**Extracted fields:** Only `id`, `user_id`, `order_id`, `widget_id`, `item_id` are extracted from responses for variable substitution. APIs using other field names for identifiers will need code changes to support chain execution.
+
+Rate limiting is not implemented in v0.
 
 ---
 
@@ -298,6 +328,18 @@ class ArtifactWriter:
         response_a: ResponseCase,
         response_b: ResponseCase,
         diff: ComparisonResult,
+        target_a_info: TargetInfo,
+        target_b_info: TargetInfo,
+        seed: int | None = None,
+    ) -> Path: ...
+
+    def write_chain_mismatch(
+        self,
+        chain: ChainCase,
+        execution_a: ChainExecution,
+        execution_b: ChainExecution,
+        step_diffs: list[ComparisonResult],
+        mismatch_step: int,
         target_a_info: TargetInfo,
         target_b_info: TargetInfo,
         seed: int | None = None,

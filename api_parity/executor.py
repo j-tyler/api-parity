@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import base64
 import time
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
 from api_parity.models import (
+    ChainCase,
+    ChainExecution,
+    ChainStepExecution,
     RequestCase,
     ResponseCase,
     TargetConfig,
@@ -117,6 +120,217 @@ class Executor:
         )
 
         return response_a, response_b
+
+    def execute_chain(
+        self,
+        chain: ChainCase,
+        on_step: Callable[[ResponseCase, ResponseCase], bool] | None = None,
+    ) -> tuple[ChainExecution, ChainExecution]:
+        """Execute a chain against both targets.
+
+        Each step is executed against both targets before proceeding to the next.
+        Each target uses its own extracted response data for subsequent steps
+        (per DESIGN.md "Live Chain Generation").
+
+        Args:
+            chain: The chain to execute.
+            on_step: Optional callback called after each step with (response_a, response_b).
+                     Return False to stop execution (per DESIGN.md "Chain Stops at First Mismatch").
+                     Return True to continue.
+
+        Returns:
+            Tuple of (execution_a, execution_b) containing step-by-step traces.
+            If stopped early via on_step, contains only executed steps.
+
+        Raises:
+            RequestError: If a request fails due to connection/timeout.
+        """
+        steps_a: list[ChainStepExecution] = []
+        steps_b: list[ChainStepExecution] = []
+        extracted_vars_a: dict[str, Any] = {}
+        extracted_vars_b: dict[str, Any] = {}
+
+        for step in chain.steps:
+            # Each target gets request populated with its own extracted variables
+            request_a = self._apply_variables(step.request_template, extracted_vars_a)
+            request_b = self._apply_variables(step.request_template, extracted_vars_b)
+
+            timeout = self._get_timeout(request_a.operation_id)
+
+            # Execute against both targets
+            response_a = self._execute_single(
+                self._client_a, request_a, timeout, "Target A"
+            )
+            response_b = self._execute_single(
+                self._client_b, request_b, timeout, "Target B"
+            )
+
+            # Extract variables from each target's own response
+            extracted_a = self._extract_variables(response_a)
+            extracted_b = self._extract_variables(response_b)
+            extracted_vars_a.update(extracted_a)
+            extracted_vars_b.update(extracted_b)
+
+            # Record step executions
+            steps_a.append(ChainStepExecution(
+                step_index=step.step_index,
+                request=request_a,
+                response=response_a,
+                extracted=extracted_a,
+            ))
+            steps_b.append(ChainStepExecution(
+                step_index=step.step_index,
+                request=request_b,
+                response=response_b,
+                extracted=extracted_b,
+            ))
+
+            # Check if caller wants to stop (mismatch detected)
+            if on_step is not None and not on_step(response_a, response_b):
+                break
+
+        return (
+            ChainExecution(steps=steps_a),
+            ChainExecution(steps=steps_b),
+        )
+
+    def _apply_variables(
+        self,
+        template: RequestCase,
+        variables: dict[str, Any],
+    ) -> RequestCase:
+        """Apply extracted variables to a request template.
+
+        Substitutes {variable_name} placeholders in path parameters, query
+        parameters, and body.
+
+        Args:
+            template: Request template with potential placeholders.
+            variables: Extracted variables from previous steps.
+
+        Returns:
+            New RequestCase with variables substituted.
+        """
+        # Deep copy the template to avoid mutation
+        request_dict = template.model_dump()
+
+        # Apply variables to path parameters
+        for key, value in list(request_dict.get("path_parameters", {}).items()):
+            if isinstance(value, str):
+                for var_name, var_value in variables.items():
+                    if f"{{{var_name}}}" in value:
+                        value = value.replace(f"{{{var_name}}}", str(var_value))
+                    # Also check for direct match (Schemathesis may have already resolved)
+                    if value == var_name:
+                        value = str(var_value)
+                request_dict["path_parameters"][key] = value
+
+        # Re-render the path with updated parameters
+        rendered_path = request_dict["path_template"]
+        for key, value in request_dict.get("path_parameters", {}).items():
+            rendered_path = rendered_path.replace(f"{{{key}}}", str(value))
+        request_dict["rendered_path"] = rendered_path
+
+        # Apply variables to query parameters (dict[str, list[str]])
+        for key, values in list(request_dict.get("query", {}).items()):
+            new_values = []
+            for value in values:
+                for var_name, var_value in variables.items():
+                    if f"{{{var_name}}}" in value:
+                        value = value.replace(f"{{{var_name}}}", str(var_value))
+                new_values.append(value)
+            request_dict["query"][key] = new_values
+
+        # Apply variables to body if it's a dict
+        if isinstance(request_dict.get("body"), dict):
+            request_dict["body"] = self._substitute_in_dict(
+                request_dict["body"], variables
+            )
+
+        return RequestCase.model_validate(request_dict)
+
+    def _substitute_in_dict(
+        self,
+        data: dict[str, Any],
+        variables: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Recursively substitute variables in a dictionary.
+
+        Args:
+            data: Dictionary to process.
+            variables: Variables to substitute.
+
+        Returns:
+            New dictionary with substitutions applied.
+        """
+        result = {}
+        for key, value in data.items():
+            if isinstance(value, str):
+                for var_name, var_value in variables.items():
+                    if f"{{{var_name}}}" in value:
+                        value = value.replace(f"{{{var_name}}}", str(var_value))
+                result[key] = value
+            elif isinstance(value, dict):
+                result[key] = self._substitute_in_dict(value, variables)
+            elif isinstance(value, list):
+                result[key] = self._substitute_in_list(value, variables)
+            else:
+                result[key] = value
+        return result
+
+    def _substitute_in_list(
+        self,
+        data: list[Any],
+        variables: dict[str, Any],
+    ) -> list[Any]:
+        """Recursively substitute variables in a list.
+
+        Args:
+            data: List to process.
+            variables: Variables to substitute.
+
+        Returns:
+            New list with substitutions applied.
+        """
+        result = []
+        for item in data:
+            if isinstance(item, str):
+                for var_name, var_value in variables.items():
+                    if f"{{{var_name}}}" in item:
+                        item = item.replace(f"{{{var_name}}}", str(var_value))
+                result.append(item)
+            elif isinstance(item, dict):
+                result.append(self._substitute_in_dict(item, variables))
+            elif isinstance(item, list):
+                result.append(self._substitute_in_list(item, variables))
+            else:
+                result.append(item)
+        return result
+
+    def _extract_variables(self, response: ResponseCase) -> dict[str, Any]:
+        """Extract commonly needed variables from a response.
+
+        Extracts 'id' and other common fields that OpenAPI links typically reference.
+
+        Args:
+            response: Response to extract from.
+
+        Returns:
+            Dictionary of extracted variable names to values.
+        """
+        extracted: dict[str, Any] = {}
+
+        if not isinstance(response.body, dict):
+            return extracted
+
+        # Common fields that links typically reference
+        common_fields = ["id", "user_id", "order_id", "widget_id", "item_id"]
+
+        for field in common_fields:
+            if field in response.body:
+                extracted[field] = response.body[field]
+
+        return extracted
 
     def _get_timeout(self, operation_id: str) -> float:
         """Get timeout for an operation."""

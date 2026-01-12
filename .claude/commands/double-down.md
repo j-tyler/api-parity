@@ -2,21 +2,19 @@
 description: Deep dive on review findings - confirm with evidence or retract
 ---
 
-For each numbered item from your previous review, do a deep dive to fully understand the problem. Read the relevant code, trace the logic, and gather concrete evidence. Reference items by their original number (e.g., "Issue #1", "Issue #2").
+For each numbered item from your previous review, gather evidence by reading code and tracing logic.
 
-**Important:** Review the conversation to understand your own intent. You wrote everything in the diff being reviewed. Evaluate issues with that context—some "problems" may be intentional design choices you made. Do not hedge with recommendations.
+You wrote the code being reviewed. Some "issues" may be intentional choices you made.
 
-For each item, conclude with one of:
+For each item, conclude with exactly one of:
 
-**DOUBLE DOWN**: You found supporting evidence. Include:
-- Code snippets that demonstrate the issue
-- Clear reasoning explaining why this is a problem
-- Single best recommendation to resolve it
-  - Right: "Recommendation: Doing A is best because Y."
-  - Wrong: "Do A or B."
+**DOUBLE DOWN**: Evidence confirms the issue.
+- Show the problematic code
+- Explain why it's a problem
+- Give ONE specific fix with reason why (NEVER say either solution A or solution B)
 
-**RETRACT**: You were mistaken or the concern doesn't apply. Include:
+**RETRACT**: You were wrong.
 - What you misunderstood
-- Why the current implementation is actually correct
+- Why the code is correct
 
-Do not hedge. Every item must be either confirmed with evidence or retracted.
+No hedging. Every item gets DOUBLE DOWN or RETRACT.
