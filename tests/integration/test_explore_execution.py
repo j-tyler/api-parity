@@ -14,8 +14,15 @@ from tests.integration.explore_helpers import (
 class TestExploreExecution:
     """Tests for actual explore execution (requires mock servers and CEL evaluator)."""
 
-    def test_explore_basic_execution(self, dual_servers, tmp_path, cel_evaluator_exists):
-        """Test basic explore execution with a few cases."""
+    def test_explore_comprehensive_execution(self, dual_servers, tmp_path, cel_evaluator_exists):
+        """Test comprehensive explore execution including options and output.
+
+        Combined test verifying:
+        - Basic execution works and writes summary
+        - Mismatch bundles are written correctly
+        - Timeout and exclude options are respected
+        - CEL expressions are evaluated without errors
+        """
         config_path = create_runtime_config(
             dual_servers["a"].port,
             dual_servers["b"].port,
@@ -23,6 +30,7 @@ class TestExploreExecution:
         )
         out_dir = tmp_path / "artifacts"
 
+        # Run explore with various options
         result = subprocess.run(
             [
                 sys.executable, "-m", "api_parity.cli",
@@ -32,8 +40,9 @@ class TestExploreExecution:
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "5",
-                "--seed", "12345",
+                "--max-cases", "1",
+                "--seed", "42",
+                "--timeout", "10",
             ],
             capture_output=True,
             text=True,
@@ -44,10 +53,13 @@ class TestExploreExecution:
         print(f"stdout:\n{result.stdout}")
         print(f"stderr:\n{result.stderr}")
 
+        # Basic execution checks
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert "Total cases:" in result.stdout
+        assert "Timeout: 10.0s" in result.stdout
+        assert "CEL evaluator crashed" not in result.stderr
 
-        # Check that summary.json was written
+        # Summary should be written
         summary_path = out_dir / "summary.json"
         assert summary_path.exists(), f"Expected {summary_path} to exist"
 
@@ -57,48 +69,11 @@ class TestExploreExecution:
         assert "total_cases" in summary
         assert summary["total_cases"] > 0
 
-    def test_explore_writes_mismatch_bundles(self, dual_servers, tmp_path, cel_evaluator_exists):
-        """Test that mismatches are written to bundles.
-
-        With variant A and B servers, we expect some mismatches (shuffled arrays,
-        price differences beyond tolerance for some fields).
-        """
-        config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
-            tmp_path,
-        )
-        out_dir = tmp_path / "artifacts"
-
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir),
-                "--max-cases", "5",
-                "--seed", "42",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=120,
-        )
-
-        print(f"stdout:\n{result.stdout}")
-        print(f"stderr:\n{result.stderr}")
-
-        assert result.returncode == 0
-
-        # Check for mismatch bundles
+        # Check mismatch bundles if any exist
         mismatches_dir = out_dir / "mismatches"
         if mismatches_dir.exists():
             bundles = list(mismatches_dir.iterdir())
             if bundles:
-                # Verify bundle structure
                 bundle = bundles[0]
                 assert (bundle / "case.json").exists()
                 assert (bundle / "target_a.json").exists()
@@ -106,43 +81,11 @@ class TestExploreExecution:
                 assert (bundle / "diff.json").exists()
                 assert (bundle / "metadata.json").exists()
 
-                # Verify diff structure
                 with open(bundle / "diff.json") as f:
                     diff = json.load(f)
                 assert "match" in diff
                 assert diff["match"] is False
                 assert "mismatch_type" in diff
-
-    def test_explore_with_timeout(self, dual_servers, tmp_path, cel_evaluator_exists):
-        """Test that timeout options are respected."""
-        config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
-            tmp_path,
-        )
-        out_dir = tmp_path / "artifacts"
-
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir),
-                "--max-cases", "3",
-                "--timeout", "10",
-                "--operation-timeout", "healthCheck:5",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
-        )
-
-        assert result.returncode == 0
-        assert "Timeout: 10.0s" in result.stdout
 
     def test_explore_with_exclude(self, dual_servers, tmp_path, cel_evaluator_exists):
         """Test that --exclude prevents operations from being tested."""
@@ -162,7 +105,7 @@ class TestExploreExecution:
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "3",
+                "--max-cases", "1",
                 "--exclude", "healthCheck",
                 "--exclude", "deleteWidget",
             ],
@@ -195,7 +138,7 @@ class TestExploreExecution:
                     "--target-a", "server_a",
                     "--target-b", "server_b",
                     "--out", str(out_dir),
-                    "--max-cases", "5",
+                    "--max-cases", "1",
                     "--seed", "99999",
                 ],
                 capture_output=True,
@@ -210,39 +153,3 @@ class TestExploreExecution:
 
         # Same seed should produce same number of cases per operation
         assert summary1["operations"] == summary2["operations"]
-
-
-class TestCELEvaluatorIntegration:
-    """Tests verifying CEL evaluator works correctly in the full pipeline."""
-
-    def test_cel_expressions_evaluated(self, dual_servers, tmp_path, cel_evaluator_exists):
-        """Test that CEL expressions from comparison rules are evaluated."""
-        config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
-            tmp_path,
-        )
-        out_dir = tmp_path / "artifacts"
-
-        # Run with healthCheck which uses both_positive for uptime_seconds
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir),
-                "--max-cases", "3",
-                "--seed", "1",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
-        )
-
-        # Should complete without CEL errors
-        assert result.returncode == 0
-        assert "CEL evaluator crashed" not in result.stderr

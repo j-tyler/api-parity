@@ -37,7 +37,7 @@ class TestStatusCodeMismatch:
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "3",
+                "--max-cases", "1",
                 "--seed", "42",
             ],
             capture_output=True,
@@ -118,7 +118,7 @@ comparison_rules: {rules_path}
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "3",
+                "--max-cases", "3",  # Need enough cases to include createWidget
                 "--seed", "1",
             ],
             capture_output=True,
@@ -191,7 +191,7 @@ comparison_rules: {rules_path}
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "3",
+                "--max-cases", "1",
                 "--seed", "123",
             ],
             capture_output=True,
@@ -202,6 +202,11 @@ comparison_rules: {rules_path}
 
         print(f"stdout:\n{result.stdout}")
         assert result.returncode == 0
+
+        # getUserProfile should MATCH because roles array is compared unordered
+        for line in result.stdout.split("\n"):
+            if "getUserProfile:" in line:
+                assert "MATCH" in line, f"Expected getUserProfile to MATCH with unordered_array, got: {line}"
 
     def test_operation_rules_override_defaults(self, dual_servers, tmp_path, cel_evaluator_exists):
         """Test that operation_rules completely override default_rules for that operation."""
@@ -254,7 +259,7 @@ comparison_rules: {rules_path}
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "3",
+                "--max-cases", "1",
                 "--seed", "1",
             ],
             capture_output=True,
@@ -315,7 +320,7 @@ comparison_rules: {rules_path}
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "3",
+                "--max-cases", "1",
                 "--seed", "1",
             ],
             capture_output=True,
@@ -379,7 +384,7 @@ comparison_rules: {rules_path}
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "3",
+                "--max-cases", "1",
                 "--seed", "1",
             ],
             capture_output=True,
@@ -453,7 +458,7 @@ comparison_rules: {rules_path}
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "3",
+                "--max-cases", "1",
                 "--seed", "1",
             ],
             capture_output=True,

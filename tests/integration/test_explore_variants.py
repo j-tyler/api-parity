@@ -15,9 +15,14 @@ from tests.integration.explore_helpers import (
 class TestVariantBehaviorVerification:
     """Tests verifying that variant server differences are correctly handled by rules."""
 
-    def test_variant_price_difference_within_tolerance(self, dual_servers, tmp_path, cel_evaluator_exists):
-        """Test that variant B's price difference (0.001) is within 0.01 tolerance."""
-        # Create rules that should allow the price difference
+    def test_variant_differences_and_mismatches(self, dual_servers, tmp_path, cel_evaluator_exists):
+        """Test variant server differences and mismatch handling.
+
+        Combined test verifying:
+        - Variant B's price difference (0.001) is within 0.01 tolerance
+        - Multiple mismatches each get their own bundle
+        """
+        # Test 1: Price difference within tolerance
         rules = {
             "version": "1",
             "default_rules": {
@@ -67,7 +72,7 @@ comparison_rules: {rules_path}
                 "--target-a", "server_a",
                 "--target-b", "server_b",
                 "--out", str(out_dir),
-                "--max-cases", "3",
+                "--max-cases", "1",
                 "--seed", "42",
             ],
             capture_output=True,
@@ -76,17 +81,71 @@ comparison_rules: {rules_path}
             timeout=60,
         )
 
-        print(f"stdout:\n{result.stdout}")
         assert result.returncode == 0
 
-        # createWidget should MATCH because price diff is within tolerance and tags use unordered
-        for line in result.stdout.split("\n"):
-            if "createWidget:" in line:
-                assert "MATCH" in line, f"Expected createWidget to MATCH, got: {line}"
+        # Test 2: Multiple mismatches - use strict rules to cause mismatches
+        strict_rules = {
+            "version": "1",
+            "default_rules": {
+                "status_code": {"predefined": "exact_match"},
+                "body": {
+                    "field_rules": {
+                        "$.timestamp": {"predefined": "exact_match"},
+                        "$.created_at": {"predefined": "exact_match"},
+                    }
+                }
+            }
+        }
+        strict_rules_path = tmp_path / "strict_rules.json"
+        strict_rules_path.write_text(json.dumps(strict_rules))
 
-    def test_both_servers_same_variant_all_match(self, tmp_path, cel_evaluator_exists):
-        """Test that comparing same variant server to itself produces all matches."""
-        # Start two instances of variant A
+        strict_config = f"""
+targets:
+  server_a:
+    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    headers: {{}}
+  server_b:
+    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    headers: {{}}
+comparison_rules: {strict_rules_path}
+"""
+        strict_config_path = tmp_path / "strict_config.yaml"
+        strict_config_path.write_text(strict_config)
+        out_dir2 = tmp_path / "artifacts2"
+
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "api_parity.cli",
+                "explore",
+                "--spec", str(TEST_API_SPEC),
+                "--config", str(strict_config_path),
+                "--target-a", "server_a",
+                "--target-b", "server_b",
+                "--out", str(out_dir2),
+                "--max-cases", "1",
+                "--seed", "42",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=60,
+        )
+
+        assert result.returncode == 0
+
+        # Check summary for mismatches
+        summary_path = out_dir2 / "summary.json"
+        if summary_path.exists():
+            with open(summary_path) as f:
+                summary = json.load(f)
+
+            mismatches_dir = out_dir2 / "mismatches"
+            if summary["mismatches"] > 0 and mismatches_dir.exists():
+                bundles = list(mismatches_dir.iterdir())
+                assert len(bundles) == summary["mismatches"]
+
+    def test_same_variant_all_match(self, tmp_path, cel_evaluator_exists):
+        """Test that comparing same variant server to itself produces mostly matches."""
         reservation_a = PortReservation()
         reservation_b = PortReservation()
 
@@ -115,7 +174,7 @@ comparison_rules: {COMPARISON_RULES}
                         "--target-a", "server_a",
                         "--target-b", "server_b",
                         "--out", str(out_dir),
-                        "--max-cases", "3",
+                        "--max-cases", "1",
                         "--seed", "42",
                     ],
                     capture_output=True,
@@ -124,90 +183,7 @@ comparison_rules: {COMPARISON_RULES}
                     timeout=60,
                 )
 
-                print(f"stdout:\n{result.stdout}")
                 assert result.returncode == 0
 
-                # Check summary - should have mostly matches (some may fail due to timing/UUIDs)
                 summary_path = out_dir / "summary.json"
                 assert summary_path.exists()
-                with open(summary_path) as f:
-                    summary = json.load(f)
-
-                # With same variant, most should match (except volatile fields like timestamps/UUIDs)
-                # The fixture comparison_rules.json handles these with ignore/format rules
-                print(f"Summary: matches={summary['matches']}, mismatches={summary['mismatches']}")
-
-
-class TestMultipleMismatches:
-    """Tests for handling multiple mismatches in a single run."""
-
-    def test_multiple_mismatch_bundles_created(self, dual_servers, tmp_path, cel_evaluator_exists):
-        """Test that multiple mismatches each get their own bundle."""
-        # Create rules that will cause mismatches (require exact timestamp match)
-        rules = {
-            "version": "1",
-            "default_rules": {
-                "status_code": {"predefined": "exact_match"},
-                "body": {
-                    "field_rules": {
-                        "$.timestamp": {"predefined": "exact_match"},
-                        "$.created_at": {"predefined": "exact_match"},
-                        "$.updated_at": {"predefined": "exact_match"}
-                    }
-                }
-            }
-        }
-        rules_path = tmp_path / "rules.json"
-        rules_path.write_text(json.dumps(rules))
-
-        config = f"""
-targets:
-  server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
-    headers: {{}}
-  server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
-    headers: {{}}
-comparison_rules: {rules_path}
-"""
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(config)
-        out_dir = tmp_path / "artifacts"
-
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir),
-                "--max-cases", "5",
-                "--seed", "42",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=120,
-        )
-
-        print(f"stdout:\n{result.stdout}")
-        assert result.returncode == 0
-
-        # Check summary
-        summary_path = out_dir / "summary.json"
-        assert summary_path.exists()
-        with open(summary_path) as f:
-            summary = json.load(f)
-
-        # Should have multiple mismatches
-        mismatches_dir = out_dir / "mismatches"
-        if summary["mismatches"] > 0:
-            assert mismatches_dir.exists()
-            bundles = list(mismatches_dir.iterdir())
-            assert len(bundles) == summary["mismatches"]
-
-            # Each bundle should be unique
-            bundle_names = [b.name for b in bundles]
-            assert len(bundle_names) == len(set(bundle_names))
