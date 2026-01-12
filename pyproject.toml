@@ -46,3 +46,7 @@ asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+markers = [
+    "unit: Fast isolated tests with no external dependencies",
+    "integration: Tests requiring subprocess, network, or file I/O",
+]

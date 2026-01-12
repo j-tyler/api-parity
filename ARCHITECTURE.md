@@ -672,6 +672,56 @@ Mock FastAPI server (`tests/integration/mock_server.py`) with two variants for d
 - `tests/fixtures/comparison_rules.json` — Rules for all predefined types
 - `tests/conftest.py` — Pytest fixtures (`dual_servers`, `mock_server_a`, etc.)
 
+### Test Layers
+
+Tests are organized into two layers with automatic pytest markers:
+
+| Layer | Location | Marker | Characteristics |
+|-------|----------|--------|-----------------|
+| Unit | `tests/test_*.py` | `@pytest.mark.unit` | Fast, isolated, mock dependencies |
+| Integration | `tests/integration/` | `@pytest.mark.integration` | Real subprocess, network, file I/O |
+
+**Running by layer:**
+```bash
+pytest -m unit          # Fast unit tests only
+pytest -m integration   # Integration tests only
+pytest                  # All tests
+```
+
+Markers are applied automatically via `pytest_collection_modifyitems` in conftest.py based on file path.
+
+### Test File Organization
+
+Large test files are split by concern for smaller context loads:
+
+**Comparator tests** (`tests/test_comparator_*.py`):
+- `test_comparator_core.py` — NOT_FOUND sentinel
+- `test_comparator_status.py` — Status code comparison, order
+- `test_comparator_headers.py` — Header comparison, presence modes
+- `test_comparator_body.py` — Body comparison, presence modes
+- `test_comparator_jsonpath.py` — Wildcard paths, recursive descent
+- `test_comparator_results.py` — Result structure, edge cases
+
+**CLI tests** (`tests/test_cli_*.py`):
+- `test_cli_explore.py` — Explore subcommand arguments
+- `test_cli_replay.py` — Replay subcommand arguments
+- `test_cli_list_ops.py` — List-operations subcommand
+- `test_cli_common.py` — General parser, validators
+
+**Integration tests** (`tests/integration/`):
+- `test_explore_*.py` — End-to-end explore CLI scenarios
+- `test_stateful_chains.py` — Chain generation and execution
+- `test_comparator_cel.py` — Real CEL subprocess integration
+
+Shared fixtures are in `tests/conftest.py` (global) and per-directory fixture files (`tests/comparator_fixtures.py`, `tests/integration/explore_helpers.py`).
+
+### Port Allocation
+
+Tests use `PortReservation` class for safer port allocation:
+- Holds socket open until just before server starts
+- Uses `SO_REUSEADDR` to minimize port exhaustion
+- Reduces race conditions vs simple `find_free_port()`
+
 ---
 
 ## Sources

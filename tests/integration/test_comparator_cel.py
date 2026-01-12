@@ -3,6 +3,8 @@
 These tests verify the Comparator works correctly with the actual Go CEL
 subprocess, testing the full comparison pipeline including predefined
 expression expansion and CEL evaluation.
+
+Requires: CEL evaluator binary (go build -o cel-evaluator ./cmd/cel-evaluator)
 """
 
 import json
@@ -24,11 +26,20 @@ from tests.conftest import make_response
 
 
 # =============================================================================
-# Fixtures
+# Skip module if CEL binary not built
 # =============================================================================
 
-
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+CEL_BINARY = PROJECT_ROOT / "cel-evaluator"
+pytestmark = pytest.mark.skipif(
+    not CEL_BINARY.exists(),
+    reason="CEL evaluator binary not built. Run: go build -o cel-evaluator ./cmd/cel-evaluator"
+)
+
+
+# =============================================================================
+# Fixtures
+# =============================================================================
 
 
 @pytest.fixture(scope="module")

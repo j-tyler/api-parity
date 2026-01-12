@@ -622,114 +622,6 @@ class TestChainArtifacts:
         assert summary["seed"] == 42
 
 
-# =============================================================================
-# CLI Stateful Mode Tests
-# =============================================================================
-
-
-class TestCLIStatefulMode:
-    """Tests for CLI --stateful flag."""
-
-    def test_stateful_flag_parsed(self):
-        """--stateful flag is correctly parsed."""
-        from api_parity.cli import parse_args
-
-        args = parse_args(
-            [
-                "explore",
-                "--spec",
-                "spec.yaml",
-                "--config",
-                "config.yaml",
-                "--target-a",
-                "a",
-                "--target-b",
-                "b",
-                "--out",
-                "out",
-                "--stateful",
-            ]
-        )
-
-        assert args.stateful is True
-
-    def test_max_chains_option(self):
-        """--max-chains option is correctly parsed."""
-        from api_parity.cli import parse_args
-
-        args = parse_args(
-            [
-                "explore",
-                "--spec",
-                "spec.yaml",
-                "--config",
-                "config.yaml",
-                "--target-a",
-                "a",
-                "--target-b",
-                "b",
-                "--out",
-                "out",
-                "--stateful",
-                "--max-chains",
-                "15",
-            ]
-        )
-
-        assert args.stateful is True
-        assert args.max_chains == 15
-
-    def test_max_steps_option(self):
-        """--max-steps option is correctly parsed."""
-        from api_parity.cli import parse_args
-
-        args = parse_args(
-            [
-                "explore",
-                "--spec",
-                "spec.yaml",
-                "--config",
-                "config.yaml",
-                "--target-a",
-                "a",
-                "--target-b",
-                "b",
-                "--out",
-                "out",
-                "--stateful",
-                "--max-steps",
-                "8",
-            ]
-        )
-
-        assert args.stateful is True
-        assert args.max_steps == 8
-
-    def test_stateful_defaults(self):
-        """Stateful options have sensible defaults."""
-        from api_parity.cli import parse_args
-
-        args = parse_args(
-            [
-                "explore",
-                "--spec",
-                "spec.yaml",
-                "--config",
-                "config.yaml",
-                "--target-a",
-                "a",
-                "--target-b",
-                "b",
-                "--out",
-                "out",
-            ]
-        )
-
-        assert args.stateful is False
-        assert args.max_chains is None  # Uses default 20 in implementation
-        assert args.max_steps == 6
-
-
 class TestCLIStatefulExecution:
     """Integration tests for CLI stateful mode execution."""
 
@@ -885,6 +777,8 @@ class TestChainEdgeCases:
 
     def test_spec_without_links_generates_no_chains(self, tmp_path: Path):
         """OpenAPI spec without links generates no multi-step chains."""
+        from schemathesis.core.errors import NoLinksFound
+
         from api_parity.case_generator import CaseGenerator
 
         # Create spec without links
@@ -905,10 +799,15 @@ class TestChainEdgeCases:
             yaml.dump(spec, f)
 
         generator = CaseGenerator(spec_path)
-        chains = generator.generate_chains(max_chains=10)
 
-        # Should have no multi-step chains (single operations only)
-        assert len(chains) == 0 or all(len(c.steps) <= 1 for c in chains)
+        # Schemathesis raises NoLinksFound when spec has no links
+        try:
+            chains = generator.generate_chains(max_chains=10)
+            # If it returns, should have no multi-step chains
+            assert len(chains) == 0 or all(len(c.steps) <= 1 for c in chains)
+        except NoLinksFound:
+            # Expected - spec has no links for stateful testing
+            pass
 
     def test_chain_with_request_error(
         self, openapi_spec_with_links: Path, tmp_path: Path

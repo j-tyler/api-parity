@@ -229,6 +229,20 @@ These patterns apply when working with the Go CEL subprocess:
 
 7. **Expression timeout** — The Go CEL evaluator has a 5-second timeout per expression (see `evaluationTimeout` in `cmd/cel-evaluator/main.go`). If evaluation exceeds this, it returns `{"ok":false,"error":"evaluation timeout exceeded"}`. The Comparator treats this as a mismatch with `rule: "error: evaluation timeout exceeded"`. No special handling needed—timeout errors flow through the normal error path.
 
+## Running Tests
+
+**Build the CEL evaluator before running tests.** Many tests require the Go CEL binary. Without it, tests fail with `CELSubprocessError: CEL evaluator binary not found`.
+
+```bash
+# Build CEL evaluator first
+go build -o cel-evaluator ./cmd/cel-evaluator
+
+# Then run tests
+pytest tests/
+```
+
+Tests that require the CEL binary use the `cel_evaluator_exists` fixture or `pytestmark = pytest.mark.skipif(...)` to skip gracefully when the binary is missing. If you add new tests that use `CELEvaluator`, include this skip mechanism.
+
 ## What NOT to Do
 
 - Don't propose changes without reading relevant code first
