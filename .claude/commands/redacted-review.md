@@ -1,0 +1,1 @@
+For any issue you RETRACTED, is there a **token efficient way** to update the .md documentation, the inline doc, or the code so you wouldn't make that misunderstanding again? We DO NOT want to bloat the docs or complicate the code, but if there's a refinement that could prevent similar misunderstanding in the future, we'd like to prevent that.
