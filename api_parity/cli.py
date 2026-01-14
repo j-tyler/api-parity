@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -21,6 +23,111 @@ if TYPE_CHECKING:
 
 
 DEFAULT_TIMEOUT = 30.0
+
+
+class ProgressReporter:
+    """Reports progress every second in a background thread.
+
+    Usage:
+        reporter = ProgressReporter(total=100, unit="cases")
+        reporter.start()
+        for item in items:
+            process(item)
+            reporter.increment()
+        reporter.stop()
+    """
+
+    def __init__(self, total: int | None = None, unit: str = "cases") -> None:
+        """Initialize the progress reporter.
+
+        Args:
+            total: Total number of items (None if unknown).
+            unit: Unit name for display (e.g., "cases", "chains", "bundles").
+        """
+        self._total = total
+        self._unit = unit
+        self._completed = 0
+        self._start_time = 0.0
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last_print_len = 0
+
+    def start(self) -> None:
+        """Start the progress reporter background thread."""
+        self._start_time = time.monotonic()
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Stop the progress reporter and clear the progress line."""
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        # Clear the progress line
+        if self._last_print_len > 0:
+            sys.stderr.write("\r" + " " * self._last_print_len + "\r")
+            sys.stderr.flush()
+
+    def increment(self, count: int = 1) -> None:
+        """Increment the completed count."""
+        with self._lock:
+            self._completed += count
+
+    def set_total(self, total: int) -> None:
+        """Set the total count (useful when total becomes known later)."""
+        with self._lock:
+            self._total = total
+
+    def _run(self) -> None:
+        """Background thread that prints progress every second."""
+        while not self._stop_event.wait(timeout=1.0):
+            self._print_progress()
+
+    def _print_progress(self) -> None:
+        """Print current progress to stderr."""
+        with self._lock:
+            completed = self._completed
+            total = self._total
+
+        elapsed = time.monotonic() - self._start_time
+        if elapsed < 0.1:
+            return  # Don't print immediately
+
+        rate = completed / elapsed if elapsed > 0 else 0
+
+        if total is not None and total > 0:
+            percent = (completed / total) * 100
+            remaining = total - completed
+            eta_seconds = remaining / rate if rate > 0 else 0
+            eta_str = self._format_duration(eta_seconds)
+            line = f"\r[Progress] {completed}/{total} {self._unit} ({percent:.1f}%) | {rate:.1f}/s | ETA: {eta_str}"
+        else:
+            elapsed_str = self._format_duration(elapsed)
+            line = f"\r[Progress] {completed} {self._unit} | {rate:.1f}/s | Elapsed: {elapsed_str}"
+
+        # Pad to clear previous line if it was longer
+        if len(line) < self._last_print_len:
+            line = line + " " * (self._last_print_len - len(line))
+        self._last_print_len = len(line)
+
+        sys.stderr.write(line)
+        sys.stderr.flush()
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        """Format a duration in seconds as a human-readable string."""
+        if seconds < 60:
+            return f"{seconds:.0f}s"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            secs = int(seconds % 60)
+            return f"{minutes}m{secs}s"
+        else:
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            return f"{hours}h{minutes}m"
 
 
 def positive_float(value: str) -> float:
@@ -568,6 +675,8 @@ def run_explore(args: ExploreArgs) -> int:
     if args.operation_timeout:
         for op_id, timeout in args.operation_timeout.items():
             print(f"  Timeout for {op_id}: {timeout}s")
+    if runtime_config.rate_limit:
+        print(f"  Rate limit: {runtime_config.rate_limit.requests_per_second} req/s")
     print()
 
     # Initialize components
@@ -584,16 +693,33 @@ def run_explore(args: ExploreArgs) -> int:
         print(f"Error starting CEL evaluator: {e}", file=sys.stderr)
         return 1
 
+    progress_reporter: ProgressReporter | None = None
+
     try:
         comparator = Comparator(cel_evaluator, comparison_library)
 
         # Start executor
+        requests_per_second = (
+            runtime_config.rate_limit.requests_per_second
+            if runtime_config.rate_limit
+            else None
+        )
+
+        # Create progress reporter
+        # For stateless: total is max_cases if specified
+        # For stateful: total is set after chains are generated
+        progress_unit = "chains" if args.stateful else "cases"
+        progress_total = None if args.stateful else args.max_cases
+        progress_reporter = ProgressReporter(total=progress_total, unit=progress_unit)
+        progress_reporter.start()
+
         with Executor(
             target_a_config,
             target_b_config,
             default_timeout=args.timeout,
             operation_timeouts=args.operation_timeout,
             link_fields=generator.get_link_fields(),
+            requests_per_second=requests_per_second,
         ) as executor:
 
             if args.stateful:
@@ -611,6 +737,7 @@ def run_explore(args: ExploreArgs) -> int:
                     max_steps=args.max_steps,
                     seed=args.seed,
                     get_operation_rules=get_operation_rules,
+                    progress_reporter=progress_reporter,
                 )
             else:
                 # Stateless testing
@@ -626,17 +753,23 @@ def run_explore(args: ExploreArgs) -> int:
                     max_cases=args.max_cases,
                     seed=args.seed,
                     get_operation_rules=get_operation_rules,
+                    progress_reporter=progress_reporter,
                 )
 
     except CELSubprocessError as e:
         print(f"\nFatal: CEL evaluator crashed: {e}", file=sys.stderr)
+        if progress_reporter is not None:
+            progress_reporter.stop()
         return 1
     except KeyboardInterrupt:
         print("\nInterrupted by user")
+        stats.interrupted = True
     finally:
+        if progress_reporter is not None:
+            progress_reporter.stop()
         cel_evaluator.close()
 
-    # Write summary
+    # Write summary (includes any mismatches found before interrupt)
     writer.write_summary(stats, seed=args.seed)
 
     # Print summary
@@ -669,6 +802,7 @@ def _run_stateless_explore(
     max_cases: int | None,
     seed: int | None,
     get_operation_rules: Callable[[ComparisonRules, str], Any],
+    progress_reporter: ProgressReporter | None = None,
 ) -> None:
     """Execute stateless (single-request) testing."""
     from api_parity.executor import RequestError
@@ -712,6 +846,10 @@ def _run_stateless_explore(
             stats.errors += 1
             print(f"ERROR: {e}")
 
+        # Update progress reporter
+        if progress_reporter is not None:
+            progress_reporter.increment()
+
 
 def _run_stateful_explore(
     generator: CaseGenerator,
@@ -726,6 +864,7 @@ def _run_stateful_explore(
     max_steps: int,
     seed: int | None,
     get_operation_rules: Callable[[ComparisonRules, str], Any],
+    progress_reporter: ProgressReporter | None = None,
 ) -> None:
     """Execute stateful chain testing."""
     from api_parity.executor import RequestError
@@ -739,6 +878,10 @@ def _run_stateful_explore(
     )
     print(f"Generated {len(chains)} chains with multiple steps")
     print()
+
+    # Update progress reporter with total now that we know it
+    if progress_reporter is not None:
+        progress_reporter.set_total(len(chains))
 
     for chain in chains:
         stats.total_chains += 1
@@ -799,6 +942,10 @@ def _run_stateful_explore(
         except RequestError as e:
             stats.chain_errors += 1
             print(f"  ERROR: {e}")
+
+        # Update progress reporter
+        if progress_reporter is not None:
+            progress_reporter.increment()
 
 
 def run_replay(args: ReplayArgs) -> int:
@@ -934,6 +1081,8 @@ def run_replay(args: ReplayArgs) -> int:
     if args.operation_timeout:
         for op_id, timeout in args.operation_timeout.items():
             print(f"  Timeout for {op_id}: {timeout}s")
+    if runtime_config.rate_limit:
+        print(f"  Rate limit: {runtime_config.rate_limit.requests_per_second} req/s")
     print()
 
     # Report load errors
@@ -959,16 +1108,29 @@ def run_replay(args: ReplayArgs) -> int:
         print(f"Error starting CEL evaluator: {e}", file=sys.stderr)
         return 1
 
+    progress_reporter: ProgressReporter | None = None
+
     try:
         comparator = Comparator(cel_evaluator, comparison_library)
 
         # Start executor with link_fields for chain variable extraction
+        requests_per_second = (
+            runtime_config.rate_limit.requests_per_second
+            if runtime_config.rate_limit
+            else None
+        )
+
+        # Create progress reporter for replay
+        progress_reporter = ProgressReporter(total=len(loaded_bundles), unit="bundles")
+        progress_reporter.start()
+
         with Executor(
             target_a_config,
             target_b_config,
             default_timeout=args.timeout,
             operation_timeouts=args.operation_timeout,
             link_fields=link_fields if link_fields else None,
+            requests_per_second=requests_per_second,
         ) as executor:
 
             # Replay each pre-loaded bundle
@@ -984,16 +1146,22 @@ def run_replay(args: ReplayArgs) -> int:
                     target_b_info=target_b_info,
                     get_operation_rules=get_operation_rules,
                 )
+                progress_reporter.increment()
 
     except CELSubprocessError as e:
         print(f"\nFatal: CEL evaluator crashed: {e}", file=sys.stderr)
+        if progress_reporter is not None:
+            progress_reporter.stop()
         return 1
     except KeyboardInterrupt:
         print("\nInterrupted by user")
+        stats.interrupted = True
     finally:
+        if progress_reporter is not None:
+            progress_reporter.stop()
         cel_evaluator.close()
 
-    # Write summary
+    # Write summary (includes results from before interrupt)
     writer.write_replay_summary(stats, args.input_dir)
 
     # Print summary
