@@ -39,7 +39,9 @@ api-parity is a local CLI that compares two deployments of a "theoretically iden
 
 ---
 
-## Execution Modes [SPECIFIED]
+## Execution Modes [IMPLEMENTED]
+
+All three execution modes are fully implemented and tested.
 
 ### Mode A: Explore
 
@@ -63,16 +65,23 @@ api-parity explore \
 
 ### Mode B: Replay
 
-Load previously saved mismatch bundles and re-execute them against both targets. Confirm whether mismatches still exist (regression tracking).
+Load previously saved mismatch bundles and re-execute them against both targets. Classify outcomes for regression tracking.
 
 ```
 api-parity replay \
   --config runtime.yaml \
   --target-a <name> \
   --target-b <name> \
-  --in ./artifacts/mismatches \
+  --in ./artifacts \
   --out ./artifacts/replay
 ```
+
+**Replay classifications:**
+- `FIXED` — Previously mismatched, now matches (issue resolved)
+- `STILL MISMATCH` — Same failure pattern persists (same mismatch_type and paths)
+- `DIFFERENT MISMATCH` — Fails differently than before (rules changed or new issue)
+
+**Output:** Console summary during run, plus `replay_summary.json` with counts and bundle lists for programmatic access.
 
 ### Mode C: List Operations
 
@@ -506,9 +515,9 @@ The Comparator calls `evaluate()` for each field comparison. It has no knowledge
 
 ---
 
-## Bundle Loader [SPECIFIED]
+## Bundle Loader [IMPLEMENTED]
 
-The Bundle Loader (`api_parity/bundle_loader.py`) reads mismatch bundles from disk for replay mode. It reconstructs the original test cases and comparison results.
+The Bundle Loader (`api_parity/bundle_loader.py`) reads mismatch bundles from disk for replay mode. Fully implemented and tested. Supports both stateless and chain bundles.
 
 ### Interface
 

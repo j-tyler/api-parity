@@ -88,37 +88,109 @@ MATCH   GET /widgets/{id} (getWidget)
   metadata.json     # Run context
 ```
 
-## Replay Mismatches
+## Analyze Mismatch Bundles
 
-After fixing issues or updating comparison rules, verify with replay:
+Each bundle directory contains everything needed to understand the failure:
+
+**diff.json** — Start here. Shows what failed and why:
+```json
+{
+  "match": false,
+  "mismatch_type": "body",
+  "summary": "Body mismatch at $.price",
+  "details": {
+    "body": {
+      "differences": [
+        {"path": "$.price", "target_a": 19.99, "target_b": 20.00, "rule": "exact_match"}
+      ]
+    }
+  }
+}
+```
+
+**case.json** — The request that triggered the mismatch. Useful for reproducing manually.
+
+**target_a.json / target_b.json** — Full responses for detailed comparison.
+
+## Iterative Fix Workflow
+
+The typical workflow cycles through: explore → analyze → fix → replay.
+
+### Cycle 1: Initial Discovery
+
+```bash
+# Run exploration
+api-parity explore --spec openapi.yaml --config config.yaml \
+  --target-a production --target-b staging --out ./round1
+
+# Review mismatches
+ls ./round1/mismatches/
+grep -h '"summary"' ./round1/mismatches/*/diff.json
+```
+
+### Cycle 2: Add Rules for Expected Differences
+
+Update `comparison_rules.json` based on what you learned:
+
+```json
+{
+  "version": "1",
+  "default_rules": {
+    "status_code": {"predefined": "exact_match"},
+    "body": {
+      "field_rules": {
+        "$.id": {"predefined": "uuid_format"},
+        "$.created_at": {"predefined": "iso_timestamp_format"},
+        "$.updated_at": {"predefined": "iso_timestamp_format"}
+      }
+    }
+  }
+}
+```
+
+### Cycle 3: Replay to Verify
 
 ```bash
 api-parity replay \
   --config config.yaml \
   --target-a production \
   --target-b staging \
-  --in ./artifacts \
-  --out ./replay-results
+  --in ./round1 \
+  --out ./round1-replay
 ```
 
 **Console output:**
 ```
 [1] createWidget: POST /widgets FIXED
-[2] getWidget: GET /widgets/{id} STILL MISMATCH: body mismatch at $.updated_at
+[2] getWidget: GET /widgets/{id} STILL MISMATCH: body mismatch at $.price
 ============================================================
 Total bundles: 2
   Fixed (now match):     1
   Still mismatch:        1
   Different mismatch:    0
   Errors:                0
+
+Fixed bundles:
+  20260112T143052__createWidget__abc123
 ```
 
-Replay classifies each bundle:
-- **FIXED** — Previously mismatched, now matches (issue resolved)
-- **STILL MISMATCH** — Same issue persists
-- **DIFFERENT MISMATCH** — Fails differently than before (new issue)
+### Cycle 4: Investigate Remaining Issues
 
-Results are written to `./replay-results/replay_summary.json`.
+For `STILL MISMATCH` cases, examine the new bundles in `./round1-replay/mismatches/`:
+- If expected difference: add more rules
+- If real bug: fix the API implementation
+
+Repeat until all show `FIXED` or are documented as acceptable.
+
+## Replay Classifications
+
+| Classification | Meaning | Action |
+|---------------|---------|--------|
+| `FIXED` | Was mismatch, now matches | Issue resolved |
+| `STILL MISMATCH` | Same failure pattern | Investigate further |
+| `DIFFERENT MISMATCH` | Fails differently | Rules changed or new issue |
+
+Results are also written to `./round1-replay/replay_summary.json` for programmatic access.
 
 ## Next Steps
 
