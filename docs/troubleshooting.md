@@ -83,6 +83,34 @@ Environment variable PROD_TOKEN is not set
 export PROD_TOKEN="your-token-here"
 ```
 
+### operationId not found in spec (warning)
+
+```
+WARNING: [operation_rules] operationId 'createWidgett' not found in spec
+```
+
+**Cause:** Typo in operationId, or operation was removed from spec.
+
+**Fix:** Check spelling against `api-parity list-operations --spec openapi.yaml`. Common typos:
+- Extra letters (`createWidgett` vs `createWidget`)
+- Case mismatch (`createwidget` vs `createWidget`)
+- Underscore vs camelCase (`create_widget` vs `createWidget`)
+
+**Note:** This is a warning, not an error. The rules for this operationId will be silently ignored, falling back to default_rules.
+
+### Rules for operationId silently ignored
+
+**Symptom:** You defined custom rules for an operation, but they're not being used.
+
+**Cause:** The operationId in `operation_rules` doesn't match the spec exactly.
+
+**Fix:** Run `--validate` to check for operationId mismatches:
+```bash
+api-parity explore --validate --spec openapi.yaml --config config.yaml ...
+```
+
+Look for warnings like: `operationId 'X' not found in spec`
+
 ## CEL Expression Errors
 
 ### Syntax error in expression

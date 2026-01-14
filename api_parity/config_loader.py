@@ -250,3 +250,219 @@ def _substitute_string(s: str) -> str:
         return value
 
     return pattern.sub(replacer, s)
+
+
+# =============================================================================
+# Cross-Validation Functions
+# =============================================================================
+
+
+class ValidationWarning:
+    """A non-fatal validation warning."""
+
+    def __init__(self, category: str, message: str) -> None:
+        self.category = category
+        self.message = message
+
+    def __str__(self) -> str:
+        return f"[{self.category}] {self.message}"
+
+
+class ValidationError:
+    """A fatal validation error."""
+
+    def __init__(self, category: str, message: str) -> None:
+        self.category = category
+        self.message = message
+
+    def __str__(self) -> str:
+        return f"[{self.category}] {self.message}"
+
+
+class ValidationResult:
+    """Result of cross-validation checks."""
+
+    def __init__(self) -> None:
+        self.warnings: list[ValidationWarning] = []
+        self.errors: list[ValidationError] = []
+
+    def add_warning(self, category: str, message: str) -> None:
+        self.warnings.append(ValidationWarning(category, message))
+
+    def add_error(self, category: str, message: str) -> None:
+        self.errors.append(ValidationError(category, message))
+
+    @property
+    def is_valid(self) -> bool:
+        """True if no errors (warnings are OK)."""
+        return len(self.errors) == 0
+
+    def merge(self, other: "ValidationResult") -> None:
+        """Merge another result into this one."""
+        self.warnings.extend(other.warnings)
+        self.errors.extend(other.errors)
+
+
+def validate_comparison_rules(
+    rules: ComparisonRulesFile,
+    library: ComparisonLibrary,
+    spec_operation_ids: set[str],
+) -> ValidationResult:
+    """Validate comparison rules against spec and library.
+
+    Checks:
+    1. operationIds in operation_rules exist in the spec
+    2. Predefined names are valid (exist in library)
+    3. Required parameters for predefined rules are present
+
+    Args:
+        rules: Loaded comparison rules file.
+        library: Loaded comparison library.
+        spec_operation_ids: Set of valid operationIds from the OpenAPI spec.
+
+    Returns:
+        ValidationResult with any warnings or errors.
+    """
+    result = ValidationResult()
+    valid_predefined = set(library.predefined.keys())
+
+    # Check operation_rules operationIds
+    for op_id in rules.operation_rules.keys():
+        if op_id not in spec_operation_ids:
+            result.add_warning(
+                "operation_rules",
+                f"operationId '{op_id}' not found in spec. "
+                f"Rules for this operation will be ignored."
+            )
+
+    # Validate predefined names and parameters in default_rules
+    _validate_operation_rules(
+        rules.default_rules, valid_predefined, library, "default_rules", result
+    )
+
+    # Validate predefined names and parameters in each operation override
+    for op_id, op_rules in rules.operation_rules.items():
+        _validate_operation_rules(
+            op_rules, valid_predefined, library, f"operation_rules.{op_id}", result
+        )
+
+    return result
+
+
+def _validate_operation_rules(
+    rules: OperationRules,
+    valid_predefined: set[str],
+    library: ComparisonLibrary,
+    context: str,
+    result: ValidationResult,
+) -> None:
+    """Validate predefined names and parameters in an OperationRules instance.
+
+    Args:
+        rules: The OperationRules to validate.
+        valid_predefined: Set of valid predefined comparison names.
+        library: The comparison library (for parameter checking).
+        context: Context string for error messages (e.g., "default_rules").
+        result: ValidationResult to add warnings/errors to.
+    """
+    # Check status_code rule
+    if rules.status_code and rules.status_code.predefined:
+        _validate_field_rule(
+            rules.status_code, valid_predefined, library,
+            f"{context}.status_code", result
+        )
+
+    # Check header rules
+    for header_name, header_rule in rules.headers.items():
+        if header_rule.predefined:
+            _validate_field_rule(
+                header_rule, valid_predefined, library,
+                f"{context}.headers.{header_name}", result
+            )
+
+    # Check body field rules
+    if rules.body and rules.body.field_rules:
+        for jsonpath, field_rule in rules.body.field_rules.items():
+            if field_rule.predefined:
+                _validate_field_rule(
+                    field_rule, valid_predefined, library,
+                    f"{context}.body.field_rules[{jsonpath}]", result
+                )
+
+
+def _validate_field_rule(
+    rule: "FieldRule",
+    valid_predefined: set[str],
+    library: ComparisonLibrary,
+    context: str,
+    result: ValidationResult,
+) -> None:
+    """Validate a single field rule's predefined name and parameters.
+
+    Args:
+        rule: The FieldRule to validate.
+        valid_predefined: Set of valid predefined comparison names.
+        library: The comparison library.
+        context: Context string for error messages.
+        result: ValidationResult to add warnings/errors to.
+    """
+    predefined_name = rule.predefined
+    if predefined_name not in valid_predefined:
+        result.add_error(
+            "predefined",
+            f"{context}: Unknown predefined '{predefined_name}'. "
+            f"Valid options: {', '.join(sorted(valid_predefined))}"
+        )
+        return
+
+    # Check required parameters
+    predefined_def = library.predefined[predefined_name]
+    for param in predefined_def.params:
+        param_value = getattr(rule, param, None)
+        if param_value is None:
+            result.add_error(
+                "predefined",
+                f"{context}: Predefined '{predefined_name}' requires parameter "
+                f"'{param}' but it was not provided."
+            )
+
+
+def validate_cli_operation_ids(
+    exclude_ops: list[str],
+    operation_timeouts: dict[str, float],
+    spec_operation_ids: set[str],
+) -> ValidationResult:
+    """Validate CLI-specified operationIds against the spec.
+
+    Checks:
+    1. --exclude operationIds exist in the spec
+    2. --operation-timeout operationIds exist in the spec
+
+    Args:
+        exclude_ops: List of operationIds from --exclude flags.
+        operation_timeouts: Dict of operationId -> timeout from --operation-timeout.
+        spec_operation_ids: Set of valid operationIds from the OpenAPI spec.
+
+    Returns:
+        ValidationResult with any warnings or errors.
+    """
+    result = ValidationResult()
+
+    # Check --exclude operationIds
+    for op_id in exclude_ops:
+        if op_id not in spec_operation_ids:
+            result.add_warning(
+                "exclude",
+                f"--exclude '{op_id}' not found in spec. Flag has no effect."
+            )
+
+    # Check --operation-timeout operationIds
+    for op_id in operation_timeouts.keys():
+        if op_id not in spec_operation_ids:
+            result.add_warning(
+                "operation-timeout",
+                f"--operation-timeout '{op_id}' not found in spec. "
+                f"Timeout will never be used."
+            )
+
+    return result

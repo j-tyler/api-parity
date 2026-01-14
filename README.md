@@ -222,24 +222,46 @@ Built-in comparisons available via `{"predefined": "name"}`. In all expressions,
 |------|------------|-------------|
 | `ignore` | — | Always passes. Field is not compared. |
 | `exact_match` | — | Values must be exactly equal (`a == b`). |
-| `numeric_tolerance` | `tolerance` | Numbers equal within tolerance: `\|a - b\| <= tolerance` |
+| **Format Validation** |
 | `uuid_format` | — | Both values are valid UUID format. Values not compared. |
 | `uuid_v4_format` | — | Both values are valid UUID v4 format. Values not compared. |
-| `iso_timestamp_format` | — | Both values are ISO 8601 timestamps. Values not compared. |
-| `epoch_seconds_tolerance` | `seconds` | Unix timestamps (seconds) within N seconds of each other. |
-| `epoch_millis_tolerance` | `millis` | Unix timestamps (milliseconds) within N ms of each other. |
-| `unordered_array` | — | Arrays have same elements, order ignored. **WARNING:** Doesn't handle duplicates correctly. |
-| `array_length` | — | Arrays have same length. Contents not compared. |
-| `array_length_tolerance` | `tolerance` | Array lengths differ by at most N elements. |
-| `string_prefix` | `length` | First N characters match. |
-| `string_nonempty` | — | Both strings are non-empty. Content not compared. |
-| `both_match_regex` | `pattern` | Both values match the regex pattern. |
-| `both_null` | — | Both values are null. |
-| `both_null_or_equal` | — | Both null, or both non-null and equal. |
-| `type_match` | — | Values have same type. Values not compared. |
+| `url_format` | — | Both values are valid URL format (http/https). Values not compared. |
+| `iso_timestamp_format` | — | Both values are ISO 8601 timestamps with time. Values not compared. |
+| `iso_date_format` | — | Both values are ISO 8601 dates (YYYY-MM-DD). Values not compared. |
+| `jwt_format` | — | Both values are valid JWT format. Values not compared. |
+| `base64_format` | — | Both values are valid base64 format. Values not compared. |
+| `hex_string` | — | Both values are hex strings of same length. Values not compared. |
+| **Numeric** |
+| `numeric_tolerance` | `tolerance` | Numbers equal within tolerance: `\|a - b\| <= tolerance` |
 | `both_positive` | — | Both values are positive numbers. |
+| `both_non_negative` | — | Both values are >= 0. |
+| `both_integer` | — | Both values are integers (no fractional part). |
 | `same_sign` | — | Both values have same sign (positive, negative, or zero). |
 | `both_in_range` | `min`, `max` | Both values fall within [min, max] inclusive. |
+| **Timestamps** |
+| `epoch_seconds_tolerance` | `seconds` | Unix timestamps (seconds) within N seconds of each other. |
+| `epoch_millis_tolerance` | `millis` | Unix timestamps (milliseconds) within N ms of each other. |
+| **Strings** |
+| `string_prefix` | `length` | First N characters match. |
+| `string_suffix` | `length` | Last N characters match. |
+| `string_contains` | `substring` | Both strings contain the specified substring. |
+| `string_length_match` | — | Both strings have same length. Content not compared. |
+| `string_nonempty` | — | Both strings are non-empty. Content not compared. |
+| `both_match_regex` | `pattern` | Both values match the regex pattern. |
+| **Arrays** |
+| `unordered_array` | — | Arrays have same elements, order ignored. **WARNING:** Doesn't handle duplicates. |
+| `array_length` | — | Arrays have same length. Contents not compared. |
+| `array_length_tolerance` | `tolerance` | Array lengths differ by at most N elements. |
+| `array_nonempty` | — | Both arrays have at least one element. |
+| **Objects** |
+| `same_keys` | — | Both objects have identical key sets. Values not compared. |
+| `object_nonempty` | — | Both objects have at least one key. |
+| **Null/Type** |
+| `both_null` | — | Both values are null. |
+| `both_null_or_equal` | — | Both null, or both non-null and equal. |
+| `same_nullity` | — | Both null or both non-null. Values not compared. |
+| `both_boolean` | — | Both values are boolean type. Values not compared. |
+| `type_match` | — | Values have same type. Values not compared. |
 
 ### Custom CEL Expressions
 

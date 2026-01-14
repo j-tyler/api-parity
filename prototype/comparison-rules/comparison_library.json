@@ -51,10 +51,34 @@
       "expr": "(size(a) - size(b)) <= tolerance && (size(b) - size(a)) <= tolerance"
     },
 
+    "array_nonempty": {
+      "description": "Both arrays have at least one element. Contents not compared.",
+      "params": [],
+      "expr": "size(a) > 0 && size(b) > 0"
+    },
+
     "string_prefix": {
       "description": "First N characters of both strings match.",
       "params": ["length"],
       "expr": "a.substring(0, length) == b.substring(0, length)"
+    },
+
+    "string_suffix": {
+      "description": "Last N characters of both strings match. Both strings must be at least N characters long.",
+      "params": ["length"],
+      "expr": "size(a) >= length && size(b) >= length && a.substring(size(a) - length) == b.substring(size(b) - length)"
+    },
+
+    "string_contains": {
+      "description": "Both strings contain the specified substring.",
+      "params": ["substring"],
+      "expr": "a.contains(substring) && b.contains(substring)"
+    },
+
+    "string_length_match": {
+      "description": "Both strings have the same length. Actual content not compared.",
+      "params": [],
+      "expr": "size(a) == size(b)"
     },
 
     "string_nonempty": {
@@ -81,10 +105,40 @@
       "expr": "a.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$') && b.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$')"
     },
 
+    "url_format": {
+      "description": "Both values are valid URL format (http or https). Actual URLs not compared.",
+      "params": [],
+      "expr": "a.matches('^https?://[^\\\\s]+$') && b.matches('^https?://[^\\\\s]+$')"
+    },
+
     "iso_timestamp_format": {
-      "description": "Both values are ISO 8601 timestamp format. Actual values not compared.",
+      "description": "Both values are ISO 8601 timestamp format (with time). Actual values not compared.",
       "params": [],
       "expr": "a.matches('^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}') && b.matches('^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}')"
+    },
+
+    "iso_date_format": {
+      "description": "Both values are ISO 8601 date format (YYYY-MM-DD, no time). Actual values not compared.",
+      "params": [],
+      "expr": "a.matches('^\\\\d{4}-\\\\d{2}-\\\\d{2}$') && b.matches('^\\\\d{4}-\\\\d{2}-\\\\d{2}$')"
+    },
+
+    "jwt_format": {
+      "description": "Both values are valid JWT format (three base64url-encoded parts separated by dots). Actual tokens not compared.",
+      "params": [],
+      "expr": "a.matches('^[A-Za-z0-9_-]+\\\\.[A-Za-z0-9_-]+\\\\.[A-Za-z0-9_-]+$') && b.matches('^[A-Za-z0-9_-]+\\\\.[A-Za-z0-9_-]+\\\\.[A-Za-z0-9_-]+$')"
+    },
+
+    "base64_format": {
+      "description": "Both values are valid standard base64 format (non-empty). Actual content not compared.",
+      "params": [],
+      "expr": "a.matches('^[A-Za-z0-9+/]+={0,2}$') && b.matches('^[A-Za-z0-9+/]+={0,2}$')"
+    },
+
+    "hex_string": {
+      "description": "Both values are hexadecimal strings of the same length. Actual values not compared.",
+      "params": [],
+      "expr": "a.matches('^[0-9a-fA-F]+$') && b.matches('^[0-9a-fA-F]+$') && size(a) == size(b)"
     },
 
     "both_null": {
@@ -99,6 +153,18 @@
       "expr": "(a == null && b == null) || (a != null && b != null && a == b)"
     },
 
+    "same_nullity": {
+      "description": "Both values are null, or both values are non-null. Actual non-null values not compared.",
+      "params": [],
+      "expr": "(a == null) == (b == null)"
+    },
+
+    "both_boolean": {
+      "description": "Both values are boolean type. Actual values not compared.",
+      "params": [],
+      "expr": "type(a) == bool && type(b) == bool"
+    },
+
     "type_match": {
       "description": "Values have the same type. Actual values not compared.",
       "params": [],
@@ -111,6 +177,18 @@
       "expr": "a > 0 && b > 0"
     },
 
+    "both_non_negative": {
+      "description": "Both values are non-negative numbers (zero or positive).",
+      "params": [],
+      "expr": "a >= 0 && b >= 0"
+    },
+
+    "both_integer": {
+      "description": "Both values are integers (no fractional part). Actual values not compared.",
+      "params": [],
+      "expr": "int(a) == a && int(b) == b"
+    },
+
     "same_sign": {
       "description": "Both values have the same sign (both positive, both negative, or both zero).",
       "params": [],
@@ -121,6 +199,18 @@
       "description": "Both values fall within [min, max] inclusive.",
       "params": ["min", "max"],
       "expr": "(a >= min && a <= max) && (b >= min && b <= max)"
+    },
+
+    "same_keys": {
+      "description": "Both objects have identical key sets. Key values not compared. Use for objects/maps only.",
+      "params": [],
+      "expr": "size(a) == size(b) && a.all(k, k in b)"
+    },
+
+    "object_nonempty": {
+      "description": "Both objects have at least one key. Contents not compared.",
+      "params": [],
+      "expr": "size(a) > 0 && size(b) > 0"
     }
   }
 }

@@ -174,10 +174,52 @@ api-parity explore \
 
 ## Validation
 
-Use `--validate` to check configuration before running:
-- Verifies target names exist
-- Parses comparison rules
-- Validates CEL expressions
-- Checks OpenAPI spec is valid
+Use `--validate` to check configuration before running. This performs comprehensive cross-validation between your config files and the OpenAPI spec.
 
-No requests are made in validate mode, allowing safe pre-flight checks against production targets without side effects.
+### What Gets Validated
+
+**Config structure:**
+- Runtime config YAML syntax and required fields
+- Comparison rules JSON syntax and schema
+- Target names exist in config
+
+**Cross-validation against OpenAPI spec:**
+- `operationIds` in `operation_rules` exist in the spec (warns if not)
+- `--exclude` operationIds exist in the spec (warns if not)
+- `--operation-timeout` operationIds exist in the spec (warns if not)
+
+**Comparison rules validation:**
+- Predefined names are valid (errors if not: e.g., `"exact"` should be `"exact_match"`)
+- Required parameters are present (errors if not: e.g., `numeric_tolerance` needs `tolerance`)
+
+**Not validated:**
+- Custom CEL expression syntax (in `"expr"` fields) — validated only at runtime when evaluated
+
+### Output
+
+```
+Validating: spec=openapi.yaml, config=config.yaml
+  Targets: production, staging
+    production: https://api.example.com
+    staging: https://staging.example.com
+  Operations: 5
+    createWidget (POST /widgets)
+    getWidget (GET /widgets/{id})
+    ...
+
+Cross-validating configuration...
+
+Warnings:
+  WARNING: [operation_rules] operationId 'createWidgett' not found in spec. Rules for this operation will be ignored.
+
+Errors:
+  ERROR: [predefined] default_rules.body.field_rules[$.price]: Predefined 'numeric_tolerance' requires parameter 'tolerance' but it was not provided.
+
+Validation failed
+```
+
+**Exit codes:**
+- `0` — Validation passed (may have warnings)
+- `1` — Validation failed (has errors)
+
+No requests are made in validate mode, allowing safe pre-flight checks without side effects.

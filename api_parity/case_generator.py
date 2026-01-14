@@ -192,6 +192,25 @@ class CaseGenerator:
         self._operations_cache = operations
         return operations
 
+    def get_all_operation_ids(self) -> set[str]:
+        """Get all operation IDs from the spec (ignores exclude filter).
+
+        Useful for validation where you need to check against all spec
+        operations, not just the filtered ones.
+
+        Returns:
+            Set of all operationIds in the spec.
+        """
+        operation_ids = set()
+        for result in self._schema.get_all_operations():
+            op = result.ok()
+            if op is None:
+                continue
+            raw = op.definition.raw
+            operation_id = raw.get("operationId", f"{op.method}_{op.path}")
+            operation_ids.add(operation_id)
+        return operation_ids
+
     def generate(
         self,
         max_cases: int | None = None,
