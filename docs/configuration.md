@@ -106,6 +106,8 @@ If the run is interrupted (SIGINT/Ctrl+C), all mismatches found up to that point
 
 CLI arguments override config file values for that run.
 
+### Explore Command
+
 | CLI Flag | Description |
 |----------|-------------|
 | `--spec PATH` | OpenAPI spec file (required) |
@@ -123,7 +125,26 @@ CLI arguments override config file values for that run.
 | `--max-chains INT` | Maximum chains to generate in stateful mode (default: 20) |
 | `--max-steps INT` | Maximum steps per chain (default: 6) |
 
-### Examples
+### Replay Command
+
+| CLI Flag | Description |
+|----------|-------------|
+| `--config PATH` | Runtime config file (required) |
+| `--target-a NAME` | First target name from config (required) |
+| `--target-b NAME` | Second target name from config (required) |
+| `--in PATH` | Input directory containing mismatch bundles (required) |
+| `--out PATH` | Output directory for replay artifacts (required) |
+| `--validate` | Validate config without executing requests |
+| `--timeout SECONDS` | Default request timeout (default: 30) |
+| `--operation-timeout OPID:SECONDS` | Per-operation timeout (repeatable) |
+
+### List-Operations Command
+
+| CLI Flag | Description |
+|----------|-------------|
+| `--spec PATH` | OpenAPI spec file (required) |
+
+### Explore Examples
 
 ```bash
 # Basic run
@@ -164,6 +185,27 @@ api-parity explore \
   --target-b staging \
   --out ./artifacts \
   --validate
+```
+
+### Replay Examples
+
+```bash
+# Re-execute previously saved mismatches
+api-parity replay \
+  --config config.yaml \
+  --target-a production \
+  --target-b staging \
+  --in ./artifacts \
+  --out ./replay
+
+# Replay with custom timeout
+api-parity replay \
+  --config config.yaml \
+  --target-a production \
+  --target-b staging \
+  --in ./artifacts \
+  --out ./replay \
+  --timeout 60
 ```
 
 ## Precedence

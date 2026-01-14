@@ -416,13 +416,29 @@ The Config Loader (`api_parity/config_loader.py`) handles loading YAML runtime c
 ### Interface
 
 ```python
+# Loading functions
 def load_runtime_config(config_path: Path) -> RuntimeConfig: ...
 def load_comparison_rules(rules_path: Path) -> ComparisonRulesFile: ...
 def load_comparison_library(library_path: Path | None = None) -> ComparisonLibrary: ...
 def get_operation_rules(rules_file: ComparisonRulesFile, operation_id: str) -> OperationRules: ...
 def resolve_comparison_rules_path(config_path: Path, rules_ref: str) -> Path: ...
 def validate_targets(config: RuntimeConfig, target_a_name: str, target_b_name: str) -> tuple[TargetConfig, TargetConfig]: ...
+
+# Cross-validation functions (return ValidationResult with warnings/errors)
+def validate_comparison_rules(
+    rules: ComparisonRulesFile,
+    library: ComparisonLibrary,
+    spec_operation_ids: set[str],
+) -> ValidationResult: ...  # Validates operationIds exist, predefined names valid, required params present
+
+def validate_cli_operation_ids(
+    exclude_ops: list[str],
+    operation_timeouts: dict[str, float],
+    spec_operation_ids: set[str],
+) -> ValidationResult: ...  # Validates --exclude and --operation-timeout operationIds exist
 ```
+
+`ValidationResult` has `.is_valid` (True if no errors), `.warnings`, and `.errors` lists. Warnings are for non-fatal issues (e.g., operationId not found - rules ignored). Errors are for fatal issues (e.g., unknown predefined name).
 
 ### Environment Variable Substitution
 
@@ -475,8 +491,20 @@ Infrastructure failures (`CELSubprocessError` from subprocess crash) propagate a
 
 ```python
 class Comparator:
-    def __init__(self, cel_evaluator: CELEvaluator, comparison_library: ComparisonLibrary): ...
-    def compare(self, response_a: ResponseCase, response_b: ResponseCase, rules: OperationRules) -> ComparisonResult: ...
+    def __init__(
+        self,
+        cel_evaluator: CELEvaluator,
+        comparison_library: ComparisonLibrary,
+        schema_validator: SchemaValidator | None = None,  # Optional, for schema validation
+    ): ...
+
+    def compare(
+        self,
+        response_a: ResponseCase,
+        response_b: ResponseCase,
+        rules: OperationRules,
+        operation_id: str | None = None,  # Needed for schema validation to run
+    ) -> ComparisonResult: ...
 ```
 
 Caller owns CEL Evaluator lifecycle:
@@ -486,6 +514,18 @@ with CELEvaluator() as cel:
     comparator = Comparator(cel, library)
     result = comparator.compare(response_a, response_b, rules)
 ```
+
+With schema validation (OpenAPI Spec as Field Authority):
+
+```python
+from api_parity.schema_validator import SchemaValidator
+validator = SchemaValidator(spec_path)
+with CELEvaluator() as cel:
+    comparator = Comparator(cel, library, schema_validator=validator)
+    result = comparator.compare(response_a, response_b, rules, operation_id="createWidget")
+```
+
+When `schema_validator` is provided, the Comparator validates each response against the OpenAPI schema before comparison. Schema violations are recorded as mismatches. The `operation_id` parameter is required for schema lookup when using schema validation.
 
 See "Per-Endpoint Comparison Rules" for rule semantics (presence modes, predefined expansion, header handling).
 
@@ -510,6 +550,12 @@ go build -o cel-evaluator cmd/cel-evaluator
 Python side (`api_parity/cel_evaluator.py`):
 ```python
 class CELEvaluator:
+    # Class constants
+    MAX_RESTARTS = 3          # Restart attempts before giving up
+    STARTUP_TIMEOUT = 5.0     # Seconds to wait for ready signal
+    EVALUATION_TIMEOUT = 10.0 # Seconds per evaluate() call (Go has internal 5s limit)
+
+    def __init__(self, binary_path: str | Path | None = None): ...
     def evaluate(self, expression: str, data: dict[str, Any]) -> bool: ...
     def close(self) -> None: ...
 ```
@@ -521,7 +567,8 @@ The Comparator calls `evaluate()` for each field comparison. It has no knowledge
 - Started once at CLI startup (before explore/replay begins)
 - Kept alive for duration of run
 - Terminated on CLI exit (close stdin, wait for process)
-- Restarted automatically if subprocess crashes (EOF detected on stdout)
+- Restarted automatically if subprocess crashes (EOF detected on stdout), up to `MAX_RESTARTS` times
+- `CELSubprocessError` raised if subprocess fails to start or exceeds restart limit
 
 ---
 
