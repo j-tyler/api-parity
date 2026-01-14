@@ -49,6 +49,25 @@ Response fields not present in the OpenAPI spec are treated as mismatches. This 
 
 ---
 
+# Handling additionalProperties in Schema Validation
+
+Keywords: additionalProperties schema validation extra fields json-schema
+Date: 20260114
+
+When validating responses against the OpenAPI spec, respect the `additionalProperties` setting:
+
+1. **`additionalProperties: false`** — Extra fields are a schema violation error. The spec explicitly forbids them.
+
+2. **`additionalProperties: true`** — Extra fields are allowed per schema, but still compared between implementations. The spec says "extra fields are OK" but doesn't say "extra fields can differ between A and B."
+
+3. **Not specified (default)** — Treat as `true` per JSON Schema default. Be lenient on schema validation but still compare extras between implementations.
+
+This distinction matters because schema validity and implementation equivalence are separate concerns. A response can be valid (matches schema) but not equivalent (differs from other implementation). Example: if the spec allows extras and Target A returns `{id: 1, debug: "foo"}` while Target B returns `{id: 1, trace_id: "bar"}`, both are schema-valid but they're not equivalent—the LLM agent should know about this divergence.
+
+For extra fields (not defined in spec), use equality comparison by default. Users can add comparison rules for specific extra fields if needed (e.g., to ignore `debug_info` on both sides).
+
+---
+
 # User-Defined Comparison Rules Required
 
 Keywords: comparison rules configuration per-endpoint diff
