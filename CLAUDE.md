@@ -343,6 +343,31 @@ These patterns apply when working with the Go CEL subprocess:
 
 8. **Always use timeouts on blocking I/O** — See "CRITICAL: No Blocking Code Without Timeouts" above. The CELEvaluator uses `select.select()` before every `readline()` call with `EVALUATION_TIMEOUT = 10.0` seconds. This is not optional.
 
+## Replay Command Gotchas
+
+The replay command re-executes saved mismatch bundles. Key things to know:
+
+1. **Classification is by failure pattern, not values** — `_is_same_mismatch()` compares `mismatch_type` and failing paths, not actual values. Two runs with different timestamps at `$.created_at` are "same mismatch" if both fail at that path.
+
+2. **DIFFERENT MISMATCH is expected after rule changes** — If you add a rule for `$.id`, a bundle that previously failed at `$.id` might now fail at `$.other_field` or pass entirely. This is correct behavior, not a bug.
+
+3. **Chain replay doesn't have the OpenAPI spec** — `extract_link_fields_from_chain()` parses link_source from stored chain data, not the spec. If spec field names changed, chain replay may extract wrong variables. Solution: regenerate chains with `explore --stateful`.
+
+4. **Replay writes new bundles for persistent mismatches** — Bundles in `--out` directory are fresh captures from replay execution, not copies of input bundles. They contain current response data.
+
+5. **Bundle discovery is lenient** — `discover_bundles()` silently skips directories without `case.json` or `chain.json`. It checks for `mismatches/` subdirectory first, then searches the input directory directly. If bundle count in summary is lower than expected, verify bundle directories contain the required files.
+
+6. **ReplayStats tracks bundle names** — `fixed_bundles`, `persistent_bundles`, and `changed_bundles` lists contain bundle directory names (not full paths). Useful for reporting which specific issues were resolved.
+
+7. **--in points to explore output, not a specific bundle**:
+   ```bash
+   # Correct
+   api-parity replay --in ./artifacts ...
+
+   # Wrong - points to a specific bundle
+   api-parity replay --in ./artifacts/mismatches/20260112T... ...
+   ```
+
 ## Running Tests
 
 **Build the CEL evaluator before running tests.** Many tests require the Go CEL binary. Without it, tests fail with `CELSubprocessError: CEL evaluator binary not found`.

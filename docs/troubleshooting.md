@@ -259,6 +259,71 @@ If field should exist in both, this is a real mismatch—investigate.
 
 **Fix:** Verify JSON Pointer path in link expression matches actual response field name.
 
+## Replay Issues
+
+### All bundles show DIFFERENT MISMATCH
+
+**Cause:** Comparison rules changed between explore and replay runs.
+
+**Explanation:** Replay classifies by failure pattern (mismatch_type and paths), not exact values. If rules changed, the same data may fail at different fields.
+
+**Fix:** This is expected when updating rules. After finalizing rules, run a fresh `explore` to create a new baseline for future replay cycles.
+
+### Bundle fails to load
+
+```
+ERROR: {bundle_path} - missing case.json
+```
+
+**Cause:** Bundle directory is incomplete or corrupted.
+
+**Fix:** Re-run explore to regenerate bundles. If the issue persists, check disk space and permissions.
+
+### No mismatch bundles found
+
+```
+No mismatch bundles found in ./artifacts
+```
+
+**Cause:** Input directory doesn't contain bundles, or bundles are in a subdirectory.
+
+**Fix:** Replay looks for bundles in `{input}/mismatches/` or directly in `{input}`. Ensure you're pointing to the explore output directory, not a specific bundle.
+
+```bash
+# Correct - points to explore output directory
+api-parity replay --in ./artifacts ...
+
+# Wrong - points to a specific bundle
+api-parity replay --in ./artifacts/mismatches/20260112T... ...
+```
+
+### Chain replay uses wrong variables
+
+**Cause:** During replay, link_fields are extracted from the chain's stored `link_source` data, not the OpenAPI spec. If the chain was generated with a different spec version, field names may not match current responses.
+
+**Fix:** Regenerate chains with the current spec using `explore --stateful`.
+
+### replay_summary.json not written
+
+**Cause:** Replay was interrupted before completion.
+
+**Fix:** Re-run replay. The summary is written after all bundles are processed.
+
+### FIXED count is 0 but issues were resolved
+
+**Cause:** The original mismatch may have involved multiple fields. You fixed one issue, but another field (e.g., a timestamp) still mismatches because it lacks a comparison rule.
+
+**Fix:**
+1. Check if comparison rules cover all fields that originally mismatched
+2. For volatile fields (timestamps, UUIDs), add format validation rules
+3. Run `explore` again to get fresh baseline bundles
+
+### Bundle count lower than expected
+
+**Cause:** `discover_bundles()` silently skips directories that don't contain `case.json` or `chain.json`.
+
+**Fix:** Compare expected vs actual: `ls ./artifacts/mismatches | wc -l` vs `total_bundles` in `replay_summary.json`. If they differ, check that each bundle directory contains the required files.
+
 ## Debug Tips
 
 ### Validate before running

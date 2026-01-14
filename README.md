@@ -4,7 +4,7 @@ Differential fuzzing tool for comparing two API implementations against an OpenA
 
 ## Status
 
-**In development** — `explore` subcommand fully implemented with stateless test generation, dual-target execution, response comparison, and mismatch artifact writing. `replay` subcommand pending. See ARCHITECTURE.md and DESIGN.md for technical details.
+**Ready for use** — Both `explore` and `replay` subcommands are fully implemented. Supports stateless single-request testing and stateful chain testing via OpenAPI links. See ARCHITECTURE.md and DESIGN.md for technical details.
 
 **Languages:** Python (primary), Go (CEL evaluator subprocess)
 
@@ -68,14 +68,89 @@ api-parity explore \
   --target-b staging \
   --out ./artifacts
 
-# Replay: re-run saved mismatches to verify fixes (not yet implemented)
+# Replay: re-run saved mismatches to verify fixes
 api-parity replay \
   --config config.yaml \
   --target-a production \
   --target-b staging \
-  --in ./artifacts/mismatches \
-  --out ./artifacts/replay
+  --in ./artifacts \
+  --out ./replay-results
 ```
+
+## Replay Workflow
+
+The typical api-parity workflow is iterative: explore, analyze, fix, replay.
+
+### 1. Explore and Discover Mismatches
+
+```bash
+api-parity explore \
+  --spec openapi.yaml \
+  --config config.yaml \
+  --target-a production \
+  --target-b staging \
+  --out ./artifacts \
+  --max-cases 100
+```
+
+### 2. Analyze Mismatch Bundles
+
+Each mismatch in `./artifacts/mismatches/` contains:
+- `case.json` — The request sent
+- `target_a.json` / `target_b.json` — Responses received
+- `diff.json` — Structured diff showing what differed
+
+### 3. Update Comparison Rules or Fix API Issues
+
+For expected differences (timestamps, UUIDs), add field rules to `default_rules.body.field_rules` in your `comparison_rules.json`:
+
+```json
+{
+  "$.created_at": {"predefined": "iso_timestamp_format"},
+  "$.id": {"predefined": "uuid_format"},
+  "$.price": {"predefined": "numeric_tolerance", "tolerance": 0.01}
+}
+```
+
+For real bugs, fix the API implementation.
+
+### 4. Verify Fixes with Replay
+
+```bash
+api-parity replay \
+  --config config.yaml \
+  --target-a production \
+  --target-b staging \
+  --in ./artifacts \
+  --out ./replay-results
+```
+
+**Output:**
+```
+[1] createWidget: POST /widgets FIXED
+[2] updateWidget: PUT /widgets/{id} STILL MISMATCH: body mismatch at $.price
+============================================================
+Total bundles: 2
+  Fixed (now match):     1
+  Still mismatch:        1
+  Different mismatch:    0
+  Errors:                0
+
+Fixed bundles:
+  20260111T143052__createWidget__abc12345
+```
+
+### 5. Repeat Until All Issues Resolved
+
+Continue the cycle until all bundles show `FIXED` or are documented as acceptable differences.
+
+### Replay Classifications
+
+| Classification | Meaning |
+|---------------|---------|
+| `FIXED` | Previously mismatched, now matches (issue resolved) |
+| `STILL MISMATCH` | Same failure pattern persists |
+| `DIFFERENT MISMATCH` | Fails differently than before (new issue or rules changed) |
 
 ## Configuration
 
