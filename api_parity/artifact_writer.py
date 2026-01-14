@@ -52,6 +52,34 @@ class RunStats:
         self.operations[operation_id] = self.operations.get(operation_id, 0) + 1
 
 
+@dataclass
+class ReplayStats:
+    """Statistics for a replay run.
+
+    Tracks outcomes for replayed mismatch bundles:
+    - still_mismatch: Same mismatch persists
+    - now_match: Previously mismatched, now matches (fixed)
+    - different_mismatch: Mismatches differently than before
+    """
+
+    total_bundles: int = 0
+    # Outcome counts
+    still_mismatch: int = 0
+    now_match: int = 0
+    different_mismatch: int = 0
+    errors: int = 0
+    skipped: int = 0
+
+    # Breakdown by type
+    stateless_bundles: int = 0
+    chain_bundles: int = 0
+
+    # Track which bundles had which outcomes (bundle directory names)
+    fixed_bundles: list[str] = field(default_factory=list)
+    persistent_bundles: list[str] = field(default_factory=list)
+    changed_bundles: list[str] = field(default_factory=list)
+
+
 class ArtifactWriter:
     """Writes mismatch bundles to disk.
 
@@ -249,6 +277,37 @@ class ArtifactWriter:
             "chain_errors": stats.chain_errors,
         }
         self._write_json(self._output_dir / "summary.json", summary)
+
+    def write_replay_summary(
+        self, stats: ReplayStats, input_dir: Path | str
+    ) -> None:
+        """Write replay run summary to disk.
+
+        Args:
+            stats: Replay statistics.
+            input_dir: Input directory containing original bundles.
+        """
+        summary = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tool_version": TOOL_VERSION,
+            "mode": "replay",
+            "input_dir": str(input_dir),
+            # Counts
+            "total_bundles": stats.total_bundles,
+            "still_mismatch": stats.still_mismatch,
+            "now_match": stats.now_match,
+            "different_mismatch": stats.different_mismatch,
+            "errors": stats.errors,
+            "skipped": stats.skipped,
+            # Type breakdown
+            "stateless_bundles": stats.stateless_bundles,
+            "chain_bundles": stats.chain_bundles,
+            # Bundle lists for detailed reporting
+            "fixed_bundles": stats.fixed_bundles,
+            "persistent_bundles": stats.persistent_bundles,
+            "changed_bundles": stats.changed_bundles,
+        }
+        self._write_json(self._output_dir / "replay_summary.json", summary)
 
     def _write_json(self, path: Path, data: Any) -> None:
         """Write data as JSON to a file atomically.

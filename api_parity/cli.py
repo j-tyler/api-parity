@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from api_parity.artifact_writer import ArtifactWriter, RunStats
+    from api_parity.artifact_writer import ArtifactWriter, ReplayStats, RunStats
+    from api_parity.bundle_loader import LoadedBundle
     from api_parity.case_generator import CaseGenerator
     from api_parity.comparator import Comparator
     from api_parity.executor import Executor
-    from api_parity.models import ComparisonRules, TargetInfo
+    from api_parity.models import ComparisonResult, ComparisonRules, TargetInfo
 
 
 DEFAULT_TIMEOUT = 30.0
@@ -801,25 +802,492 @@ def _run_stateful_explore(
 
 
 def run_replay(args: ReplayArgs) -> int:
-    """Run replay mode."""
-    # Placeholder until components are implemented
+    """Run replay mode.
+
+    Re-executes previously discovered mismatches to determine if they still occur,
+    have been fixed, or have changed.
+    """
+    from api_parity.artifact_writer import ArtifactWriter, ReplayStats
+    from api_parity.bundle_loader import (
+        BundleLoadError,
+        BundleType,
+        LoadedBundle,
+        discover_bundles,
+        extract_link_fields_from_chain,
+        load_bundle,
+    )
+    from api_parity.cel_evaluator import CELEvaluator, CELSubprocessError
+    from api_parity.comparator import Comparator
+    from api_parity.config_loader import (
+        ConfigError,
+        get_operation_rules,
+        load_comparison_library,
+        load_comparison_rules,
+        load_runtime_config,
+        resolve_comparison_rules_path,
+        validate_targets,
+    )
+    from api_parity.executor import Executor, RequestError
+    from api_parity.models import ComparisonResult, TargetInfo
+
+    # Validate input directory exists
+    if not args.input_dir.exists():
+        print(f"Error: Input directory does not exist: {args.input_dir}", file=sys.stderr)
+        return 1
+    if not args.input_dir.is_dir():
+        print(f"Error: Input path is not a directory: {args.input_dir}", file=sys.stderr)
+        return 1
+
+    # Load configuration
+    try:
+        runtime_config = load_runtime_config(args.config)
+    except ConfigError as e:
+        print(f"Error loading config: {e}", file=sys.stderr)
+        return 1
+
+    # Validate targets
+    try:
+        target_a_config, target_b_config = validate_targets(
+            runtime_config, args.target_a, args.target_b
+        )
+    except ConfigError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # Load comparison rules
+    try:
+        rules_path = resolve_comparison_rules_path(args.config, runtime_config.comparison_rules)
+        comparison_rules = load_comparison_rules(rules_path)
+    except ConfigError as e:
+        print(f"Error loading comparison rules: {e}", file=sys.stderr)
+        return 1
+
+    # Load comparison library
+    try:
+        comparison_library = load_comparison_library()
+    except ConfigError as e:
+        print(f"Error loading comparison library: {e}", file=sys.stderr)
+        return 1
+
+    # Discover bundles
+    bundles = discover_bundles(args.input_dir)
+
+    # Validate mode - just check config validity without executing
     if args.validate:
         print(f"Validating: config={args.config}")
         print(f"  Targets: {args.target_a}, {args.target_b}")
+        print(f"    {args.target_a}: {target_a_config.base_url}")
+        print(f"    {args.target_b}: {target_b_config.base_url}")
         print(f"  Input: {args.input_dir}")
-        # TODO: Load and validate config, check targets exist, validate replay cases
+        print(f"  Bundles found: {len(bundles)}")
+
+        # Validate each bundle can be loaded
+        valid_bundles = 0
+        invalid_bundles = 0
+        for bundle_path in bundles:
+            try:
+                load_bundle(bundle_path)
+                valid_bundles += 1
+            except BundleLoadError as e:
+                print(f"    Invalid bundle: {bundle_path.name} - {e}", file=sys.stderr)
+                invalid_bundles += 1
+
+        print(f"    Valid: {valid_bundles}")
+        if invalid_bundles > 0:
+            print(f"    Invalid: {invalid_bundles}")
+
+        if invalid_bundles > 0:
+            print("Validation failed: some bundles are invalid")
+            return 1
+
         print("Validation successful")
         return 0
 
+    if not bundles:
+        print(f"No mismatch bundles found in {args.input_dir}")
+        return 0
+
+    # Pre-load all bundles to extract link_fields for chain replay
+    loaded_bundles: list[LoadedBundle] = []
+    link_fields: set[str] = set()
+    load_errors: list[tuple[Path, str]] = []
+
+    for bundle_path in bundles:
+        try:
+            bundle = load_bundle(bundle_path)
+            loaded_bundles.append(bundle)
+            # Extract link_fields from chain bundles for variable extraction
+            if bundle.bundle_type == BundleType.CHAIN and bundle.chain_case is not None:
+                link_fields.update(extract_link_fields_from_chain(bundle.chain_case))
+        except BundleLoadError as e:
+            load_errors.append((bundle_path, str(e)))
+
+    # Print run configuration
     print(f"Replay mode: config={args.config}")
-    print(f"  Targets: {args.target_a} vs {args.target_b}")
+    print(f"  Targets: {args.target_a} ({target_a_config.base_url}) vs {args.target_b} ({target_b_config.base_url})")
     print(f"  Input: {args.input_dir}")
     print(f"  Output: {args.out}")
+    print(f"  Bundles to replay: {len(loaded_bundles)}")
+    if load_errors:
+        print(f"  Failed to load: {len(load_errors)}")
     print(f"  Timeout: {args.timeout}s")
     if args.operation_timeout:
         for op_id, timeout in args.operation_timeout.items():
             print(f"  Timeout for {op_id}: {timeout}s")
+    print()
+
+    # Report load errors
+    for bundle_path, error in load_errors:
+        print(f"SKIP: {bundle_path.name} - {error}")
+
+    if not loaded_bundles:
+        print("No valid bundles to replay")
+        return 0
+
+    # Initialize components
+    stats = ReplayStats()
+    stats.skipped = len(load_errors)
+    writer = ArtifactWriter(args.out, runtime_config.secrets)
+
+    target_a_info = TargetInfo(name=args.target_a, base_url=target_a_config.base_url)
+    target_b_info = TargetInfo(name=args.target_b, base_url=target_b_config.base_url)
+
+    # Start CEL evaluator
+    try:
+        cel_evaluator = CELEvaluator()
+    except CELSubprocessError as e:
+        print(f"Error starting CEL evaluator: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        comparator = Comparator(cel_evaluator, comparison_library)
+
+        # Start executor with link_fields for chain variable extraction
+        with Executor(
+            target_a_config,
+            target_b_config,
+            default_timeout=args.timeout,
+            operation_timeouts=args.operation_timeout,
+            link_fields=link_fields if link_fields else None,
+        ) as executor:
+
+            # Replay each pre-loaded bundle
+            for bundle in loaded_bundles:
+                _replay_loaded_bundle(
+                    bundle=bundle,
+                    executor=executor,
+                    comparator=comparator,
+                    comparison_rules=comparison_rules,
+                    writer=writer,
+                    stats=stats,
+                    target_a_info=target_a_info,
+                    target_b_info=target_b_info,
+                    get_operation_rules=get_operation_rules,
+                )
+
+    except CELSubprocessError as e:
+        print(f"\nFatal: CEL evaluator crashed: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
+    finally:
+        cel_evaluator.close()
+
+    # Write summary
+    writer.write_replay_summary(stats, args.input_dir)
+
+    # Print summary
+    print()
+    print("=" * 60)
+    print(f"Total bundles: {stats.total_bundles}")
+    print(f"  Fixed (now match):     {stats.now_match}")
+    print(f"  Still mismatch:        {stats.still_mismatch}")
+    print(f"  Different mismatch:    {stats.different_mismatch}")
+    print(f"  Errors:                {stats.errors}")
+    if stats.skipped > 0:
+        print(f"  Skipped:               {stats.skipped}")
+    print(f"Summary written to: {args.out / 'replay_summary.json'}")
+
+    if stats.now_match > 0:
+        print(f"\nFixed bundles:")
+        for name in stats.fixed_bundles:
+            print(f"  {name}")
+
     return 0
+
+
+def _replay_loaded_bundle(
+    bundle: "LoadedBundle",
+    executor: "Executor",
+    comparator: "Comparator",
+    comparison_rules: "ComparisonRules",
+    writer: "ArtifactWriter",
+    stats: "ReplayStats",
+    target_a_info: "TargetInfo",
+    target_b_info: "TargetInfo",
+    get_operation_rules: Callable,
+) -> None:
+    """Replay a pre-loaded mismatch bundle."""
+    from api_parity.bundle_loader import BundleType
+
+    stats.total_bundles += 1
+
+    # Execute based on type
+    if bundle.bundle_type == BundleType.STATELESS:
+        stats.stateless_bundles += 1
+        _replay_stateless_bundle(
+            bundle=bundle,
+            executor=executor,
+            comparator=comparator,
+            comparison_rules=comparison_rules,
+            writer=writer,
+            stats=stats,
+            target_a_info=target_a_info,
+            target_b_info=target_b_info,
+            get_operation_rules=get_operation_rules,
+        )
+    else:
+        stats.chain_bundles += 1
+        _replay_chain_bundle(
+            bundle=bundle,
+            executor=executor,
+            comparator=comparator,
+            comparison_rules=comparison_rules,
+            writer=writer,
+            stats=stats,
+            target_a_info=target_a_info,
+            target_b_info=target_b_info,
+            get_operation_rules=get_operation_rules,
+        )
+
+
+def _replay_stateless_bundle(
+    bundle: "LoadedBundle",
+    executor: "Executor",
+    comparator: "Comparator",
+    comparison_rules: "ComparisonRules",
+    writer: "ArtifactWriter",
+    stats: "ReplayStats",
+    target_a_info: "TargetInfo",
+    target_b_info: "TargetInfo",
+    get_operation_rules: Callable,
+) -> None:
+    """Replay a stateless (single-request) bundle."""
+    from api_parity.executor import RequestError
+
+    case = bundle.request_case
+    if case is None:
+        stats.errors += 1
+        print(f"ERROR: {bundle.bundle_path.name} - missing request_case")
+        return
+
+    print(f"[{stats.total_bundles}] {case.operation_id}: {case.method} {case.rendered_path}", end=" ")
+
+    try:
+        # Re-execute
+        response_a, response_b = executor.execute(case)
+
+        # Compare
+        rules = get_operation_rules(comparison_rules, case.operation_id)
+        result = comparator.compare(response_a, response_b, rules)
+
+        # Classify outcome
+        if result.match:
+            stats.now_match += 1
+            stats.fixed_bundles.append(bundle.bundle_path.name)
+            print("FIXED")
+        elif _is_same_mismatch(bundle.original_diff, result):
+            stats.still_mismatch += 1
+            stats.persistent_bundles.append(bundle.bundle_path.name)
+            print(f"STILL MISMATCH: {result.summary}")
+            # Write new bundle to output
+            writer.write_mismatch(
+                case=case,
+                response_a=response_a,
+                response_b=response_b,
+                diff=result,
+                target_a_info=target_a_info,
+                target_b_info=target_b_info,
+            )
+        else:
+            stats.different_mismatch += 1
+            stats.changed_bundles.append(bundle.bundle_path.name)
+            print(f"DIFFERENT MISMATCH: {result.summary}")
+            # Write new bundle to output
+            writer.write_mismatch(
+                case=case,
+                response_a=response_a,
+                response_b=response_b,
+                diff=result,
+                target_a_info=target_a_info,
+                target_b_info=target_b_info,
+            )
+
+    except RequestError as e:
+        stats.errors += 1
+        print(f"ERROR: {e}")
+
+
+def _replay_chain_bundle(
+    bundle: "LoadedBundle",
+    executor: "Executor",
+    comparator: "Comparator",
+    comparison_rules: "ComparisonRules",
+    writer: "ArtifactWriter",
+    stats: "ReplayStats",
+    target_a_info: "TargetInfo",
+    target_b_info: "TargetInfo",
+    get_operation_rules: Callable,
+) -> None:
+    """Replay a chain (stateful) bundle."""
+    from api_parity.executor import RequestError
+
+    chain = bundle.chain_case
+    if chain is None:
+        stats.errors += 1
+        print(f"ERROR: {bundle.bundle_path.name} - missing chain_case")
+        return
+
+    ops = [step.request_template.operation_id for step in chain.steps]
+    chain_desc = " -> ".join(ops)
+    print(f"[Chain {stats.total_bundles}] {chain_desc}")
+
+    try:
+        # Track comparison results during execution
+        step_diffs = []
+        mismatch_found = False
+
+        def on_step(response_a, response_b):
+            nonlocal mismatch_found
+            step_idx = len(step_diffs)
+            op_id = chain.steps[step_idx].request_template.operation_id
+
+            rules = get_operation_rules(comparison_rules, op_id)
+            result = comparator.compare(response_a, response_b, rules)
+            step_diffs.append(result)
+
+            if not result.match:
+                mismatch_found = True
+                return False  # Stop chain execution
+            return True
+
+        # Execute chain
+        execution_a, execution_b = executor.execute_chain(chain, on_step=on_step)
+
+        # Classify outcome
+        if not mismatch_found:
+            stats.now_match += 1
+            stats.fixed_bundles.append(bundle.bundle_path.name)
+            print("  FIXED (all steps)")
+        elif _is_same_chain_mismatch(bundle.original_diff, step_diffs):
+            stats.still_mismatch += 1
+            stats.persistent_bundles.append(bundle.bundle_path.name)
+            mismatch_step = len(step_diffs) - 1
+            print(f"  STILL MISMATCH at step {mismatch_step}: {step_diffs[mismatch_step].summary}")
+            # Write new bundle to output
+            writer.write_chain_mismatch(
+                chain=chain,
+                execution_a=execution_a,
+                execution_b=execution_b,
+                step_diffs=step_diffs,
+                mismatch_step=mismatch_step,
+                target_a_info=target_a_info,
+                target_b_info=target_b_info,
+            )
+        else:
+            stats.different_mismatch += 1
+            stats.changed_bundles.append(bundle.bundle_path.name)
+            mismatch_step = len(step_diffs) - 1
+            print(f"  DIFFERENT MISMATCH at step {mismatch_step}: {step_diffs[mismatch_step].summary}")
+            # Write new bundle to output
+            writer.write_chain_mismatch(
+                chain=chain,
+                execution_a=execution_a,
+                execution_b=execution_b,
+                step_diffs=step_diffs,
+                mismatch_step=mismatch_step,
+                target_a_info=target_a_info,
+                target_b_info=target_b_info,
+            )
+
+    except RequestError as e:
+        stats.errors += 1
+        print(f"  ERROR: {e}")
+
+
+def _is_same_mismatch(original_diff: dict, new_result: "ComparisonResult") -> bool:
+    """Determine if two mismatches are essentially the same.
+
+    Compares:
+    - mismatch_type (status_code, headers, body)
+    - For body mismatches: same JSONPath fields failing
+    - For header mismatches: same header names failing
+
+    Doesn't require exact same values—just same failure pattern.
+    """
+    # Get original mismatch type
+    original_type = original_diff.get("mismatch_type")
+    new_type = new_result.mismatch_type.value if new_result.mismatch_type else None
+
+    if original_type != new_type:
+        return False
+
+    # For body mismatches, check if same paths failed
+    if original_type == "body":
+        original_details = original_diff.get("details", {})
+        original_body = original_details.get("body", {})
+        original_differences = original_body.get("differences", [])
+        original_paths = {d.get("path") for d in original_differences}
+
+        new_body = new_result.details.get("body")
+        new_paths = {d.path for d in new_body.differences} if new_body else set()
+
+        return original_paths == new_paths
+
+    # For header mismatches, check if same header names failed
+    if original_type == "headers":
+        original_details = original_diff.get("details", {})
+        original_headers = original_details.get("headers", {})
+        original_differences = original_headers.get("differences", [])
+        original_names = {d.get("header") for d in original_differences}
+
+        new_headers = new_result.details.get("headers")
+        new_names = {d.header for d in new_headers.differences} if new_headers else set()
+
+        return original_names == new_names
+
+    # For status_code mismatches, mismatch_type being the same is sufficient
+    return True
+
+
+def _is_same_chain_mismatch(
+    original_diff: dict, new_step_diffs: list["ComparisonResult"]
+) -> bool:
+    """Determine if chain mismatches are essentially the same.
+
+    Compares:
+    - Same step number failed
+    - Same mismatch type at that step
+    """
+    original_mismatch_step = original_diff.get("mismatch_step")
+    new_mismatch_step = len(new_step_diffs) - 1 if new_step_diffs else None
+
+    if original_mismatch_step != new_mismatch_step:
+        return False
+
+    # Get original step diff
+    original_steps = original_diff.get("steps", [])
+    if original_mismatch_step is None or original_mismatch_step >= len(original_steps):
+        return False
+
+    original_step_diff = original_steps[original_mismatch_step]
+
+    # Compare the mismatch at that step
+    if not new_step_diffs:
+        return False
+
+    new_step_diff = new_step_diffs[new_mismatch_step]
+    return _is_same_mismatch(original_step_diff, new_step_diff)
 
 
 if __name__ == "__main__":

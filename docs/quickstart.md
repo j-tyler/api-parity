@@ -88,11 +88,43 @@ MATCH   GET /widgets/{id} (getWidget)
   metadata.json     # Run context
 ```
 
+## Replay Mismatches
+
+After fixing issues or updating comparison rules, verify with replay:
+
+```bash
+api-parity replay \
+  --config config.yaml \
+  --target-a production \
+  --target-b staging \
+  --in ./artifacts \
+  --out ./replay-results
+```
+
+**Console output:**
+```
+[1] createWidget: POST /widgets FIXED
+[2] getWidget: GET /widgets/{id} STILL MISMATCH: body mismatch at $.updated_at
+============================================================
+Total bundles: 2
+  Fixed (now match):     1
+  Still mismatch:        1
+  Different mismatch:    0
+  Errors:                0
+```
+
+Replay classifies each bundle:
+- **FIXED** — Previously mismatched, now matches (issue resolved)
+- **STILL MISMATCH** — Same issue persists
+- **DIFFERENT MISMATCH** — Fails differently than before (new issue)
+
+Results are written to `./replay-results/replay_summary.json`.
+
 ## Next Steps
 
 1. Review `diff.json` to understand mismatches
 2. Add comparison rules for expected differences (see [comparison-rules.md](comparison-rules.md))
-3. Re-run to verify rules work
+3. Run replay to verify rules work
 4. Add OpenAPI links for stateful chain testing (see [openapi-links.md](openapi-links.md))
 
 ## Common First-Run Issues
