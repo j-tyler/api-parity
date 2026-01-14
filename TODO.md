@@ -13,17 +13,6 @@ v0 supports simple header-based auth configured manually in runtime config (see 
 
 ---
 
-## CLI Replay Implementation
-
-The `explore` subcommand is fully implemented for both stateless and stateful modes.
-
-The `replay` subcommand remains a placeholder stub. Implementation requires:
-1. Loading mismatch bundles from disk
-2. Re-executing saved request cases
-3. Comparing new responses to detect if mismatches persist
-
----
-
 ## Specification Work Required
 
 - **OpenAPI Spec as Field Authority** — JSON Schema validator choice, additionalProperties handling

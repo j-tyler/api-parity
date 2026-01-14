@@ -145,9 +145,22 @@ Finding mismatches during explore is expected behavior, not an error. Mismatch c
 │  - Redact configured secret fields                               │
 │  - Write run logs and summary stats                              │
 └─────────────────────────────────────────────────────────────────┘
+
+─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+                     Replay Mode Path
+─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+
+┌─────────────────────────────────────────────────────────────────┐
+│                      Bundle Loader                               │
+│  - Discover mismatch bundles from previous runs                  │
+│  - Load case data, metadata, original diff                       │
+│  - Extract link_fields for chain replay                          │
+└─────────────────────────────────────────────────────────────────┘
+            │
+            └──────────────────► (feeds into Executor above)
 ```
 
-Note: CEL Evaluator shown with dashed border to indicate it's a subprocess, not in-process Python.
+Note: CEL Evaluator shown with dashed border to indicate it's a subprocess, not in-process Python. Replay mode uses Bundle Loader instead of Case Generator.
 
 ---
 
@@ -490,6 +503,51 @@ The Comparator calls `evaluate()` for each field comparison. It has no knowledge
 - Kept alive for duration of run
 - Terminated on CLI exit (close stdin, wait for process)
 - Restarted automatically if subprocess crashes (EOF detected on stdout)
+
+---
+
+## Bundle Loader [SPECIFIED]
+
+The Bundle Loader (`api_parity/bundle_loader.py`) reads mismatch bundles from disk for replay mode. It reconstructs the original test cases and comparison results.
+
+### Interface
+
+```python
+# Discover all bundle directories in an artifacts path
+bundles = discover_bundles(directory: Path) -> list[Path]
+
+# Load a single bundle into memory
+bundle = load_bundle(bundle_path: Path) -> LoadedBundle
+
+# Detect bundle type without full load
+bundle_type = detect_bundle_type(bundle_path: Path) -> BundleType
+
+# Extract link_fields from chain case for Executor (replay needs this)
+link_fields = extract_link_fields_from_chain(chain: ChainCase) -> set[str]
+```
+
+### LoadedBundle Structure
+
+```python
+@dataclass
+class LoadedBundle:
+    bundle_path: Path           # Where the bundle was loaded from
+    bundle_type: BundleType     # STATELESS or CHAIN
+    request_case: RequestCase | None  # For stateless bundles
+    chain_case: ChainCase | None      # For chain bundles
+    original_diff: dict[str, Any]     # Raw diff.json for comparison
+    metadata: MismatchMetadata        # Run context
+```
+
+### Chain Replay Support
+
+For chain replay, the Executor needs `link_fields` to extract variables from responses. Since replay doesn't have the OpenAPI spec, `extract_link_fields_from_chain()` analyzes the chain's `link_source` fields to determine which response fields need extraction. It converts JSONPath expressions (`$.id`, `$.data.items[0].id`) to JSONPointer format (`id`, `data/items/0/id`).
+
+### Error Handling
+
+- `BundleLoadError` raised for missing files, invalid JSON, or schema validation failures
+- Bundle discovery is lenient: directories without `case.json` or `chain.json` are silently skipped
+- Load errors are surfaced individually to allow partial replay of valid bundles
 
 ---
 
