@@ -46,6 +46,8 @@ class RunStats:
     chain_matches: int = 0
     chain_mismatches: int = 0
     chain_errors: int = 0
+    # Set to True if run was interrupted (SIGINT)
+    interrupted: bool = False
 
     def add_operation(self, operation_id: str) -> None:
         """Record a case for an operation."""
@@ -78,6 +80,9 @@ class ReplayStats:
     fixed_bundles: list[str] = field(default_factory=list)
     persistent_bundles: list[str] = field(default_factory=list)
     changed_bundles: list[str] = field(default_factory=list)
+
+    # Set to True if run was interrupted (SIGINT)
+    interrupted: bool = False
 
 
 class ArtifactWriter:
@@ -264,6 +269,7 @@ class ArtifactWriter:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "tool_version": TOOL_VERSION,
             "seed": seed,
+            "interrupted": stats.interrupted,
             "total_cases": stats.total_cases,
             "matches": stats.matches,
             "mismatches": stats.mismatches,
@@ -292,6 +298,7 @@ class ArtifactWriter:
             "tool_version": TOOL_VERSION,
             "mode": "replay",
             "input_dir": str(input_dir),
+            "interrupted": stats.interrupted,
             # Counts
             "total_bundles": stats.total_bundles,
             "still_mismatch": stats.still_mismatch,

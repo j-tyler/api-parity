@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import time
+from threading import Lock
 from typing import Any, Callable
 
 import httpx
@@ -55,6 +56,7 @@ class Executor:
         default_timeout: float = 30.0,
         operation_timeouts: dict[str, float] | None = None,
         link_fields: set[str] | None = None,
+        requests_per_second: float | None = None,
     ) -> None:
         """Initialize the executor.
 
@@ -66,12 +68,20 @@ class Executor:
             link_fields: Set of JSONPointer paths to extract from responses
                          for chain variable substitution. Parsed from OpenAPI
                          link expressions (e.g., "id", "data/item/id").
+            requests_per_second: Maximum requests per second (rate limit).
+                                 If None, no rate limiting is applied.
         """
         self._target_a = target_a
         self._target_b = target_b
         self._default_timeout = default_timeout
         self._operation_timeouts = operation_timeouts or {}
         self._link_fields = link_fields or set()
+
+        # Rate limiting state
+        self._requests_per_second = requests_per_second
+        self._min_interval = 1.0 / requests_per_second if requests_per_second else 0.0
+        self._last_request_time: float = 0.0
+        self._rate_limit_lock = Lock()
 
         # Create HTTP clients for each target
         self._client_a = httpx.Client(
@@ -363,6 +373,23 @@ class Executor:
         """Get timeout for an operation."""
         return self._operation_timeouts.get(operation_id, self._default_timeout)
 
+    def _wait_for_rate_limit(self) -> None:
+        """Wait if necessary to respect rate limit.
+
+        Thread-safe. Uses a simple time-based approach: ensure minimum
+        interval between requests.
+        """
+        if self._min_interval <= 0:
+            return
+
+        with self._rate_limit_lock:
+            now = time.monotonic()
+            elapsed = now - self._last_request_time
+            if elapsed < self._min_interval:
+                sleep_time = self._min_interval - elapsed
+                time.sleep(sleep_time)
+            self._last_request_time = time.monotonic()
+
     def _execute_single(
         self,
         client: httpx.Client,
@@ -423,6 +450,9 @@ class Executor:
 
         # Add cookies
         cookies: dict[str, str] = request.cookies
+
+        # Enforce rate limit before making request
+        self._wait_for_rate_limit()
 
         try:
             start_time = time.perf_counter()

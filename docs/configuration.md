@@ -19,9 +19,9 @@ targets:
 # Required: Path to comparison rules file
 comparison_rules: <path>
 
-# Optional: Rate limiting (not yet implemented)
+# Optional: Rate limiting
 rate_limit:
-  requests_per_second: <number>
+  requests_per_second: <number>  # Maximum requests per second
 
 # Optional: Redact sensitive fields in artifacts
 secrets:
@@ -62,6 +62,10 @@ targets:
 
 comparison_rules: ./comparison_rules.json
 
+# Limit to 10 requests per second to avoid overwhelming APIs
+rate_limit:
+  requests_per_second: 10
+
 secrets:
   redact_fields:
     - "$.password"
@@ -69,6 +73,32 @@ secrets:
     - "$.credentials.token"
     - "$.users[*].ssn"
 ```
+
+## Rate Limiting
+
+Configure `rate_limit.requests_per_second` to control how fast api-parity sends requests. This prevents overwhelming target APIs or triggering rate limits.
+
+```yaml
+rate_limit:
+  requests_per_second: 10  # At most 10 requests/second
+```
+
+The rate limit applies globally across all requests (to both targets). If not specified, requests are sent as fast as possible.
+
+## Progress Reporting
+
+During explore and replay runs, api-parity prints progress to stderr every second:
+
+```
+[Progress] 45/100 cases (45.0%) | 5.2/s | ETA: 10s
+```
+
+The progress line shows:
+- Completed / Total (if total is known)
+- Current throughput rate
+- Estimated time remaining (ETA)
+
+If the run is interrupted (SIGINT/Ctrl+C), all mismatches found up to that point are preserved and the summary is still written with `"interrupted": true`.
 
 ## CLI Options
 

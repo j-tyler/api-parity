@@ -16,7 +16,6 @@ v0 supports simple header-based auth configured manually in runtime config (see 
 ## Specification Work Required
 
 - **OpenAPI Spec as Field Authority** — JSON Schema validator choice, additionalProperties handling
-- **Rate Limiting** — Executor does not implement rate limiting in v0
 
 ---
 
