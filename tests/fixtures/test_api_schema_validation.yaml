@@ -1,0 +1,152 @@
+openapi: "3.0.3"
+info:
+  title: Schema Validation Test API
+  version: "1.0.0"
+  description: |
+    Test API for validating OpenAPI Spec as Field Authority feature.
+    Tests additionalProperties behavior and schema validation.
+
+servers:
+  - url: http://localhost:9999
+
+paths:
+  /strict-widgets:
+    get:
+      operationId: listStrictWidgets
+      summary: List widgets with strict schema (additionalProperties=false)
+      responses:
+        "200":
+          description: List of widgets with strict schema
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [widgets, total]
+                properties:
+                  widgets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/StrictWidget"
+                  total:
+                    type: integer
+
+  /flexible-widgets:
+    get:
+      operationId: listFlexibleWidgets
+      summary: List widgets with flexible schema (additionalProperties=true)
+      responses:
+        "200":
+          description: List of widgets with flexible schema
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                required: [widgets]
+                properties:
+                  widgets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FlexibleWidget"
+
+  /widgets/{id}:
+    get:
+      operationId: getWidget
+      summary: Get a single widget
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Widget details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrictWidget"
+        "404":
+          description: Widget not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /users/{id}/profile:
+    get:
+      operationId: getUserProfile
+      summary: Get user profile with nested objects
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+
+components:
+  schemas:
+    StrictWidget:
+      type: object
+      additionalProperties: false
+      required: [id, name, price]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          minLength: 1
+        price:
+          type: number
+          minimum: 0
+        category:
+          type: string
+          enum: [gadgets, tools, parts]
+
+    FlexibleWidget:
+      type: object
+      additionalProperties: true
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+
+    UserProfile:
+      type: object
+      additionalProperties: false
+      required: [id, username, settings]
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        settings:
+          type: object
+          additionalProperties: false
+          required: [theme]
+          properties:
+            theme:
+              type: string
+              enum: [light, dark]
+            notifications:
+              type: boolean
+
+    Error:
+      type: object
+      additionalProperties: true
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string

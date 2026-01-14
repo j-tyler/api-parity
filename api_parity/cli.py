@@ -595,6 +595,7 @@ def run_explore(args: ExploreArgs) -> int:
     )
     from api_parity.executor import Executor, RequestError
     from api_parity.models import TargetInfo
+    from api_parity.schema_validator import SchemaValidator, SchemaExtractionError
 
     # Load configuration
     try:
@@ -686,6 +687,13 @@ def run_explore(args: ExploreArgs) -> int:
     target_a_info = TargetInfo(name=args.target_a, base_url=target_a_config.base_url)
     target_b_info = TargetInfo(name=args.target_b, base_url=target_b_config.base_url)
 
+    # Initialize schema validator for OpenAPI Spec as Field Authority
+    try:
+        schema_validator = SchemaValidator(args.spec)
+    except SchemaExtractionError as e:
+        print(f"Error loading schema for validation: {e}", file=sys.stderr)
+        return 1
+
     # Start CEL evaluator
     try:
         cel_evaluator = CELEvaluator()
@@ -696,7 +704,7 @@ def run_explore(args: ExploreArgs) -> int:
     progress_reporter: ProgressReporter | None = None
 
     try:
-        comparator = Comparator(cel_evaluator, comparison_library)
+        comparator = Comparator(cel_evaluator, comparison_library, schema_validator)
 
         # Start executor
         requests_per_second = (
@@ -820,8 +828,8 @@ def _run_stateless_explore(
             # Get rules for this operation
             rules = get_operation_rules(comparison_rules, case.operation_id)
 
-            # Compare responses
-            result = comparator.compare(response_a, response_b, rules)
+            # Compare responses (with operation_id for schema validation)
+            result = comparator.compare(response_a, response_b, rules, case.operation_id)
 
             if result.match:
                 stats.matches += 1
@@ -905,7 +913,7 @@ def _run_stateful_explore(
                 step_ops.append(op_id)
 
                 rules = get_operation_rules(comparison_rules, op_id)
-                result = comparator.compare(response_a, response_b, rules)
+                result = comparator.compare(response_a, response_b, rules, op_id)
                 step_diffs.append(result)
 
                 if not result.match:
@@ -1255,9 +1263,9 @@ def _replay_stateless_bundle(
         # Re-execute
         response_a, response_b = executor.execute(case)
 
-        # Compare
+        # Compare (operation_id passed for consistency, but replay has no schema validation)
         rules = get_operation_rules(comparison_rules, case.operation_id)
-        result = comparator.compare(response_a, response_b, rules)
+        result = comparator.compare(response_a, response_b, rules, case.operation_id)
 
         # Classify outcome
         if result.match:
@@ -1331,7 +1339,7 @@ def _replay_chain_bundle(
             op_id = chain.steps[step_idx].request_template.operation_id
 
             rules = get_operation_rules(comparison_rules, op_id)
-            result = comparator.compare(response_a, response_b, rules)
+            result = comparator.compare(response_a, response_b, rules, op_id)
             step_diffs.append(result)
 
             if not result.match:

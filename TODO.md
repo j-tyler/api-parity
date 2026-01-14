@@ -13,29 +13,19 @@ v0 supports simple header-based auth configured manually in runtime config (see 
 
 ---
 
-## Specification Work Required
+## Completed Features
 
-### OpenAPI Spec as Field Authority
+### OpenAPI Spec as Field Authority [DONE]
 
-Validate responses against the OpenAPI schema before comparison. Design decisions are in DESIGN.md.
+Validates responses against the OpenAPI schema before comparison. See DESIGN.md and ARCHITECTURE.md for design decisions and implementation details.
 
-**Implementation tasks:**
-
-1. **Choose JSON Schema validator** — Evaluate Python libraries (jsonschema, fastjsonschema, etc.) for OpenAPI 3.x compatibility and performance
-
-2. **Extract response schema from spec** — For each operation+status_code, get the response schema from the OpenAPI spec
-
-3. **Validate both responses** — Check each response against schema, report `schema_violation` category for failures
-
-4. **Respect `additionalProperties`:**
-   - `false` → Extra fields are schema violations
-   - `true` or unspecified → Allow extras, but still compare them between A and B
-
-5. **Compare extra fields** — Fields present in response but not in spec schema: compare with equality by default, allow user rules to override
-
-6. **New mismatch categories:**
-   - `schema_violation` — Response doesn't match spec (separate from comparison mismatch)
-   - Existing `body` category for comparison mismatches between implementations
+**Implemented:**
+- SchemaValidator component (`api_parity/schema_validator.py`)
+- JSON Schema validation using `jsonschema` library (v4.23.0)
+- `SCHEMA_VIOLATION` mismatch type
+- Phase 0 validation in Comparator (before status code comparison)
+- `additionalProperties` handling: `false` = violation, `true`/unspecified = allowed but compared
+- Extra fields comparison with equality
 
 ---
 

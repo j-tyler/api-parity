@@ -64,7 +64,27 @@ When validating responses against the OpenAPI spec, respect the `additionalPrope
 
 This distinction matters because schema validity and implementation equivalence are separate concerns. A response can be valid (matches schema) but not equivalent (differs from other implementation). Example: if the spec allows extras and Target A returns `{id: 1, debug: "foo"}` while Target B returns `{id: 1, trace_id: "bar"}`, both are schema-valid but they're not equivalent—the LLM agent should know about this divergence.
 
-For extra fields (not defined in spec), use equality comparison by default. Users can add comparison rules for specific extra fields if needed (e.g., to ignore `debug_info` on both sides).
+For extra fields (not defined in spec), use equality comparison by default.
+
+---
+
+# jsonschema Library for Schema Validation
+
+Keywords: jsonschema schema validation library python implementation
+Date: 20260114
+
+Chose `jsonschema` (v4.23.0) over alternatives for OpenAPI schema validation:
+
+1. **Well-established** — Mature library with broad adoption and good documentation
+2. **OpenAPI compatibility** — OpenAPI 3.x uses JSON Schema Draft 4-7, which jsonschema supports
+3. **Error details** — Provides detailed error paths and messages for violations
+4. **Trusted dependency** — Unlike some CEL Python libraries, jsonschema is a reliable package
+
+Considered alternatives:
+- `fastjsonschema` — Faster but less compatible with OpenAPI schemas
+- Built-in `schemathesis` validation — Doesn't expose raw validation, only pass/fail
+
+Schema validation is optional (enabled when SchemaValidator is passed to Comparator) to support replay mode which doesn't have the OpenAPI spec available.
 
 ---
 
