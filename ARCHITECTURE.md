@@ -299,6 +299,7 @@ class Executor:
         default_timeout: float = 30.0,
         operation_timeouts: dict[str, float] | None = None,
         link_fields: set[str] | None = None,
+        requests_per_second: float | None = None,
     ): ...
 
     def execute(self, request: RequestCase) -> tuple[ResponseCase, ResponseCase]: ...
@@ -332,7 +333,15 @@ The `execute_chain()` method executes multi-step chains against both targets. Ea
 
 **Dynamic field extraction:** The Executor receives a `link_fields` parameter (parsed from the OpenAPI spec by CaseGenerator) specifying which fields to extract from responses. This enables chain execution with any field names referenced by OpenAPI links, including nested paths like `data/nested_id`.
 
-Rate limiting is not implemented in v0.
+### Rate Limiting
+
+The Executor supports rate limiting via `requests_per_second`. When configured:
+- Enforces minimum interval between requests (`1 / requests_per_second` seconds)
+- Thread-safe (uses a lock for concurrent access)
+- First request never waits (no artificial startup delay)
+- If `None`, no rate limiting is applied
+
+Rate limit applies globally across all requests to both targets. Configure via `rate_limit.requests_per_second` in the runtime config file.
 
 ---
 

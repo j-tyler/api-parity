@@ -59,28 +59,51 @@ Write arbitrary CEL:
 
 ## Predefined Reference
 
-| Name | Parameters | CEL Expression |
-|------|------------|----------------|
-| `ignore` | — | `true` |
-| `exact_match` | — | `a == b` |
-| `numeric_tolerance` | `tolerance` | `(a - b) <= tolerance && (b - a) <= tolerance` |
+| Name | Parameters | Description |
+|------|------------|-------------|
+| **Core** |
+| `ignore` | — | Always passes (`true`) |
+| `exact_match` | — | Values equal (`a == b`) |
+| **Format Validation** |
 | `uuid_format` | — | Both match UUID regex |
 | `uuid_v4_format` | — | Both match UUID v4 regex |
-| `iso_timestamp_format` | — | Both match ISO 8601 prefix |
+| `url_format` | — | Both are valid URLs (http/https) |
+| `iso_timestamp_format` | — | Both match ISO 8601 datetime |
+| `iso_date_format` | — | Both match YYYY-MM-DD |
+| `jwt_format` | — | Both are valid JWT format |
+| `base64_format` | — | Both are valid base64 |
+| `hex_string` | — | Both are hex strings of same length |
+| **Numeric** |
+| `numeric_tolerance` | `tolerance` | `\|a - b\| <= tolerance` |
+| `both_positive` | — | Both > 0 |
+| `both_non_negative` | — | Both >= 0 |
+| `both_integer` | — | Both are integers (no decimal) |
+| `same_sign` | — | Same sign (positive/negative/zero) |
+| `both_in_range` | `min`, `max` | Both in [min, max] |
+| **Timestamps** |
 | `epoch_seconds_tolerance` | `seconds` | Epoch timestamps within N seconds |
 | `epoch_millis_tolerance` | `millis` | Epoch timestamps within N milliseconds |
+| **Strings** |
+| `string_prefix` | `length` | First N characters match |
+| `string_suffix` | `length` | Last N characters match |
+| `string_contains` | `substring` | Both contain the substring |
+| `string_length_match` | — | Same length |
+| `string_nonempty` | — | Both non-empty |
+| `both_match_regex` | `pattern` | Both match regex |
+| **Arrays** |
 | `unordered_array` | — | Same elements, any order (no duplicates) |
 | `array_length` | — | `size(a) == size(b)` |
 | `array_length_tolerance` | `tolerance` | Lengths differ by at most N |
-| `string_prefix` | `length` | First N characters match |
-| `string_nonempty` | — | Both non-empty |
-| `both_match_regex` | `pattern` | Both match regex |
+| `array_nonempty` | — | Both have at least one element |
+| **Objects** |
+| `same_keys` | — | Both have identical key sets |
+| `object_nonempty` | — | Both have at least one key |
+| **Null/Type** |
 | `both_null` | — | Both are null |
 | `both_null_or_equal` | — | Both null, or both equal |
+| `same_nullity` | — | Both null or both non-null |
+| `both_boolean` | — | Both are boolean type |
 | `type_match` | — | Same type |
-| `both_positive` | — | Both > 0 |
-| `same_sign` | — | Same sign |
-| `both_in_range` | `min`, `max` | Both in [min, max] |
 
 ## Presence Modes
 

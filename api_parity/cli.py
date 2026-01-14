@@ -591,6 +591,8 @@ def run_explore(args: ExploreArgs) -> int:
         load_comparison_rules,
         load_runtime_config,
         resolve_comparison_rules_path,
+        validate_cli_operation_ids,
+        validate_comparison_rules,
         validate_targets,
     )
     from api_parity.executor import Executor, RequestError
@@ -635,7 +637,7 @@ def run_explore(args: ExploreArgs) -> int:
         print(f"Error loading OpenAPI spec: {e}", file=sys.stderr)
         return 1
 
-    # Validate mode - just check config validity without executing
+    # Validate mode - check config validity and cross-validate against spec
     if args.validate:
         print(f"Validating: spec={args.spec}, config={args.config}")
         print(f"  Targets: {args.target_a}, {args.target_b}")
@@ -650,8 +652,51 @@ def run_explore(args: ExploreArgs) -> int:
         for op in operations:
             print(f"    {op['operation_id']} ({op['method']} {op['path']})")
 
-        print("Validation successful")
-        return 0
+        # Cross-validate comparison rules against spec and library
+        print()
+        print("Cross-validating configuration...")
+
+        # Get all operationIds from spec (including excluded ones for validation)
+        spec_operation_ids = generator.get_all_operation_ids()
+
+        # Validate comparison rules
+        rules_result = validate_comparison_rules(
+            comparison_rules, comparison_library, spec_operation_ids
+        )
+
+        # Validate CLI operationIds
+        cli_result = validate_cli_operation_ids(
+            args.exclude, args.operation_timeout, spec_operation_ids
+        )
+
+        # Merge results
+        rules_result.merge(cli_result)
+
+        # Report warnings
+        if rules_result.warnings:
+            print()
+            print("Warnings:")
+            for warning in rules_result.warnings:
+                print(f"  WARNING: {warning}")
+
+        # Report errors
+        if rules_result.errors:
+            print()
+            print("Errors:")
+            for error in rules_result.errors:
+                print(f"  ERROR: {error}")
+
+        # Final result
+        print()
+        if rules_result.is_valid:
+            if rules_result.warnings:
+                print("Validation passed with warnings")
+            else:
+                print("Validation successful")
+            return 0
+        else:
+            print("Validation failed")
+            return 1
 
     # Warn if stateful flags used without --stateful
     if not args.stateful and args.max_chains is not None:

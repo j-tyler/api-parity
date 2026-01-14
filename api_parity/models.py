@@ -168,8 +168,9 @@ class FieldRule(BaseModel):
     tolerance: float | None = Field(default=None, description="For numeric_tolerance, array_length_tolerance")
     seconds: float | None = Field(default=None, description="For epoch_seconds_tolerance")
     millis: float | None = Field(default=None, description="For epoch_millis_tolerance")
-    length: int | None = Field(default=None, description="For string_prefix")
+    length: int | None = Field(default=None, description="For string_prefix, string_suffix")
     pattern: str | None = Field(default=None, description="For both_match_regex")
+    substring: str | None = Field(default=None, description="For string_contains")
     min: float | None = Field(default=None, description="For both_in_range")
     max: float | None = Field(default=None, description="For both_in_range")
 

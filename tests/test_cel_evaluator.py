@@ -313,6 +313,40 @@ class TestCELEvaluatorPredefinedExpressions:
             assert evaluator.evaluate(expr, {"a": 1000, "b": 1003}) is True
             assert evaluator.evaluate(expr, {"a": 1000, "b": 1010}) is False
 
+    def test_both_integer_expression(self):
+        """Test both_integer predefined expression."""
+        with CELEvaluator() as evaluator:
+            # both_integer expands to: int(a) == a && int(b) == b
+            expr = "int(a) == a && int(b) == b"
+            # Both integers should pass
+            assert evaluator.evaluate(expr, {"a": 42, "b": 100}) is True
+            # Floats with no fractional part should also pass (42.0 == 42)
+            assert evaluator.evaluate(expr, {"a": 42.0, "b": 100.0}) is True
+            # Floats with fractional parts should fail
+            assert evaluator.evaluate(expr, {"a": 42.5, "b": 100}) is False
+            assert evaluator.evaluate(expr, {"a": 42, "b": 100.1}) is False
+
+    def test_same_keys_expression(self):
+        """Test same_keys predefined expression with maps."""
+        with CELEvaluator() as evaluator:
+            # same_keys expands to: size(a) == size(b) && a.all(k, k in b)
+            expr = "size(a) == size(b) && a.all(k, k in b)"
+            # Same keys should pass
+            assert evaluator.evaluate(expr, {
+                "a": {"name": "Alice", "age": 30},
+                "b": {"name": "Bob", "age": 25}
+            }) is True
+            # Different keys should fail
+            assert evaluator.evaluate(expr, {
+                "a": {"name": "Alice", "age": 30},
+                "b": {"name": "Bob", "city": "NYC"}
+            }) is False
+            # Different number of keys should fail
+            assert evaluator.evaluate(expr, {
+                "a": {"name": "Alice"},
+                "b": {"name": "Bob", "age": 25}
+            }) is False
+
 
 class TestCELEvaluatorComplexData:
     """Tests with complex nested data structures."""
