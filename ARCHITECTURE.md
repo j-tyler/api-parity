@@ -686,14 +686,22 @@ Chains are auto-discovered from OpenAPI links via Schemathesis `schema.as_state_
 
 ---
 
-## OpenAPI Spec as Field Authority [NEEDS SPEC]
+## OpenAPI Spec as Field Authority [NEEDS IMPL]
 
-Response fields not present in the OpenAPI spec are treated as mismatches (category: `schema_violation`). This forces the spec to accurately describe the API.
+Response fields not present in the OpenAPI spec are treated as mismatches (category: `schema_violation`). This forces the spec to accurately describe the API. See DESIGN.md "OpenAPI Spec as Field Authority" and "Handling additionalProperties in Schema Validation" for design decisions.
 
-**Open Questions:**
-1. Which JSON Schema validator to use?
-2. How to handle `additionalProperties: true` in the spec?
-3. Should unknown fields be warnings or errors?
+**Behavior (decided):**
+- Validate each response against the OpenAPI response schema for that operation+status_code
+- `additionalProperties: false` → Extra fields are schema violations (errors)
+- `additionalProperties: true` or unspecified → Extra fields allowed, but still compared between A and B
+- Extra fields use equality comparison by default; user can add rules to override
+- Schema violations are a separate category from comparison mismatches
+
+**Implementation (TODO):**
+- Choose JSON Schema validator library
+- Extract response schemas from OpenAPI spec
+- Integrate validation into comparison flow
+- See TODO.md for detailed task list
 
 ---
 
