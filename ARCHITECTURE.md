@@ -687,22 +687,39 @@ Chains are auto-discovered from OpenAPI links via Schemathesis `schema.as_state_
 
 ---
 
-## OpenAPI Spec as Field Authority [NEEDS IMPL]
+## OpenAPI Spec as Field Authority [IMPLEMENTED]
 
 Response fields not present in the OpenAPI spec are treated as mismatches (category: `schema_violation`). This forces the spec to accurately describe the API. See DESIGN.md "OpenAPI Spec as Field Authority" and "Handling additionalProperties in Schema Validation" for design decisions.
 
-**Behavior (decided):**
+**Behavior:**
 - Validate each response against the OpenAPI response schema for that operation+status_code
 - `additionalProperties: false` → Extra fields are schema violations (errors)
 - `additionalProperties: true` or unspecified → Extra fields allowed, but still compared between A and B
-- Extra fields use equality comparison by default; user can add rules to override
+- Extra fields use equality comparison (custom rules not currently supported)
 - Schema violations are a separate category from comparison mismatches
 
-**Implementation (TODO):**
-- Choose JSON Schema validator library
-- Extract response schemas from OpenAPI spec
-- Integrate validation into comparison flow
-- See TODO.md for detailed task list
+**Implementation Details:**
+- **SchemaValidator Component** (`api_parity/schema_validator.py`): Extracts response schemas from OpenAPI spec and validates responses against them
+- **JSON Schema Library:** `jsonschema` (v4.23.0) - well-established library with Draft4 support
+- **Mismatch Type:** `SCHEMA_VIOLATION` in MismatchType enum
+- **Comparison Phase:** Phase 0 (before status code comparison) validates both responses
+
+**Interface:**
+```python
+from api_parity.schema_validator import SchemaValidator
+
+validator = SchemaValidator(spec_path)
+result = validator.validate_response(body, operation_id, status_code)
+if not result.valid:
+    for violation in result.violations:
+        print(f"{violation.path}: {violation.message}")
+```
+
+**Replay Mode:** Schema validation is not performed during replay (no spec available).
+
+**Limitations:**
+- Recursive schema refs (e.g., `Node` with `children: $ref Node`) are detected and left unresolved to prevent infinite loops
+- `extra_fields` tracking only considers root-level `additionalProperties`; nested restrictions are enforced by jsonschema validation
 
 ---
 

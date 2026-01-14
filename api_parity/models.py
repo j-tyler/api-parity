@@ -288,6 +288,7 @@ class ComponentResult(BaseModel):
 class MismatchType(str, Enum):
     """Which component caused the mismatch."""
 
+    SCHEMA_VIOLATION = "schema_violation"
     STATUS_CODE = "status_code"
     HEADERS = "headers"
     BODY = "body"

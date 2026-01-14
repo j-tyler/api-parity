@@ -4,13 +4,16 @@ The Comparator takes two ResponseCase objects and an OperationRules configuratio
 compares them according to the rules, and produces a ComparisonResult. It delegates
 CEL expression evaluation to the CELEvaluator.
 
+Optionally validates responses against OpenAPI schemas before comparison
+(see "OpenAPI Spec as Field Authority" in ARCHITECTURE.md).
+
 See ARCHITECTURE.md "Comparator Component" for specifications.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jsonpath_ng import parse as jsonpath_parse
 from jsonpath_ng.exceptions import JsonPathParserError
@@ -28,6 +31,9 @@ from api_parity.models import (
     PresenceMode,
     ResponseCase,
 )
+
+if TYPE_CHECKING:
+    from api_parity.schema_validator import SchemaValidator
 
 
 # =============================================================================
@@ -107,24 +113,33 @@ class Comparator:
     Usage:
         with CELEvaluator() as cel:
             comparator = Comparator(cel, library)
-            result = comparator.compare(response_a, response_b, rules)
+            result = comparator.compare(response_a, response_b, rules, "createWidget")
             if not result.match:
                 print(f"Mismatch: {result.summary}")
+
+    With schema validation (OpenAPI Spec as Field Authority):
+        from api_parity.schema_validator import SchemaValidator
+        validator = SchemaValidator(spec_path)
+        comparator = Comparator(cel, library, schema_validator=validator)
+        result = comparator.compare(response_a, response_b, rules, "createWidget")
     """
 
     def __init__(
         self,
         cel_evaluator: CELEvaluator,
         comparison_library: ComparisonLibrary,
+        schema_validator: "SchemaValidator | None" = None,
     ) -> None:
         """Initialize the Comparator.
 
         Args:
             cel_evaluator: CEL evaluator instance (caller owns lifecycle).
             comparison_library: Library of predefined comparisons.
+            schema_validator: Optional schema validator for OpenAPI Spec as Field Authority.
         """
         self._cel = cel_evaluator
         self._library = comparison_library
+        self._schema_validator = schema_validator
         # Cache compiled JSONPath expressions for performance
         self._jsonpath_cache: dict[str, Any] = {}
 
@@ -133,6 +148,7 @@ class Comparator:
         response_a: ResponseCase,
         response_b: ResponseCase,
         rules: OperationRules,
+        operation_id: str | None = None,
     ) -> ComparisonResult:
         """Compare two responses according to the given rules.
 
@@ -140,11 +156,31 @@ class Comparator:
             response_a: Response from target A.
             response_b: Response from target B.
             rules: Comparison rules to apply.
+            operation_id: Optional operationId for schema validation lookup.
 
         Returns:
             ComparisonResult with match status and details.
         """
         details: dict[str, ComponentResult] = {}
+
+        # Phase 0: Schema validation (if schema_validator is configured)
+        # Validates both responses against OpenAPI spec before comparison
+        extra_fields_a: list[str] = []
+        extra_fields_b: list[str] = []
+
+        if self._schema_validator is not None and operation_id is not None:
+            schema_result, extra_fields_a, extra_fields_b = self._validate_schemas(
+                response_a, response_b, operation_id
+            )
+            details["schema"] = schema_result
+
+            if not schema_result.match:
+                return ComparisonResult(
+                    match=False,
+                    mismatch_type=MismatchType.SCHEMA_VIOLATION,
+                    summary=self._format_schema_summary(schema_result.differences),
+                    details=details,
+                )
 
         # Phase 1: Compare status codes
         status_result = self._compare_status_code(
@@ -194,6 +230,23 @@ class Comparator:
                 details=details,
             )
 
+        # Phase 4: Compare extra fields (fields not in schema but allowed)
+        # These fields exist in the response but aren't defined in the OpenAPI spec.
+        # When additionalProperties is true/unspecified, we still need to compare them.
+        if extra_fields_a or extra_fields_b:
+            extra_result = self._compare_extra_fields(
+                response_a.body, response_b.body, extra_fields_a, extra_fields_b
+            )
+            details["extra_fields"] = extra_result
+
+            if not extra_result.match:
+                return ComparisonResult(
+                    match=False,
+                    mismatch_type=MismatchType.BODY,
+                    summary=self._format_extra_fields_summary(extra_result.differences),
+                    details=details,
+                )
+
         # All components match
         return ComparisonResult(
             match=True,
@@ -201,6 +254,136 @@ class Comparator:
             summary="Responses match",
             details=details,
         )
+
+    def _validate_schemas(
+        self,
+        response_a: ResponseCase,
+        response_b: ResponseCase,
+        operation_id: str,
+    ) -> tuple[ComponentResult, list[str], list[str]]:
+        """Validate both responses against OpenAPI schema.
+
+        Args:
+            response_a: Response from target A.
+            response_b: Response from target B.
+            operation_id: The operationId for schema lookup.
+
+        Returns:
+            Tuple of (ComponentResult, extra_fields_a, extra_fields_b).
+        """
+        differences: list[FieldDifference] = []
+        extra_fields_a: list[str] = []
+        extra_fields_b: list[str] = []
+
+        # Validate response A
+        result_a = self._schema_validator.validate_response(
+            response_a.body, operation_id, response_a.status_code
+        )
+        for violation in result_a.violations:
+            differences.append(
+                FieldDifference(
+                    path=violation.path,
+                    target_a=f"<violation: {violation.violation_type}>",
+                    target_b="<not checked>",
+                    rule=f"schema_violation: {violation.message}",
+                )
+            )
+        extra_fields_a = result_a.extra_fields
+
+        # Validate response B
+        result_b = self._schema_validator.validate_response(
+            response_b.body, operation_id, response_b.status_code
+        )
+        for violation in result_b.violations:
+            differences.append(
+                FieldDifference(
+                    path=violation.path,
+                    target_a="<not checked>",
+                    target_b=f"<violation: {violation.violation_type}>",
+                    rule=f"schema_violation: {violation.message}",
+                )
+            )
+        extra_fields_b = result_b.extra_fields
+
+        return (
+            ComponentResult(match=len(differences) == 0, differences=differences),
+            extra_fields_a,
+            extra_fields_b,
+        )
+
+    def _compare_extra_fields(
+        self,
+        body_a: Any,
+        body_b: Any,
+        extra_fields_a: list[str],
+        extra_fields_b: list[str],
+    ) -> ComponentResult:
+        """Compare extra fields (not defined in schema) between responses.
+
+        Extra fields are compared with equality by default.
+
+        Args:
+            body_a: Body from target A.
+            body_b: Body from target B.
+            extra_fields_a: Extra fields found in response A.
+            extra_fields_b: Extra fields found in response B.
+
+        Returns:
+            ComponentResult for extra fields comparison.
+        """
+        differences: list[FieldDifference] = []
+
+        # Combine all extra fields from both responses
+        all_extra_fields = set(extra_fields_a) | set(extra_fields_b)
+
+        for path in all_extra_fields:
+            try:
+                matches_a = self._expand_jsonpath(body_a, path)
+                matches_b = self._expand_jsonpath(body_b, path)
+            except JSONPathError:
+                # Skip invalid paths
+                continue
+
+            value_a = matches_a[0][1] if matches_a else NOT_FOUND
+            value_b = matches_b[0][1] if matches_b else NOT_FOUND
+
+            # Check presence parity
+            a_present = value_a is not NOT_FOUND
+            b_present = value_b is not NOT_FOUND
+
+            if a_present != b_present:
+                differences.append(
+                    FieldDifference(
+                        path=path,
+                        target_a=value_a if a_present else "<missing>",
+                        target_b=value_b if b_present else "<missing>",
+                        rule="extra_field_presence",
+                    )
+                )
+            elif a_present and b_present and value_a != value_b:
+                # Both have the field but values differ
+                differences.append(
+                    FieldDifference(
+                        path=path,
+                        target_a=value_a,
+                        target_b=value_b,
+                        rule="extra_field_equality",
+                    )
+                )
+
+        return ComponentResult(match=len(differences) == 0, differences=differences)
+
+    def _format_schema_summary(self, differences: list[FieldDifference]) -> str:
+        """Format a summary for schema violations."""
+        if len(differences) == 1:
+            return f"Schema violation at {differences[0].path}"
+        return f"Schema violations: {len(differences)} violations"
+
+    def _format_extra_fields_summary(self, differences: list[FieldDifference]) -> str:
+        """Format a summary for extra fields mismatches."""
+        if len(differences) == 1:
+            return f"Extra field mismatch at {differences[0].path}"
+        return f"Extra field mismatches: {len(differences)} differences"
 
     def _compare_status_code(
         self,
