@@ -509,6 +509,95 @@ class TestComparisonResult:
 # =============================================================================
 
 
+class TestTargetConfig:
+    def test_minimal_config(self):
+        """Test target config with only base_url."""
+        target = TargetConfig(base_url="http://localhost:8000")
+        assert target.base_url == "http://localhost:8000"
+        assert target.headers == {}
+        assert target.cert is None
+        assert target.key is None
+        assert target.ca_bundle is None
+        assert target.verify_ssl is True
+
+    def test_with_headers(self):
+        """Test target config with headers."""
+        target = TargetConfig(
+            base_url="http://localhost:8000",
+            headers={"Authorization": "Bearer token123"},
+        )
+        assert target.headers == {"Authorization": "Bearer token123"}
+
+    def test_with_mtls(self):
+        """Test target config with mTLS (cert and key)."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            cert="/path/to/client.crt",
+            key="/path/to/client.key",
+        )
+        assert target.cert == "/path/to/client.crt"
+        assert target.key == "/path/to/client.key"
+
+    def test_cert_without_key_rejected(self):
+        """Test that cert without key raises validation error."""
+        with pytest.raises(ValueError, match="cert and key must both be provided together"):
+            TargetConfig(
+                base_url="https://secure.example.com",
+                cert="/path/to/client.crt",
+            )
+
+    def test_key_without_cert_rejected(self):
+        """Test that key without cert raises validation error."""
+        with pytest.raises(ValueError, match="cert and key must both be provided together"):
+            TargetConfig(
+                base_url="https://secure.example.com",
+                key="/path/to/client.key",
+            )
+
+    def test_with_ca_bundle(self):
+        """Test target config with custom CA bundle."""
+        target = TargetConfig(
+            base_url="https://internal.example.com",
+            ca_bundle="/path/to/ca-bundle.crt",
+        )
+        assert target.ca_bundle == "/path/to/ca-bundle.crt"
+        assert target.verify_ssl is True  # Ignored when ca_bundle is set
+
+    def test_with_verify_ssl_false(self):
+        """Test target config with SSL verification disabled."""
+        target = TargetConfig(
+            base_url="https://staging.example.com",
+            verify_ssl=False,
+        )
+        assert target.verify_ssl is False
+
+    def test_full_tls_config(self):
+        """Test target config with all TLS options."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            headers={"X-Custom": "value"},
+            cert="/path/to/client.crt",
+            key="/path/to/client.key",
+            ca_bundle="/path/to/ca-bundle.crt",
+            verify_ssl=False,  # Ignored when ca_bundle is set
+        )
+        assert target.cert == "/path/to/client.crt"
+        assert target.key == "/path/to/client.key"
+        assert target.ca_bundle == "/path/to/ca-bundle.crt"
+
+    def test_serialization_roundtrip(self):
+        """Test serialization and deserialization of TLS config."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            cert="/path/to/client.crt",
+            key="/path/to/client.key",
+            ca_bundle="/path/to/ca-bundle.crt",
+        )
+        json_str = target.model_dump_json()
+        restored = TargetConfig.model_validate_json(json_str)
+        assert restored == target
+
+
 class TestRuntimeConfig:
     def test_full_config_serialization(self):
         config = RuntimeConfig(
