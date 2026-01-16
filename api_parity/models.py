@@ -376,6 +376,28 @@ class TargetConfig(BaseModel):
         default_factory=dict,
         description="Headers to include (supports ${ENV_VAR} substitution)",
     )
+    # TLS/SSL configuration
+    cert: str | None = Field(
+        default=None, description="Path to client certificate file (PEM format)"
+    )
+    key: str | None = Field(
+        default=None, description="Path to client private key file (PEM format)"
+    )
+    key_password: str | None = Field(
+        default=None, description="Password for encrypted private key"
+    )
+    ca_bundle: str | None = Field(
+        default=None, description="Path to CA bundle for server verification"
+    )
+    verify_ssl: bool = Field(
+        default=True, description="Verify server certificate (ignored if ca_bundle is set)"
+    )
+
+    @model_validator(mode="after")
+    def validate_cert_key_pair(self) -> Self:
+        if (self.cert is None) != (self.key is None):
+            raise ValueError("cert and key must both be provided together for mTLS")
+        return self
 
 
 class RateLimitConfig(BaseModel):

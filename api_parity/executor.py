@@ -84,16 +84,8 @@ class Executor:
         self._rate_limit_lock = Lock()
 
         # Create HTTP clients for each target
-        self._client_a = httpx.Client(
-            base_url=target_a.base_url,
-            headers=target_a.headers,
-            timeout=default_timeout,
-        )
-        self._client_b = httpx.Client(
-            base_url=target_b.base_url,
-            headers=target_b.headers,
-            timeout=default_timeout,
-        )
+        self._client_a = httpx.Client(**self._build_client_kwargs(target_a, default_timeout))
+        self._client_b = httpx.Client(**self._build_client_kwargs(target_b, default_timeout))
 
     def __enter__(self) -> "Executor":
         return self
@@ -105,6 +97,38 @@ class Executor:
         """Close HTTP clients."""
         self._client_a.close()
         self._client_b.close()
+
+    def _build_client_kwargs(self, target: TargetConfig, timeout: float) -> dict:
+        """Build kwargs for httpx.Client including TLS configuration.
+
+        Args:
+            target: Target configuration with optional TLS settings.
+            timeout: Default timeout in seconds.
+
+        Returns:
+            Dictionary of kwargs for httpx.Client constructor.
+        """
+        kwargs: dict = {
+            "base_url": target.base_url,
+            "headers": target.headers,
+            "timeout": timeout,
+        }
+
+        # Handle client certificate (mTLS)
+        if target.cert and target.key:
+            if target.key_password:
+                kwargs["cert"] = (target.cert, target.key, target.key_password)
+            else:
+                kwargs["cert"] = (target.cert, target.key)
+
+        # Handle server verification
+        if target.ca_bundle:
+            kwargs["verify"] = target.ca_bundle
+        elif not target.verify_ssl:
+            kwargs["verify"] = False
+        # else: use httpx default (True)
+
+        return kwargs
 
     def execute(
         self,

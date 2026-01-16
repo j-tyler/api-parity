@@ -673,10 +673,15 @@ targets:
     base_url: https://api.example.com
     headers:
       Authorization: "Bearer ${API_TOKEN}"  # env var substitution
+    # Optional mTLS configuration
+    cert: /path/to/client.crt
+    key: /path/to/client.key
+    ca_bundle: /path/to/ca-bundle.crt
   staging:
     base_url: https://staging.api.example.com
     headers:
       Authorization: "Bearer ${STAGING_TOKEN}"
+    verify_ssl: false  # Skip server certificate verification (use with caution)
 
 comparison_rules: ./comparison_rules.json  # path to comparison rules file
 
@@ -689,6 +694,12 @@ secrets:
     - "$.token"
     - "$.api_key"
 ```
+
+**TLS Configuration Options** (all paths support `${ENV_VAR}` substitution):
+- `cert` / `key` — Client certificate and private key (PEM format) for mTLS. Both must be provided together.
+- `key_password` — Password for encrypted private key. Supports `${ENV_VAR}` substitution for secure handling.
+- `ca_bundle` — Custom CA bundle for server certificate verification. When set, `verify_ssl` is ignored.
+- `verify_ssl` — Set to `false` to disable server certificate verification. Only applies when `ca_bundle` is not set. Default: `true`.
 
 The `comparison_rules` field references a separate JSON file (see "Per-Endpoint Comparison Rules" below). Keeping rules in a separate file allows reuse across different runtime configs and keeps concerns separated.
 

@@ -1,10 +1,11 @@
-"""Tests for Executor rate limiting behavior.
+"""Tests for Executor rate limiting and TLS configuration behavior.
 
 Tests cover:
 - Sleep is called when requests are too fast
 - Sleep duration is calculated correctly
 - Slow requests don't cause unnecessary waits
 - No rate limiting when disabled
+- TLS/mTLS configuration is passed to httpx.Client correctly
 """
 
 from unittest.mock import MagicMock, patch
@@ -157,5 +158,291 @@ class TestWaitForRateLimit:
 
                 # First request should not sleep - huge elapsed time
                 mock_sleep.assert_not_called()
+            finally:
+                executor.close()
+
+
+class TestBuildClientKwargs:
+    """Tests for Executor._build_client_kwargs method."""
+
+    def test_basic_kwargs(self) -> None:
+        """Test basic kwargs without TLS configuration."""
+        target = TargetConfig(
+            base_url="http://localhost:8000",
+            headers={"Authorization": "Bearer token"},
+        )
+
+        # Create executor with mock to avoid actual httpx.Client creation
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                assert kwargs["base_url"] == "http://localhost:8000"
+                assert kwargs["headers"] == {"Authorization": "Bearer token"}
+                assert kwargs["timeout"] == 30.0
+                assert "cert" not in kwargs
+                assert "verify" not in kwargs
+            finally:
+                executor.close()
+
+    def test_with_cert_and_key(self) -> None:
+        """Test that cert and key are passed as a tuple."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            cert="/path/to/client.crt",
+            key="/path/to/client.key",
+        )
+
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                assert kwargs["cert"] == ("/path/to/client.crt", "/path/to/client.key")
+                assert "verify" not in kwargs  # Default verify not explicitly set
+            finally:
+                executor.close()
+
+    def test_with_ca_bundle(self) -> None:
+        """Test that ca_bundle is passed as verify."""
+        target = TargetConfig(
+            base_url="https://internal.example.com",
+            ca_bundle="/path/to/ca-bundle.crt",
+        )
+
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                assert kwargs["verify"] == "/path/to/ca-bundle.crt"
+                assert "cert" not in kwargs
+            finally:
+                executor.close()
+
+    def test_with_verify_ssl_false(self) -> None:
+        """Test that verify_ssl=False sets verify=False."""
+        target = TargetConfig(
+            base_url="https://staging.example.com",
+            verify_ssl=False,
+        )
+
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                assert kwargs["verify"] is False
+                assert "cert" not in kwargs
+            finally:
+                executor.close()
+
+    def test_ca_bundle_takes_precedence_over_verify_ssl(self) -> None:
+        """Test that ca_bundle is used even when verify_ssl is False."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            ca_bundle="/path/to/ca-bundle.crt",
+            verify_ssl=False,  # Should be ignored
+        )
+
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                # ca_bundle should take precedence
+                assert kwargs["verify"] == "/path/to/ca-bundle.crt"
+            finally:
+                executor.close()
+
+    def test_full_tls_config(self) -> None:
+        """Test with all TLS options configured."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            headers={"X-Custom": "value"},
+            cert="/path/to/client.crt",
+            key="/path/to/client.key",
+            ca_bundle="/path/to/ca-bundle.crt",
+        )
+
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 60.0)
+
+                assert kwargs["base_url"] == "https://secure.example.com"
+                assert kwargs["headers"] == {"X-Custom": "value"}
+                assert kwargs["timeout"] == 60.0
+                assert kwargs["cert"] == ("/path/to/client.crt", "/path/to/client.key")
+                assert kwargs["verify"] == "/path/to/ca-bundle.crt"
+            finally:
+                executor.close()
+
+    def test_default_verify_not_set_when_true(self) -> None:
+        """Test that verify is not explicitly set when using defaults."""
+        target = TargetConfig(
+            base_url="http://localhost:8000",
+            verify_ssl=True,  # Default value
+        )
+
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                # verify should not be in kwargs, letting httpx use its default
+                assert "verify" not in kwargs
+            finally:
+                executor.close()
+
+    def test_with_key_password(self) -> None:
+        """Test that cert, key, and key_password are passed as a 3-tuple."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            cert="/path/to/client.crt",
+            key="/path/to/client.key",
+            key_password="secret123",
+        )
+
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                assert kwargs["cert"] == (
+                    "/path/to/client.crt",
+                    "/path/to/client.key",
+                    "secret123",
+                )
+            finally:
+                executor.close()
+
+    def test_key_password_without_cert_key_ignored(self) -> None:
+        """Test that key_password alone does nothing (requires cert and key)."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            key_password="secret123",  # No cert/key provided
+        )
+
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                # cert should not be in kwargs since cert/key were not provided
+                assert "cert" not in kwargs
+            finally:
+                executor.close()
+
+
+class TestHttpxClientKwargsIntegration:
+    """Tests that verify httpx.Client is actually called with the correct kwargs from _build_client_kwargs."""
+
+    def test_basic_client_receives_correct_kwargs(self) -> None:
+        """Test that httpx.Client receives the kwargs from _build_client_kwargs."""
+        target_a = TargetConfig(
+            base_url="http://localhost:8001",
+            headers={"X-Custom-A": "value-a"},
+        )
+        target_b = TargetConfig(
+            base_url="http://localhost:8002",
+            headers={"X-Custom-B": "value-b"},
+        )
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            executor = Executor(target_a, target_b, default_timeout=45.0)
+            try:
+                # Should have been called twice, once for each target
+                assert mock_client_cls.call_count == 2
+
+                # Verify call args for target_a (first call)
+                call_a = mock_client_cls.call_args_list[0]
+                assert call_a.kwargs["base_url"] == "http://localhost:8001"
+                assert call_a.kwargs["headers"] == {"X-Custom-A": "value-a"}
+                assert call_a.kwargs["timeout"] == 45.0
+
+                # Verify call args for target_b (second call)
+                call_b = mock_client_cls.call_args_list[1]
+                assert call_b.kwargs["base_url"] == "http://localhost:8002"
+                assert call_b.kwargs["headers"] == {"X-Custom-B": "value-b"}
+                assert call_b.kwargs["timeout"] == 45.0
+            finally:
+                executor.close()
+
+    def test_tls_kwargs_passed_to_client(self) -> None:
+        """Test that TLS configuration kwargs are passed to httpx.Client."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            cert="/path/to/client.crt",
+            key="/path/to/client.key",
+            ca_bundle="/path/to/ca-bundle.crt",
+        )
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            executor = Executor(target, target)
+            try:
+                # Both clients should have the same TLS kwargs
+                assert mock_client_cls.call_count == 2
+
+                for call in mock_client_cls.call_args_list:
+                    assert call.kwargs["cert"] == ("/path/to/client.crt", "/path/to/client.key")
+                    assert call.kwargs["verify"] == "/path/to/ca-bundle.crt"
+            finally:
+                executor.close()
+
+    def test_key_password_passed_to_client(self) -> None:
+        """Test that key_password is passed to httpx.Client as 3-tuple cert."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            cert="/path/to/client.crt",
+            key="/path/to/client.key",
+            key_password="encrypted-key-pass",
+        )
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            executor = Executor(target, target)
+            try:
+                assert mock_client_cls.call_count == 2
+
+                for call in mock_client_cls.call_args_list:
+                    # Verify the 3-tuple format is used when key_password is provided
+                    assert call.kwargs["cert"] == (
+                        "/path/to/client.crt",
+                        "/path/to/client.key",
+                        "encrypted-key-pass",
+                    )
+            finally:
+                executor.close()
+
+    def test_verify_ssl_false_passed_to_client(self) -> None:
+        """Test that verify_ssl=False is passed to httpx.Client as verify=False."""
+        target = TargetConfig(
+            base_url="https://staging.example.com",
+            verify_ssl=False,
+        )
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            executor = Executor(target, target)
+            try:
+                assert mock_client_cls.call_count == 2
+
+                for call in mock_client_cls.call_args_list:
+                    assert call.kwargs["verify"] is False
+            finally:
+                executor.close()
+
+    def test_rate_limit_does_not_affect_client_kwargs(self) -> None:
+        """Test that rate_limit parameter doesn't leak into httpx.Client kwargs."""
+        target = TargetConfig(base_url="http://localhost:8000")
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            executor = Executor(target, target, requests_per_second=10.0)
+            try:
+                assert mock_client_cls.call_count == 2
+
+                for call in mock_client_cls.call_args_list:
+                    # Only expected kwargs should be present
+                    assert set(call.kwargs.keys()) == {"base_url", "headers", "timeout"}
             finally:
                 executor.close()
