@@ -9,6 +9,7 @@ See ARCHITECTURE.md "Executor" for specifications.
 from __future__ import annotations
 
 import base64
+import ssl
 import time
 from threading import Lock
 from typing import Any, Callable
@@ -121,8 +122,25 @@ class Executor:
             else:
                 kwargs["cert"] = (target.cert, target.key)
 
-        # Handle server verification
-        if target.ca_bundle:
+        # Handle ciphers - requires creating a custom SSL context
+        if target.ciphers:
+            ssl_context = ssl.create_default_context()
+            try:
+                ssl_context.set_ciphers(target.ciphers)
+            except ssl.SSLError as e:
+                raise ExecutorError(f"Invalid cipher string '{target.ciphers}': {e}") from e
+
+            # Load CA bundle if specified
+            if target.ca_bundle:
+                ssl_context.load_verify_locations(target.ca_bundle)
+            elif not target.verify_ssl:
+                # Disable verification
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+
+            kwargs["verify"] = ssl_context
+        # Handle server verification without custom ciphers
+        elif target.ca_bundle:
             kwargs["verify"] = target.ca_bundle
         elif not target.verify_ssl:
             kwargs["verify"] = False
