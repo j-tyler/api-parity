@@ -10,6 +10,8 @@ Protocol (newline-delimited JSON):
     Error: Go sends {"id":"<uuid>","ok":false,"error":"..."}
 """
 
+from __future__ import annotations
+
 import json
 import select
 import subprocess

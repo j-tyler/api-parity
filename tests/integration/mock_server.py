@@ -12,6 +12,8 @@ The --variant flag introduces controlled differences to test comparison logic:
     - variant "b": Slight price rounding differences, shuffled arrays, etc.
 """
 
+from __future__ import annotations
+
 import argparse
 import random
 import uuid

@@ -7,6 +7,8 @@ WITHOUT making actual HTTP calls. Validates that Schemathesis can
 generate multi-step chains for api-parity's differential testing.
 """
 
+from __future__ import annotations
+
 import json
 import uuid
 from pathlib import Path
