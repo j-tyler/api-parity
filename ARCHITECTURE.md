@@ -700,6 +700,7 @@ secrets:
 - `key_password` — Password for encrypted private key. Supports `${ENV_VAR}` substitution for secure handling.
 - `ca_bundle` — Custom CA bundle for server certificate verification. When set, `verify_ssl` is ignored.
 - `verify_ssl` — Set to `false` to disable server certificate verification. Only applies when `ca_bundle` is not set. Default: `true`.
+- `ciphers` — OpenSSL cipher string to restrict allowed TLS ciphers (e.g., `'ECDHE+AESGCM'`). Use when connecting to servers with specific cipher requirements or for security hardening.
 
 The `comparison_rules` field references a separate JSON file (see "Per-Endpoint Comparison Rules" below). Keeping rules in a separate file allows reuse across different runtime configs and keeps concerns separated.
 

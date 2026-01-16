@@ -394,6 +394,10 @@ class TargetConfig(BaseModel):
     verify_ssl: bool = Field(
         default=True, description="Verify server certificate (ignored if ca_bundle is set)"
     )
+    ciphers: str | None = Field(
+        default=None,
+        description="OpenSSL cipher string to restrict allowed ciphers (e.g., 'ECDHE+AESGCM')",
+    )
 
     @model_validator(mode="after")
     def validate_cert_key_pair(self) -> Self:

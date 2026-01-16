@@ -6,13 +6,15 @@ Tests cover:
 - Slow requests don't cause unnecessary waits
 - No rate limiting when disabled
 - TLS/mTLS configuration is passed to httpx.Client correctly
+- Cipher configuration creates proper SSL context
 """
 
+import ssl
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from api_parity.executor import Executor
+from api_parity.executor import Executor, ExecutorError
 from api_parity.models import TargetConfig
 
 
@@ -446,3 +448,128 @@ class TestHttpxClientKwargsIntegration:
                     assert set(call.kwargs.keys()) == {"base_url", "headers", "timeout"}
             finally:
                 executor.close()
+
+
+class TestCipherConfiguration:
+    """Tests for cipher configuration in Executor._build_client_kwargs."""
+
+    def test_ciphers_creates_ssl_context(self) -> None:
+        """Test that specifying ciphers creates an SSL context with restricted ciphers."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            ciphers="ECDHE+AESGCM",
+        )
+
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                ssl_context = kwargs["verify"]
+                assert isinstance(ssl_context, ssl.SSLContext)
+                # Verify ciphers were actually restricted (default context has ~17,
+                # ECDHE+AESGCM restricts to ~7 depending on OpenSSL version)
+                enabled_ciphers = ssl_context.get_ciphers()
+                assert len(enabled_ciphers) < 15, "Ciphers should be restricted"
+                # Verify all enabled ciphers match the pattern (contain ECDHE and GCM)
+                for cipher in enabled_ciphers:
+                    name = cipher["name"]
+                    # TLS 1.3 ciphers don't follow the same naming, skip them
+                    if not name.startswith("TLS_"):
+                        assert "ECDHE" in name or "GCM" in name, f"Unexpected cipher: {name}"
+            finally:
+                executor.close()
+
+    def test_ciphers_with_ca_bundle(self) -> None:
+        """Test that ciphers work together with ca_bundle."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            ciphers="ECDHE+AESGCM",
+            ca_bundle="/path/to/ca-bundle.crt",
+        )
+
+        with patch("api_parity.executor.httpx.Client"), \
+             patch("ssl.SSLContext.load_verify_locations") as mock_load:
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                assert isinstance(kwargs["verify"], ssl.SSLContext)
+                # load_verify_locations should be called with the ca_bundle
+                mock_load.assert_called_with("/path/to/ca-bundle.crt")
+            finally:
+                executor.close()
+
+    def test_ciphers_with_verify_ssl_false(self) -> None:
+        """Test that ciphers work with verify_ssl=False."""
+        target = TargetConfig(
+            base_url="https://staging.example.com",
+            ciphers="ECDHE+AESGCM",
+            verify_ssl=False,
+        )
+
+        with patch("api_parity.executor.httpx.Client"):
+            executor = Executor(target, target)
+            try:
+                kwargs = executor._build_client_kwargs(target, 30.0)
+
+                ssl_context = kwargs["verify"]
+                assert isinstance(ssl_context, ssl.SSLContext)
+                # Verification should be disabled
+                assert ssl_context.check_hostname is False
+                assert ssl_context.verify_mode == ssl.CERT_NONE
+            finally:
+                executor.close()
+
+    def test_ciphers_passed_to_httpx_client(self) -> None:
+        """Test that SSL context with ciphers is passed to httpx.Client."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            ciphers="ECDHE+AESGCM:DHE+AESGCM",
+        )
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            executor = Executor(target, target)
+            try:
+                assert mock_client_cls.call_count == 2
+
+                for call in mock_client_cls.call_args_list:
+                    assert isinstance(call.kwargs["verify"], ssl.SSLContext)
+            finally:
+                executor.close()
+
+    def test_different_ciphers_per_target(self) -> None:
+        """Test that different cipher configurations work for each target."""
+        target_a = TargetConfig(
+            base_url="https://server-a.example.com",
+            ciphers="ECDHE+AESGCM",
+        )
+        target_b = TargetConfig(
+            base_url="https://server-b.example.com",
+            # No ciphers, uses default
+        )
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            executor = Executor(target_a, target_b)
+            try:
+                assert mock_client_cls.call_count == 2
+
+                # First call (target_a) should have SSL context
+                call_a = mock_client_cls.call_args_list[0]
+                assert isinstance(call_a.kwargs["verify"], ssl.SSLContext)
+
+                # Second call (target_b) should not have verify set (uses default)
+                call_b = mock_client_cls.call_args_list[1]
+                assert "verify" not in call_b.kwargs
+            finally:
+                executor.close()
+
+    def test_invalid_cipher_string_raises_executor_error(self) -> None:
+        """Test that invalid cipher string raises ExecutorError with clear message."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            ciphers="INVALID_CIPHER_THAT_DOES_NOT_EXIST",
+        )
+
+        with pytest.raises(ExecutorError, match="Invalid cipher string"):
+            Executor(target, target)

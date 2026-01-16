@@ -597,6 +597,26 @@ class TestTargetConfig:
         restored = TargetConfig.model_validate_json(json_str)
         assert restored == target
 
+    def test_with_ciphers(self):
+        """Test target config with custom cipher string."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            ciphers="ECDHE+AESGCM:DHE+AESGCM",
+        )
+        assert target.ciphers == "ECDHE+AESGCM:DHE+AESGCM"
+
+    def test_ciphers_serialization_roundtrip(self):
+        """Test serialization and deserialization of cipher config."""
+        target = TargetConfig(
+            base_url="https://secure.example.com",
+            ciphers="ECDHE+AESGCM",
+            ca_bundle="/path/to/ca-bundle.crt",
+        )
+        json_str = target.model_dump_json()
+        restored = TargetConfig.model_validate_json(json_str)
+        assert restored == target
+        assert restored.ciphers == "ECDHE+AESGCM"
+
 
 class TestRuntimeConfig:
     def test_full_config_serialization(self):
