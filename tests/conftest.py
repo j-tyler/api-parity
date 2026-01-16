@@ -1,5 +1,7 @@
 """Pytest configuration and fixtures for api-parity tests."""
 
+from __future__ import annotations
+
 import socket
 import subprocess
 import sys
