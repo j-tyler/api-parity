@@ -26,7 +26,7 @@ DEFAULT_TIMEOUT = 30.0
 
 
 class ProgressReporter:
-    """Reports progress every second in a background thread.
+    """Reports progress every 10 seconds in a background thread.
 
     Usage:
         reporter = ProgressReporter(total=100, unit="cases")
@@ -81,8 +81,8 @@ class ProgressReporter:
             self._total = total
 
     def _run(self) -> None:
-        """Background thread that prints progress every second."""
-        while not self._stop_event.wait(timeout=1.0):
+        """Background thread that prints progress every 10 seconds."""
+        while not self._stop_event.wait(timeout=10.0):
             self._print_progress()
 
     def _print_progress(self) -> None:

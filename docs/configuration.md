@@ -89,7 +89,7 @@ The rate limit applies globally across all requests (to both targets). If not sp
 
 ## Progress Reporting
 
-During explore and replay runs, api-parity prints progress to stderr every second:
+During explore and replay runs, api-parity prints progress to stderr every 10 seconds:
 
 ```
 [Progress] 45/100 cases (45.0%) | 5.2/s | ETA: 10s
