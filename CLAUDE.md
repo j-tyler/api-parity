@@ -298,6 +298,8 @@ These issues were discovered during prototype validation. Don't repeat them:
    ```
    If this breaks in a future version, check if `InferenceConfig` was added to the public API.
 
+6. **Non-ASCII in generated header values** — Hypothesis may generate non-ASCII characters (e.g., `\xaf`) for header values during fuzzing. HTTP headers must be ASCII per RFC 7230. The Executor sanitizes header values before sending by replacing non-ASCII characters with `?`. This prevents `UnicodeEncodeError` from httpx while preserving the test structure.
+
 ## Comparison Rules Gotchas
 
 These issues were discovered during comparison rules design. Don't repeat them:

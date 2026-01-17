@@ -573,3 +573,173 @@ class TestCipherConfiguration:
 
         with pytest.raises(ExecutorError, match="Invalid cipher string"):
             Executor(target, target)
+
+
+class TestHeaderSanitization:
+    """Tests for ASCII header sanitization.
+
+    HTTP headers must be ASCII per RFC 7230. Schemathesis/Hypothesis may generate
+    non-ASCII characters during fuzzing. The executor sanitizes header values to
+    prevent UnicodeEncodeError when httpx encodes headers.
+    """
+
+    def test_sanitize_header_value_ascii_passthrough(self) -> None:
+        """ASCII values pass through unchanged."""
+        from api_parity.executor import _sanitize_header_value
+
+        assert _sanitize_header_value("Bearer token123") == "Bearer token123"
+        assert _sanitize_header_value("application/json") == "application/json"
+        assert _sanitize_header_value("") == ""
+        assert _sanitize_header_value("x-y-z_123") == "x-y-z_123"
+
+    def test_sanitize_header_value_non_ascii_replaced(self) -> None:
+        """Non-ASCII characters are replaced with '?'."""
+        from api_parity.executor import _sanitize_header_value
+
+        # \xaf is the character that caused the original issue
+        assert _sanitize_header_value("\xaf") == "?"
+        assert _sanitize_header_value("test\xafvalue") == "test?value"
+
+        # Unicode characters
+        assert _sanitize_header_value("héllo") == "h?llo"
+        assert _sanitize_header_value("日本語") == "???"
+        assert _sanitize_header_value("café") == "caf?"
+
+        # Mixed ASCII and non-ASCII
+        assert _sanitize_header_value("a\xafb\xafc") == "a?b?c"
+
+    def test_sanitize_header_value_preserves_structure(self) -> None:
+        """Sanitization preserves overall string structure and length."""
+        from api_parity.executor import _sanitize_header_value
+
+        original = "test\xafvalue"
+        sanitized = _sanitize_header_value(original)
+        # Non-ASCII becomes single '?' so length is preserved
+        assert len(sanitized) == len(original)
+
+    def test_execute_single_sanitizes_headers(
+        self, mock_targets: tuple[TargetConfig, TargetConfig]
+    ) -> None:
+        """Executor._execute_single sanitizes non-ASCII header values."""
+        from api_parity.models import RequestCase
+
+        target_a, target_b = mock_targets
+
+        # Create request with non-ASCII header value
+        request = RequestCase(
+            case_id="test-case",
+            operation_id="testOp",
+            method="GET",
+            path_template="/test",
+            rendered_path="/test",
+            headers={"X-Custom": ["test\xafvalue"]},  # Non-ASCII \xaf
+        )
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers.multi_items.return_value = []
+            mock_response.content = b""
+            mock_response.headers.get.return_value = ""
+            mock_response.http_version = "1.1"
+            mock_client.request.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+
+            executor = Executor(target_a, target_b)
+            try:
+                executor._execute_single(mock_client, request, 30.0, "Test")
+
+                # Verify the header value was sanitized before being sent
+                call_kwargs = mock_client.request.call_args.kwargs
+                assert call_kwargs["headers"]["X-Custom"] == "test?value"
+            finally:
+                executor.close()
+
+    def test_execute_does_not_crash_on_non_ascii_headers(
+        self, mock_targets: tuple[TargetConfig, TargetConfig]
+    ) -> None:
+        """Executor.execute completes without UnicodeEncodeError for non-ASCII headers."""
+        from api_parity.models import RequestCase
+
+        target_a, target_b = mock_targets
+
+        # Create request with various non-ASCII header values
+        request = RequestCase(
+            case_id="test-case",
+            operation_id="testOp",
+            method="GET",
+            path_template="/test",
+            rendered_path="/test",
+            headers={
+                "X-Latin": ["\xaf\xb0\xb1"],  # Latin supplement chars
+                "X-Unicode": ["日本語"],  # Japanese
+                "X-Mixed": ["hello\xafworld"],
+            },
+        )
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers.multi_items.return_value = []
+            mock_response.content = b""
+            mock_response.headers.get.return_value = ""
+            mock_response.http_version = "1.1"
+            mock_client.request.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+
+            executor = Executor(target_a, target_b)
+            try:
+                # Should not raise UnicodeEncodeError
+                response_a, response_b = executor.execute(request)
+
+                # Should have completed successfully
+                assert response_a.status_code == 200
+                assert response_b.status_code == 200
+
+                # Both targets should have received sanitized headers
+                for call in mock_client.request.call_args_list:
+                    headers = call.kwargs["headers"]
+                    assert headers["X-Latin"] == "???"
+                    assert headers["X-Unicode"] == "???"
+                    assert headers["X-Mixed"] == "hello?world"
+            finally:
+                executor.close()
+
+    def test_unicode_encode_error_caught_as_request_error(
+        self, mock_targets: tuple[TargetConfig, TargetConfig]
+    ) -> None:
+        """UnicodeEncodeError from httpx is caught and wrapped as RequestError.
+
+        This tests the fallback error handler for edge cases not caught by
+        header value sanitization (e.g., non-ASCII in header keys from a
+        malformed OpenAPI spec).
+        """
+        from api_parity.executor import RequestError
+        from api_parity.models import RequestCase
+
+        target_a, target_b = mock_targets
+
+        request = RequestCase(
+            case_id="test-case",
+            operation_id="testOp",
+            method="GET",
+            path_template="/test",
+            rendered_path="/test",
+        )
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            # Simulate httpx raising UnicodeEncodeError (e.g., from non-ASCII header key)
+            mock_client.request.side_effect = UnicodeEncodeError(
+                'ascii', 'tëst', 1, 2, 'ordinal not in range(128)'
+            )
+            mock_client_cls.return_value = mock_client
+
+            executor = Executor(target_a, target_b)
+            try:
+                with pytest.raises(RequestError, match="encoding error"):
+                    executor._execute_single(mock_client, request, 30.0, "Test")
+            finally:
+                executor.close()

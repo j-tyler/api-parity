@@ -35,6 +35,23 @@ class RequestError(ExecutorError):
     """Raised when a request fails (connection error, timeout, etc.)."""
 
 
+def _sanitize_header_value(value: str) -> str:
+    """Sanitize a header value to ensure it's ASCII-safe.
+
+    HTTP headers must contain only ASCII characters per RFC 7230. Schemathesis
+    may generate non-ASCII characters during fuzzing. This function replaces
+    non-ASCII characters with '?' to ensure the request can be sent.
+
+    Args:
+        value: The header value to sanitize.
+
+    Returns:
+        ASCII-safe header value with non-ASCII characters replaced by '?'.
+    """
+    # Use 'replace' error handler to convert non-ASCII to '?'
+    return value.encode('ascii', errors='replace').decode('ascii')
+
+
 class Executor:
     """Executes requests against two targets and captures responses.
 
@@ -463,10 +480,12 @@ class Executor:
                 params.append((key, value))
 
         # Build headers (flatten lists, take first value for each)
+        # Sanitize values to ASCII - HTTP headers must be ASCII per RFC 7230.
+        # Schemathesis/Hypothesis may generate non-ASCII characters during fuzzing.
         headers: dict[str, str] = {}
         for key, values in request.headers.items():
             if values:
-                headers[key] = values[0]
+                headers[key] = _sanitize_header_value(values[0])
 
         # Build body content
         content: bytes | None = None
@@ -518,6 +537,12 @@ class Executor:
             raise RequestError(f"{target_name} connection error: {e}") from e
         except httpx.RequestError as e:
             raise RequestError(f"{target_name} request error: {e}") from e
+        except UnicodeEncodeError as e:
+            # Fallback for any remaining non-ASCII encoding issues
+            # (header keys, query params, etc. not caught by sanitization)
+            raise RequestError(
+                f"{target_name} encoding error - non-ASCII characters in request: {e}"
+            ) from e
 
         return self._convert_response(http_response, elapsed_ms)
 
