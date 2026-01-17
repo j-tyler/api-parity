@@ -106,6 +106,27 @@ Stateful request chains (create→get→update→delete patterns) are auto-disco
 
 ---
 
+# Explicit Links Only for Chain Generation
+
+Keywords: stateful chains links inference algorithms schemathesis explicit
+Date: 20260117
+
+Chain generation uses only explicit OpenAPI links, not inferred relationships. Schemathesis 4.9+ includes inference algorithms that can discover chains from parameter name matching (e.g., POST /users returns `id`, GET /users/{userId} has matching parameter) or Location headers (HTTP 201 responses with Location header). These are explicitly disabled.
+
+**Why disable inference:**
+
+1. **Documented contracts only** — Inferred relationships may not reflect actual API contracts. A parameter named `userId` might accept a user ID, an admin ID, or a session ID. Only explicit links document the intended relationship.
+
+2. **Predictable test coverage** — Users can look at their OpenAPI links to understand exactly which chains will be tested. Inference adds hidden test paths that aren't visible in the spec.
+
+3. **Avoid false positives** — Inferred chains might exercise invalid transitions (e.g., using an order ID where a user ID is expected because both are UUIDs). These failures are noise, not real parity issues.
+
+4. **Spec quality signal** — If the OpenAPI spec lacks links, that's a spec quality issue that should be fixed. Inference papers over incomplete specs.
+
+**Implementation:** Schemathesis config disables `LOCATION_HEADERS` and `DEPENDENCY_ANALYSIS` inference algorithms. See `_create_explicit_links_only_config()` in `case_generator.py`.
+
+---
+
 # Replay Regenerates Unique Fields
 
 Keywords: replay idempotency unique constraints data generation

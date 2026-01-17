@@ -23,7 +23,7 @@ classifiers = [
 # See DESIGN.md "Pinned Dependencies for Reproducible Builds" for rationale.
 # To update: test with new versions, then update these pins.
 dependencies = [
-    "schemathesis==4.8.0",
+    "schemathesis==4.9.1",
     "pydantic==2.12.5",
     "httpx==0.28.1",
     "pyyaml==6.0.1",

@@ -744,7 +744,9 @@ JSON file defining how responses are compared. Model: `ComparisonRulesFile` in `
 
 ## Stateful Chains [SPECIFIED]
 
-Chains are auto-discovered from OpenAPI links via Schemathesis `schema.as_state_machine()`. Validated: 6-step chains, 70+ unique sequences.
+Chains are auto-discovered from explicit OpenAPI links via Schemathesis `schema.as_state_machine()`. Validated: 6-step chains, 70+ unique sequences.
+
+**Explicit links only:** Chain generation uses only explicit OpenAPI link definitions, not inferred relationships. Schemathesis inference algorithms (parameter name matching, Location headers) are disabled. This ensures chains follow documented API contracts, not guessed relationships. See DESIGN.md "Explicit Links Only for Chain Generation" for rationale.
 
 **Execution semantics:**
 - Each target maintains its own extracted variables (A's POST returns `id: abc`, B's returns `id: xyz` → A's GET hits `/items/abc`, B's hits `/items/xyz`)
@@ -793,7 +795,7 @@ if not result.valid:
 
 ## Implementation Approach [SPECIFIED]
 
-**Generator:** Schemathesis v4.8.0 — OpenAPI-driven fuzzing with stateful link support. Validated 20260108; see DESIGN.md "Schemathesis as Generator (Validated)" for integration details.
+**Generator:** Schemathesis v4.9.1 — OpenAPI-driven fuzzing with stateful link support. See DESIGN.md "Schemathesis as Generator (Validated)" and "Explicit Links Only for Chain Generation" for integration details.
 
 **HTTP client:** Any client supporting explicit headers, repeated query parameters, and raw body bytes.
 
@@ -890,5 +892,5 @@ Tests use `PortReservation` class for safer port allocation:
 
 Architecture informed by analysis of:
 - [Schemathesis GitHub](https://github.com/schemathesis/schemathesis) — Case class, Response class, VCR cassettes
-- [Schemathesis PyPI](https://pypi.org/project/schemathesis/) — v4.8.0 features
+- [Schemathesis PyPI](https://pypi.org/project/schemathesis/) — v4.9.1 features
 - [Schemathesis stateful testing issue #864](https://github.com/schemathesis/schemathesis/issues/864) — CLI stateful approach
