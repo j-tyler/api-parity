@@ -309,6 +309,34 @@ listWidgets
 Total: 3 operations
 ```
 
+### `api-parity graph-chains`
+
+Output a Mermaid flowchart showing OpenAPI link relationships. Use this to visualize chain coverage and identify orphan operations.
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `--spec PATH` | Yes | Path to OpenAPI specification file (YAML or JSON) |
+| `--exclude OPERATION_ID` | No | Exclude an operation by operationId (can be repeated) |
+
+Example output:
+
+```mermaid
+flowchart LR
+    createWidget[POST /widgets] -->|201| getWidget[GET /widgets/widget_id]
+    createWidget[POST /widgets] -->|201| updateWidget[PUT /widgets/widget_id]
+    getWidget[GET /widgets/widget_id] -->|200| updateWidget[PUT /widgets/widget_id]
+    subgraph orphans[ORPHANS - no links]
+        listWidgets[GET /widgets]
+        healthCheck[GET /health]
+    end
+```
+
+This shows:
+- **Node ID** = operationId
+- **Node label** = `METHOD /path`
+- **Edge label** = HTTP status code triggering the link
+- **Orphans subgraph** = operations with no inbound or outbound links
+
 ### `api-parity explore`
 
 Generate test cases from an OpenAPI spec and compare responses between two targets.

@@ -200,6 +200,14 @@ class ListOperationsArgs:
 
 
 @dataclass
+class GraphChainsArgs:
+    """Parsed arguments for graph-chains mode."""
+
+    spec: Path
+    exclude: list[str]
+
+
+@dataclass
 class ExploreArgs:
     """Parsed arguments for explore mode."""
 
@@ -253,6 +261,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Path to OpenAPI specification file (YAML or JSON)",
+    )
+
+    # Graph-chains subcommand
+    graph_chains_parser = subparsers.add_parser(
+        "graph-chains",
+        help="Output a Mermaid flowchart showing OpenAPI link relationships",
+    )
+    graph_chains_parser.add_argument(
+        "--spec",
+        type=Path,
+        required=True,
+        help="Path to OpenAPI specification file (YAML or JSON)",
+    )
+    graph_chains_parser.add_argument(
+        "--exclude",
+        type=str,
+        action="append",
+        default=[],
+        metavar="OPERATION_ID",
+        help="Exclude an operation by operationId (can be repeated)",
     )
 
     # Explore subcommand
@@ -426,6 +454,11 @@ def parse_list_ops_args(namespace: argparse.Namespace) -> ListOperationsArgs:
     return ListOperationsArgs(spec=namespace.spec)
 
 
+def parse_graph_chains_args(namespace: argparse.Namespace) -> GraphChainsArgs:
+    """Convert parsed namespace to GraphChainsArgs dataclass."""
+    return GraphChainsArgs(spec=namespace.spec, exclude=namespace.exclude or [])
+
+
 def _build_operation_timeouts(timeout_list: list[tuple[str, float]]) -> dict[str, float]:
     """Build operation timeout dict, warning on duplicates."""
     result = {}
@@ -476,14 +509,14 @@ def parse_replay_args(namespace: argparse.Namespace) -> ReplayArgs:
     )
 
 
-def parse_args(args: list[str] | None = None) -> ListOperationsArgs | ExploreArgs | ReplayArgs:
+def parse_args(args: list[str] | None = None) -> ListOperationsArgs | GraphChainsArgs | ExploreArgs | ReplayArgs:
     """Parse command-line arguments and return typed args dataclass.
 
     Args:
         args: Command-line arguments to parse. If None, uses sys.argv[1:].
 
     Returns:
-        ListOperationsArgs, ExploreArgs, or ReplayArgs depending on the subcommand.
+        ListOperationsArgs, GraphChainsArgs, ExploreArgs, or ReplayArgs depending on the subcommand.
 
     Raises:
         SystemExit: If arguments are invalid (argparse behavior).
@@ -493,6 +526,8 @@ def parse_args(args: list[str] | None = None) -> ListOperationsArgs | ExploreArg
 
     if namespace.command == "list-operations":
         return parse_list_ops_args(namespace)
+    elif namespace.command == "graph-chains":
+        return parse_graph_chains_args(namespace)
     elif namespace.command == "explore":
         return parse_explore_args(namespace)
     elif namespace.command == "replay":
@@ -509,6 +544,8 @@ def main() -> int:
 
         if isinstance(parsed, ListOperationsArgs):
             return run_list_operations(parsed)
+        elif isinstance(parsed, GraphChainsArgs):
+            return run_graph_chains(parsed)
         elif isinstance(parsed, ExploreArgs):
             return run_explore(parsed)
         else:
@@ -573,6 +610,142 @@ def run_list_operations(args: ListOperationsArgs) -> int:
         total_msg += f" ({skipped} skipped due to errors)"
     print(total_msg)
     return 0
+
+
+def run_graph_chains(args: GraphChainsArgs) -> int:
+    """Run graph-chains mode.
+
+    Outputs a Mermaid flowchart showing OpenAPI link relationships.
+    """
+    import schemathesis
+
+    try:
+        schema = schemathesis.openapi.from_path(str(args.spec))
+    except Exception as e:
+        print(f"Error loading spec: {e}", file=sys.stderr)
+        return 1
+
+    # Extract operations and links
+    operations, edges = _extract_link_graph(schema, args.exclude)
+
+    # Generate and output Mermaid flowchart
+    mermaid = _format_mermaid_graph(operations, edges)
+    print(mermaid)
+
+    return 0
+
+
+def _extract_link_graph(
+    schema: Any, exclude: list[str]
+) -> tuple[dict[str, tuple[str, str]], list[tuple[str, str, str]]]:
+    """Extract operations and links from OpenAPI spec.
+
+    Args:
+        schema: Loaded schemathesis schema.
+        exclude: List of operationIds to exclude.
+
+    Returns:
+        Tuple of (operations dict, edges list) where:
+        - operations: {op_id: (method, path)}
+        - edges: [(source_op, status_code, target_op), ...]
+    """
+    operations: dict[str, tuple[str, str]] = {}
+    edges: list[tuple[str, str, str]] = []
+    exclude_set = set(exclude)
+
+    for result in schema.get_all_operations():
+        op = result.ok()
+        if op is None:
+            continue
+
+        raw = op.definition.raw
+        operation_id = raw.get("operationId")
+        if not operation_id:
+            continue
+
+        if operation_id in exclude_set:
+            continue
+
+        method = op.method.upper()
+        path = op.path
+
+        operations[operation_id] = (method, path)
+
+        # Extract links from responses
+        responses = raw.get("responses", {})
+        for status_code, response_def in responses.items():
+            if isinstance(response_def, dict) and "links" in response_def:
+                for link_name, link_def in response_def["links"].items():
+                    target_op = link_def.get("operationId") or link_def.get("operationRef")
+                    if target_op and target_op not in exclude_set:
+                        edges.append((operation_id, str(status_code), target_op))
+
+    return operations, edges
+
+
+def _format_mermaid_graph(
+    operations: dict[str, tuple[str, str]], edges: list[tuple[str, str, str]]
+) -> str:
+    """Format link graph as Mermaid flowchart.
+
+    Args:
+        operations: {op_id: (method, path)}
+        edges: [(source_op, status_code, target_op), ...]
+
+    Returns:
+        Mermaid flowchart string.
+    """
+    lines = ["flowchart LR"]
+
+    # Track which operations have edges
+    ops_with_outbound: set[str] = set()
+    ops_with_inbound: set[str] = set()
+    for source, _, target in edges:
+        ops_with_outbound.add(source)
+        ops_with_inbound.add(target)
+
+    # Find orphans (no inbound AND no outbound links)
+    orphans = set(operations.keys()) - ops_with_outbound - ops_with_inbound
+
+    # Generate edge lines
+    for source, status_code, target in edges:
+        if source not in operations or target not in operations:
+            continue
+        source_method, source_path = operations[source]
+        target_method, target_path = operations[target]
+        source_node = _format_mermaid_node(source, source_method, source_path)
+        target_node = _format_mermaid_node(target, target_method, target_path)
+        lines.append(f"    {source_node} -->|{status_code}| {target_node}")
+
+    # Generate orphan subgraph
+    if orphans:
+        lines.append("    subgraph orphans[ORPHANS - no links]")
+        for op_id in sorted(orphans):
+            if op_id in operations:
+                method, path = operations[op_id]
+                node = _format_mermaid_node(op_id, method, path)
+                lines.append(f"        {node}")
+        lines.append("    end")
+
+    return "\n".join(lines)
+
+
+def _format_mermaid_node(op_id: str, method: str, path: str) -> str:
+    """Format a Mermaid node with operationId as ID and METHOD /path as label.
+
+    Args:
+        op_id: Operation ID (used as node ID).
+        method: HTTP method.
+        path: URL path with path params simplified.
+
+    Returns:
+        Mermaid node definition, e.g., createWidget[POST /widgets]
+    """
+    import re
+
+    # Simplify path params: {param} -> param
+    simplified_path = re.sub(r"\{([^}]+)\}", r"\1", path)
+    return f'{op_id}[{method} {simplified_path}]'
 
 
 def run_explore(args: ExploreArgs) -> int:
