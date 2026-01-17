@@ -423,6 +423,9 @@ class CaseGenerator:
         step_counter = 0
 
         generator_self = self
+        # Track the previous operation and status code for link detection
+        prev_op_id: str | None = None
+        prev_status_code: int = 200
 
         class ChainCapturingStateMachine(OpenAPIStateMachine):
             """State machine that captures chains without making HTTP calls."""
@@ -433,9 +436,11 @@ class CaseGenerator:
 
             def setup(self):
                 """Called before each test run - start a new chain."""
-                nonlocal current_steps, step_counter
+                nonlocal current_steps, step_counter, prev_op_id, prev_status_code
                 current_steps = []
                 step_counter = 0
+                prev_op_id = None
+                prev_status_code = 200
 
             def teardown(self):
                 """Called after each test run - save the completed chain."""
@@ -455,7 +460,7 @@ class CaseGenerator:
                 return synthetic responses with placeholder data so Schemathesis
                 can resolve OpenAPI links and discover possible chain paths.
                 """
-                nonlocal current_steps, step_counter
+                nonlocal current_steps, step_counter, prev_op_id, prev_status_code
 
                 # Extract operation info
                 op_id = case.operation.definition.raw.get("operationId", "unknown")
@@ -466,16 +471,98 @@ class CaseGenerator:
                 # Convert to our RequestCase
                 request_case = generator_self._convert_case(case, op_id)
 
+                # Find link source if this is not the first step
+                link_source = None
+                if prev_op_id is not None:
+                    link_source = self._find_link_between(
+                        prev_op_id, op_id, prev_status_code
+                    )
+
                 # Create chain step
                 step = ChainStep(
                     step_index=step_counter,
                     request_template=request_case,
-                    link_source=None,  # Link source tracked by Schemathesis internally
+                    link_source=link_source,
                 )
                 current_steps.append(step)
                 step_counter += 1
 
-                return self._synthetic_response(case)
+                # Update previous operation tracking
+                response = self._synthetic_response(case)
+                prev_op_id = op_id
+                prev_status_code = response.status_code
+
+                return response
+
+            def _find_link_between(
+                self, source_op: str, target_op: str, status_code: int
+            ) -> dict | None:
+                """Find the link definition connecting two operations.
+
+                Looks up the link in the raw OpenAPI spec that connects the source
+                operation to the target operation for the given status code.
+
+                Returns:
+                    Dict with link_name, source_operation, status_code, is_inferred,
+                    or None if no explicit link found in the spec.
+                """
+                spec = generator_self._raw_spec
+                paths = spec.get("paths", {})
+
+                # Find the source operation in the spec
+                for path_item in paths.values():
+                    if not isinstance(path_item, dict):
+                        continue
+                    for method_or_key, operation in path_item.items():
+                        if not isinstance(operation, dict) or method_or_key.startswith("$"):
+                            continue
+
+                        op_id = operation.get("operationId")
+                        if op_id != source_op:
+                            continue
+
+                        # Look for links in responses
+                        responses = operation.get("responses", {})
+                        for resp_code, response_def in responses.items():
+                            if not isinstance(response_def, dict):
+                                continue
+
+                            # Match status code: exact, wildcard (2XX), or default
+                            if not self._matches_status_code(str(resp_code), status_code):
+                                continue
+
+                            links = response_def.get("links", {})
+                            for link_name, link_def in links.items():
+                                if not isinstance(link_def, dict):
+                                    continue
+                                link_target = link_def.get("operationId") or link_def.get("operationRef")
+                                if link_target == target_op:
+                                    return {
+                                        "link_name": link_name,
+                                        "source_operation": source_op,
+                                        "status_code": status_code,
+                                        "is_inferred": False,
+                                    }
+
+                # No explicit link found in spec
+                return None
+
+            def _matches_status_code(self, spec_code: str, actual_code: int) -> bool:
+                """Check if a spec response code matches an actual status code.
+
+                Handles exact matches, wildcards (2XX), and 'default'.
+                """
+                actual_str = str(actual_code)
+                # Exact match
+                if spec_code == actual_str:
+                    return True
+                # 'default' matches any status code
+                if spec_code == "default":
+                    return True
+                # Wildcard like '2XX' matches any 2xx code
+                if len(spec_code) == 3 and spec_code.endswith("XX"):
+                    return spec_code[0] == actual_str[0]
+                return False
 
             def _synthetic_response(self, case) -> SchemathesisResponse:
                 """Generate synthetic response for link resolution during chain discovery.

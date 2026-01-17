@@ -7,9 +7,11 @@ import pytest
 
 from api_parity.cli import (
     GraphChainsArgs,
+    _extract_declared_links,
     _extract_link_graph,
     _format_mermaid_graph,
     _format_mermaid_node,
+    _run_graph_chains_generated,
     parse_args,
     parse_graph_chains_args,
     run_graph_chains,
@@ -58,11 +60,19 @@ class TestGraphChainsArgs:
             command="graph-chains",
             spec=Path("spec.yaml"),
             exclude=["op1", "op2"],
+            generated=False,
+            max_chains=20,
+            max_steps=6,
+            seed=None,
         )
         args = parse_graph_chains_args(namespace)
         assert isinstance(args, GraphChainsArgs)
         assert args.spec == Path("spec.yaml")
         assert args.exclude == ["op1", "op2"]
+        assert args.generated is False
+        assert args.max_chains == 20
+        assert args.max_steps == 6
+        assert args.seed is None
 
     def test_parse_graph_chains_args_empty_exclude(self):
         """Test parse_graph_chains_args handles None exclude."""
@@ -71,6 +81,10 @@ class TestGraphChainsArgs:
             command="graph-chains",
             spec=Path("spec.yaml"),
             exclude=None,
+            generated=False,
+            max_chains=20,
+            max_steps=6,
+            seed=None,
         )
         args = parse_graph_chains_args(namespace)
         assert args.exclude == []
@@ -310,3 +324,497 @@ class TestRunGraphChains:
         args = GraphChainsArgs(spec=spec_path, exclude=["healthCheck"])
         result = run_graph_chains(args)
         assert result == 0
+
+
+class TestGraphChainsGeneratedArgs:
+    """Tests for --generated flag and related options."""
+
+    def test_generated_flag_parsing(self):
+        """Test --generated flag is parsed correctly."""
+        args = parse_args([
+            "graph-chains",
+            "--spec", "openapi.yaml",
+            "--generated",
+        ])
+        assert isinstance(args, GraphChainsArgs)
+        assert args.generated is True
+        # Check defaults
+        assert args.max_chains == 20
+        assert args.max_steps == 6
+        assert args.seed is None
+
+    def test_max_chains_option(self):
+        """Test --max-chains option is parsed correctly."""
+        args = parse_args([
+            "graph-chains",
+            "--spec", "openapi.yaml",
+            "--generated",
+            "--max-chains", "50",
+        ])
+        assert isinstance(args, GraphChainsArgs)
+        assert args.max_chains == 50
+
+    def test_max_steps_option(self):
+        """Test --max-steps option is parsed correctly."""
+        args = parse_args([
+            "graph-chains",
+            "--spec", "openapi.yaml",
+            "--generated",
+            "--max-steps", "10",
+        ])
+        assert isinstance(args, GraphChainsArgs)
+        assert args.max_steps == 10
+
+    def test_seed_option(self):
+        """Test --seed option is parsed correctly."""
+        args = parse_args([
+            "graph-chains",
+            "--spec", "openapi.yaml",
+            "--generated",
+            "--seed", "12345",
+        ])
+        assert isinstance(args, GraphChainsArgs)
+        assert args.seed == 12345
+
+    def test_all_generated_options_together(self):
+        """Test all generated options can be used together."""
+        args = parse_args([
+            "graph-chains",
+            "--spec", "openapi.yaml",
+            "--generated",
+            "--max-chains", "30",
+            "--max-steps", "8",
+            "--seed", "42",
+            "--exclude", "healthCheck",
+        ])
+        assert isinstance(args, GraphChainsArgs)
+        assert args.generated is True
+        assert args.max_chains == 30
+        assert args.max_steps == 8
+        assert args.seed == 42
+        assert args.exclude == ["healthCheck"]
+
+    def test_parse_graph_chains_args_with_generated(self):
+        """Test parse_graph_chains_args handles generated options."""
+        import argparse
+        namespace = argparse.Namespace(
+            command="graph-chains",
+            spec=Path("spec.yaml"),
+            exclude=["op1"],
+            generated=True,
+            max_chains=25,
+            max_steps=5,
+            seed=999,
+        )
+        args = parse_graph_chains_args(namespace)
+        assert args.generated is True
+        assert args.max_chains == 25
+        assert args.max_steps == 5
+        assert args.seed == 999
+
+
+class TestExtractDeclaredLinks:
+    """Tests for _extract_declared_links function."""
+
+    def test_extracts_links_from_spec(self):
+        """Test link extraction from a simple spec."""
+        spec = {
+            "paths": {
+                "/widgets": {
+                    "post": {
+                        "operationId": "createWidget",
+                        "responses": {
+                            "201": {
+                                "links": {
+                                    "GetWidget": {
+                                        "operationId": "getWidget",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "/widgets/{id}": {
+                    "get": {
+                        "operationId": "getWidget",
+                        "responses": {"200": {}}
+                    }
+                }
+            }
+        }
+        links = _extract_declared_links(spec, exclude=set())
+        assert len(links) == 1
+        assert ("createWidget", "201", "getWidget", "GetWidget") in links
+
+    def test_excludes_source_operation(self):
+        """Test excluded source operations are skipped."""
+        spec = {
+            "paths": {
+                "/widgets": {
+                    "post": {
+                        "operationId": "createWidget",
+                        "responses": {
+                            "201": {
+                                "links": {
+                                    "GetWidget": {
+                                        "operationId": "getWidget",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        links = _extract_declared_links(spec, exclude={"createWidget"})
+        assert len(links) == 0
+
+    def test_excludes_target_operation(self):
+        """Test links to excluded target operations are skipped."""
+        spec = {
+            "paths": {
+                "/widgets": {
+                    "post": {
+                        "operationId": "createWidget",
+                        "responses": {
+                            "201": {
+                                "links": {
+                                    "GetWidget": {
+                                        "operationId": "getWidget",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        links = _extract_declared_links(spec, exclude={"getWidget"})
+        assert len(links) == 0
+
+    def test_multiple_links_same_response(self):
+        """Test extraction of multiple links from same response."""
+        spec = {
+            "paths": {
+                "/widgets": {
+                    "post": {
+                        "operationId": "createWidget",
+                        "responses": {
+                            "201": {
+                                "links": {
+                                    "GetWidget": {"operationId": "getWidget"},
+                                    "UpdateWidget": {"operationId": "updateWidget"},
+                                    "DeleteWidget": {"operationId": "deleteWidget"},
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        links = _extract_declared_links(spec, exclude=set())
+        assert len(links) == 3
+        target_ops = {link[2] for link in links}
+        assert target_ops == {"getWidget", "updateWidget", "deleteWidget"}
+
+
+class TestRunGraphChainsGenerated:
+    """Tests for _run_graph_chains_generated function."""
+
+    def test_generated_with_test_fixture(self, capsys):
+        """Test --generated mode with actual test fixture."""
+        spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
+        if not spec_path.exists():
+            pytest.skip("Test fixture not found")
+
+        args = GraphChainsArgs(
+            spec=spec_path,
+            exclude=[],
+            generated=True,
+            max_chains=5,
+            max_steps=3,
+            seed=42,
+        )
+        result = _run_graph_chains_generated(args)
+        assert result == 0
+
+        captured = capsys.readouterr()
+        # Should contain chain output
+        assert "Generated Chains" in captured.out or "No multi-step chains" in captured.out
+        # Should contain link coverage summary
+        assert "Link Coverage Summary" in captured.out
+
+    def test_generated_with_invalid_spec(self, tmp_path, capsys):
+        """Test --generated mode with invalid spec path."""
+        args = GraphChainsArgs(
+            spec=tmp_path / "nonexistent.yaml",
+            exclude=[],
+            generated=True,
+            max_chains=5,
+            max_steps=3,
+            seed=None,
+        )
+        result = _run_graph_chains_generated(args)
+        assert result == 1
+
+        captured = capsys.readouterr()
+        assert "Error loading spec" in captured.err
+
+    def test_run_graph_chains_dispatches_to_generated(self, capsys):
+        """Test run_graph_chains dispatches to generated mode when flag is set."""
+        spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
+        if not spec_path.exists():
+            pytest.skip("Test fixture not found")
+
+        args = GraphChainsArgs(
+            spec=spec_path,
+            exclude=[],
+            generated=True,
+            max_chains=3,
+            max_steps=3,
+            seed=42,
+        )
+        result = run_graph_chains(args)
+        assert result == 0
+
+        captured = capsys.readouterr()
+        # Should NOT contain Mermaid flowchart output
+        assert "flowchart LR" not in captured.out
+        # Should contain generated chains output
+        assert "Generating chains" in captured.out
+
+    def test_generated_output_format(self, capsys):
+        """Test --generated output includes expected sections."""
+        spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
+        if not spec_path.exists():
+            pytest.skip("Test fixture not found")
+
+        args = GraphChainsArgs(
+            spec=spec_path,
+            exclude=[],
+            generated=True,
+            max_chains=10,
+            max_steps=4,
+            seed=42,
+        )
+        result = _run_graph_chains_generated(args)
+        assert result == 0
+
+        captured = capsys.readouterr()
+
+        # Check for expected sections
+        assert "Generating chains" in captured.out
+        assert "Link Coverage Summary" in captured.out
+        assert "Total declared links:" in captured.out
+        assert "Links actually used:" in captured.out
+
+    def test_generated_with_exclude(self, capsys):
+        """Test --generated mode respects --exclude."""
+        spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
+        if not spec_path.exists():
+            pytest.skip("Test fixture not found")
+
+        args = GraphChainsArgs(
+            spec=spec_path,
+            exclude=["createWidget", "createOrder"],  # Exclude entry points
+            generated=True,
+            max_chains=5,
+            max_steps=3,
+            seed=42,
+        )
+        result = _run_graph_chains_generated(args)
+        # Should still succeed even if no chains generated
+        assert result == 0
+
+    def test_generated_validates_max_chains(self, tmp_path, capsys):
+        """Test that max_chains < 1 returns error."""
+        spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
+        if not spec_path.exists():
+            pytest.skip("Test fixture not found")
+
+        args = GraphChainsArgs(
+            spec=spec_path,
+            exclude=[],
+            generated=True,
+            max_chains=0,  # Invalid
+            max_steps=3,
+            seed=None,
+        )
+        result = _run_graph_chains_generated(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "--max-chains must be >= 1" in captured.err
+
+    def test_generated_validates_max_steps(self, tmp_path, capsys):
+        """Test that max_steps < 1 returns error."""
+        spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
+        if not spec_path.exists():
+            pytest.skip("Test fixture not found")
+
+        args = GraphChainsArgs(
+            spec=spec_path,
+            exclude=[],
+            generated=True,
+            max_chains=5,
+            max_steps=-1,  # Invalid
+            seed=None,
+        )
+        result = _run_graph_chains_generated(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "--max-steps must be >= 1" in captured.err
+
+
+class TestExtractDeclaredLinksOperationRef:
+    """Tests for _extract_declared_links with operationRef."""
+
+    def test_extracts_links_with_operation_ref(self):
+        """Test link extraction when operationRef is used instead of operationId."""
+        spec = {
+            "paths": {
+                "/widgets": {
+                    "post": {
+                        "operationId": "createWidget",
+                        "responses": {
+                            "201": {
+                                "links": {
+                                    "GetWidget": {
+                                        "operationRef": "#/paths/~1widgets~1{id}/get",
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "/widgets/{id}": {
+                    "get": {
+                        "operationId": "getWidget",
+                        "responses": {"200": {}}
+                    }
+                }
+            }
+        }
+        links = _extract_declared_links(spec, exclude=set())
+        assert len(links) == 1
+        # operationRef is stored as-is (not resolved to operationId)
+        assert links[0][0] == "createWidget"
+        assert links[0][1] == "201"
+        assert links[0][2] == "#/paths/~1widgets~1{id}/get"
+        assert links[0][3] == "GetWidget"
+
+    def test_extracts_links_with_mixed_ref_types(self):
+        """Test link extraction with both operationId and operationRef."""
+        spec = {
+            "paths": {
+                "/widgets": {
+                    "post": {
+                        "operationId": "createWidget",
+                        "responses": {
+                            "201": {
+                                "links": {
+                                    "GetById": {"operationId": "getWidget"},
+                                    "GetByRef": {"operationRef": "#/paths/~1other/get"},
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        links = _extract_declared_links(spec, exclude=set())
+        assert len(links) == 2
+        targets = {link[2] for link in links}
+        assert targets == {"getWidget", "#/paths/~1other/get"}
+
+
+class TestLinkSourceAccuracy:
+    """Tests that link_source correctly identifies which link was used."""
+
+    def test_generated_output_shows_correct_link_name(self, tmp_path, capsys):
+        """Test that generated chains show the correct link name from the spec."""
+        import yaml
+
+        # Create a minimal spec with a known link
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/items": {
+                    "post": {
+                        "operationId": "createItem",
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"type": "object"}
+                                }
+                            }
+                        },
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "GetCreatedItem": {
+                                        "operationId": "getItem",
+                                        "parameters": {"item_id": "$response.body#/id"},
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+                "/items/{item_id}": {
+                    "get": {
+                        "operationId": "getItem",
+                        "parameters": [
+                            {
+                                "name": "item_id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"type": "object"}
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "test_spec.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        args = GraphChainsArgs(
+            spec=spec_file,
+            exclude=[],
+            generated=True,
+            max_chains=10,
+            max_steps=3,
+            seed=42,
+        )
+        result = _run_graph_chains_generated(args)
+        assert result == 0
+
+        captured = capsys.readouterr()
+        # If chains were generated with the link, the link name should appear
+        if "createItem -> getItem" in captured.out:
+            # The link name "GetCreatedItem" should appear in the output
+            assert "GetCreatedItem" in captured.out, (
+                "Link name should appear when explicit link is used"
+            )
