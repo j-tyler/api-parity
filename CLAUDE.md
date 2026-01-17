@@ -415,6 +415,16 @@ python -m pytest tests/ -x -q --tb=short
 
 Tests that require the CEL binary use the `cel_evaluator_exists` fixture or `pytestmark = pytest.mark.skipif(...)` to skip gracefully when the binary is missing. If you add new tests that use `CELEvaluator`, include this skip mechanism.
 
+## Task Tool Gotchas
+
+When using the Task tool to spawn and resume agents:
+
+1. **Save the agentId** — Each Task call returns `agentId: abc123` at the end. Save it to resume later.
+
+2. **Resume with the `resume` parameter** — Pass `resume="abc123"` to continue the same agent with full context preserved.
+
+3. **Resume limit: ~2 resumes reliably** — After 2-3 sequential resumes, you may hit "API Error: 400 due to tool use concurrency issues". Design workflows to use at most 2 resumes. If resume fails unexpectedly, verify you're using the correct agentId.
+
 ## What NOT to Do
 
 - Don't propose changes without reading relevant code first

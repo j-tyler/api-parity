@@ -27,209 +27,135 @@ The plan should include:
 
 ---
 
-## Phase 2: Delegate to Coder Agent
+## Phase 2: Implementation + Paranoid Review (Fresh Agent)
 
-Spawn the `coder` agent with your implementation plan using the Task tool:
+Spawn the `coder` agent:
 
 ```
 Task(
   subagent_type="coder",
-  prompt="<your implementation plan>",
-  description="Implement <feature>"
+  prompt="<your implementation plan>
+
+When implementation is complete, run /paranoid-review on all your changes.
+
+Report:
+- Files changed
+- Summary of work done
+- All review findings (numbered)",
+  description="Implement and review"
 )
 ```
 
-**Instructions to include in the prompt:**
-- The full implementation plan
-- Request that it returns: repositories changed, branches, summary of work
+The agent implements the plan, then immediately reviews its own work while context is fresh.
 
-Wait for the coder agent to complete the implementation.
-
-**IMPORTANT**: The Task tool returns an `agentId` (e.g., `agentId: ad696ca`). Save this ID—you need it to resume the agent in subsequent phases.
+Wait for completion. **Save the agentId** for Phase 3.
 
 ---
 
-## Phase 3: Paranoid Review (Agent)
+## Phase 3: Double-Down + Resolution (Resume 1)
 
-**Resume** the coder agent using the `resume` parameter with the agentId from Phase 2:
+**Resume** the agent:
 
 ```
 Task(
   subagent_type="coder",
   resume="<agentId from Phase 2>",
-  prompt="Run the /paranoid-review skill on your implementation work.",
-  description="Paranoid review"
+  prompt="For each finding from your paranoid review:
+
+1. Run /double-down - gather evidence to confirm or retract each issue
+2. Run /retracted-review - for items you retracted, analyze why you flagged them and identify documentation/code improvements to prevent future confusion
+3. Fix all issues you DOUBLED DOWN on
+4. Make all improvements identified in your retracted review
+
+Report:
+- Which issues you doubled down on and how you fixed them
+- Which issues you retracted and what improvements you made
+- Final summary of all changes",
+  description="Resolve and improve"
 )
 ```
 
-The resumed agent has **full context** from Phase 2—it remembers all its implementation work, tool calls, and reasoning.
+The agent validates its findings, fixes real issues, and extracts value from false positives.
 
-**IMPORTANT**: Do NOT mention that follow-up review steps will occur. The agent should review paranoidly without hedging.
-
-Wait for the agent to complete the paranoid review. Save the returned agentId for Phase 4.
+Wait for completion.
 
 ---
 
-## Phase 4: Double Down (Agent)
+## Phase 4: Coordinator Review
 
-**Resume** the coder agent (using agentId from Phase 3):
+Now YOU (the coordinator) review with fresh context.
 
-```
-Task(
-  subagent_type="coder",
-  resume="<agentId from Phase 3>",
-  prompt="Run the /double-down skill on the findings from your previous review.",
-  description="Double-down review"
-)
-```
+1. **Get the diff**: `git diff origin/main..HEAD`
 
-**IMPORTANT**: This should come as a surprise to the agent. It forces honest evaluation of paranoid findings.
+2. **Run /paranoid-review**: Review all changes yourself
 
-Wait for the agent to complete the double-down. Save the returned agentId for Phase 5.
+3. **Run /double-down**: Investigate each finding you made
+
+4. **Make fixes**: Fix any issues you doubled down on
 
 ---
 
-## Phase 5: Retracted Review (Agent)
+## Phase 5: Commit and Complete
 
-**Resume** the coder agent (using agentId from Phase 4):
+**Commit** with Linux Kernel style message:
+- Subject: type prefix + concise summary (<50 chars)
+- Body: what changed and why (wrapped at 72 chars)
 
-```
-Task(
-  subagent_type="coder",
-  resume="<agentId from Phase 4>",
-  prompt="Run the /retracted-review skill on the items you retracted. For each retracted finding, analyze why you initially flagged it and then retracted it. Document what could be improved in the codebase to prevent future agents or developers from making the same misunderstanding.",
-  description="Retracted review"
-)
-```
+**Push** to the specified branch.
 
-**IMPORTANT**: This should also come as a surprise. It extracts value from false positives.
-
-Wait for the agent to complete the retracted review. Save the returned agentId for Phase 6.
-
----
-
-## Phase 6: Resolution (Agent)
-
-**Resume** the coder agent (using agentId from Phase 5):
-
-```
-Task(
-  subagent_type="coder",
-  resume="<agentId from Phase 5>",
-  prompt="Now resolve the issues from your review process:
-1. Fix all issues you DOUBLED DOWN on (confirmed as real problems)
-2. Implement improvements identified in your RETRACTED REVIEW (to prevent future confusion)
-
-When complete, provide:
-- List of repositories changed
-- Branch names for each repository
-- Summary of fixes and improvements made",
-  description="Resolve review findings"
-)
-```
-
-Wait for the agent to complete resolutions and return the repo/branch information.
-
----
-
-## Phase 7: Coordinator Review
-
-Now YOU (the coordinator) perform your own review cycle with clean context.
-
-For each repository/branch the agent reported:
-
-1. **Get the diff**: Run `git diff main...HEAD` (or appropriate base branch) in each repository
-
-2. **Run /paranoid-review**: Review the diffs yourself with fresh eyes.
-
-3. **Run /double-down**: On your own findings, investigate each one.
-
-4. **Make fixes**: For any issues you doubled down on, make the fixes yourself.
-
----
-
-## Phase 8: Commit and Complete
-
-**Commit all changes** with a git commit message in similar style as seen in the Linux Kernel:
-- Subject line: type prefix (feat/fix/refactor/docs), concise summary under 50 chars
-- Blank line
-- Body: explain what changed and why, wrapped at 72 chars
-
-**Push to the branch** specified in the task instructions.
-
-**Return to the user with:**
+**Report to user:**
 
 ### Summary
-- What was implemented (high level)
-- Repositories and branches affected
+- What was implemented
+- Files/branches affected
 
 ### Review Findings
-- Issues the coder agent found and fixed
-- Issues you (coordinator) found and fixed
+- Issues agent found and fixed
+- Issues you found and fixed
 
 ### Status
-- Ready for user review / PR
-- Any remaining concerns or TODOs
+- Ready for review / remaining concerns
 
 ---
 
 ## Key Principles
 
-1. **Sequential surprise**: Each review phase is given WITHOUT forewarning the next phase. This prevents hedging.
+1. **Sequential surprise**: Agent reviews immediately after implementing (no advance warning). Then surprised again with "now fix everything."
 
-2. **Agent isolation**: The coder agent works in isolated context. You review with clean context.
+2. **Context preservation**: Agent has full history—remembers implementation choices when reviewing, remembers findings when fixing.
 
-3. **Double review**: Both agent AND coordinator run the paranoid→double-down cycle.
+3. **Double review**: Agent reviews its work, then coordinator reviews independently with fresh eyes.
 
-4. **Extract value from mistakes**: Retracted findings become improvement opportunities.
-
----
-
-## How Agent Resume Works
-
-**Context preservation:** When you resume an agent, it retains its full conversation history—all previous tool calls, file reads, edits, and reasoning. The agent picks up exactly where it stopped.
-
-**Agent transcripts:** Stored at `~/.claude/projects/{project}/{sessionId}/subagents/agent-{agentId}.jsonl`
-
-**Why this matters for the workflow:**
-- Phase 3 (paranoid review): Agent can reference its own implementation choices
-- Phase 4 (double-down): Agent must defend findings it just made
-- Phase 5 (retracted review): Agent analyzes its own false positives
-- Phase 6 (resolution): Agent has full context of what to fix and why
+4. **Extract value from mistakes**: False positives (retracted findings) become documentation/code improvements.
 
 ---
 
-## Error Handling: Resume Failures
+## Why This Design
 
-If a resume call fails, **never spawn a fresh agent**. The workflow depends on preserved context for the "surprise" review phases. Try these approaches in order:
+**Resume limit:** Agent resumes fail after ~2-3 sequential resumes (see CLAUDE.md "Task Tool Gotchas"). This workflow uses exactly 1 resume.
 
-### 1. Retry with exponential backoff
-Transient API errors may resolve on retry:
-```
-# Wait 2s, retry
-# Wait 4s, retry
-# Wait 8s, retry
-```
+**What each phase does:**
+- Phase 2: Implement + paranoid-review (agent finds potential issues)
+- Phase 3: Double-down + retracted-review + fix (agent validates and resolves everything)
+- Phase 4: Coordinator review (independent verification)
 
-### 2. Verify the agentId
-Check that you're using the correct agentId from the previous phase's output. The ID is returned at the end of each Task result (e.g., `agentId: ad696ca`).
+**What's preserved:**
+- Agent implements without knowing review is coming in the prompt
+- Agent does thorough review while implementation is fresh in context
+- Agent must defend its findings before fixing
+- Coordinator provides independent verification
+- False positives improve the codebase
 
-### 3. Check agent transcript exists
-Transcripts are stored at `~/.claude/projects/{project}/{sessionId}/subagents/agent-{agentId}.jsonl`. If missing, the agent cannot be resumed.
+---
 
-### 4. Known limitation: Subagent resume bug
-There's a known issue (GitHub #11712) where agent transcripts don't store user prompts, only assistant responses and tool results. This can cause resume failures or context drift after multiple resumes.
+## Error Handling
 
-### If all attempts fail
+If resume fails:
+1. Verify you're using the correct agentId from Phase 2
+2. Do NOT spawn a fresh agent—context preservation is essential
+3. Return to user with progress made and failure details
 
-**Do not proceed with a fresh agent.** Return to the user with:
-
-1. **Progress made** — What phases completed successfully
-2. **Current state** — What changes exist in the working directory
-3. **Failure details** — Which phase failed to resume, error messages, agentId attempted
-4. **Recommendation** — User can choose to:
-   - Retry the workflow from the beginning
-   - Manually complete remaining phases
-   - Investigate the resume failure
-
-The workflow's value depends on context preservation. Running phases with fresh agents defeats the purpose of the sequential surprise review pattern.
+The user can then decide to:
+- Retry the workflow
+- Complete remaining phases manually
+- Investigate the failure
