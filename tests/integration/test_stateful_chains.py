@@ -814,14 +814,14 @@ class TestExplicitLinksOnly:
         for chain in chains:
             assert len(chain.steps) >= 2, "Chains should follow links to have 2+ steps"
 
-    def test_inferable_relationships_without_explicit_links_generate_no_chains(
+    def test_inferable_relationships_without_explicit_links_raises_no_links_found(
         self, tmp_path: Path
     ):
-        """Spec with inferable relationships but no explicit links generates no chains.
+        """Spec with inferable relationships but no explicit links raises NoLinksFound.
 
         This spec has POST /users returning {id} and GET /users/{userId} that could
         be linked via parameter name inference, but since there are no explicit
-        OpenAPI links defined, no chains should be generated.
+        OpenAPI links defined and inference is disabled, Schemathesis raises NoLinksFound.
         """
         from schemathesis.core.errors import NoLinksFound
 
@@ -914,19 +914,10 @@ class TestExplicitLinksOnly:
 
         generator = CaseGenerator(spec_path)
 
-        # With inference disabled, Schemathesis should raise NoLinksFound
-        # because there are no explicit links defined
-        try:
-            chains = generator.generate_chains(max_chains=3, max_steps=3)
-            # If it returns, should have no multi-step chains
-            # (inference would have created chains, but it's disabled)
-            assert len(chains) == 0, (
-                "Spec without explicit links should generate no chains when "
-                "inference is disabled"
-            )
-        except NoLinksFound:
-            # Expected - spec has no explicit links
-            pass
+        # With inference disabled, Schemathesis raises NoLinksFound because
+        # there are no explicit links defined. This is the expected behavior.
+        with pytest.raises(NoLinksFound):
+            generator.generate_chains(max_chains=3, max_steps=3)
 
     def test_schemathesis_config_disables_inference(self):
         """Verify the Schemathesis config actually disables inference algorithms."""

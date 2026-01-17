@@ -21,9 +21,19 @@ import yaml
 from hypothesis import Phase, settings
 from hypothesis.errors import HypothesisException
 from hypothesis.stateful import run_state_machine_as_test
-from schemathesis.config import ProjectConfig, ProjectsConfig, SchemathesisConfig
-from schemathesis.config._phases import InferenceConfig, PhasesConfig, StatefulPhaseConfig
+from schemathesis.config import (
+    PhasesConfig,
+    ProjectConfig,
+    ProjectsConfig,
+    SchemathesisConfig,
+    StatefulPhaseConfig,
+)
 from schemathesis.core.transport import Response as SchemathesisResponse
+
+# Get InferenceConfig via public API indirection. InferenceConfig is not exported
+# in schemathesis.config.__all__, but we need it to disable inference algorithms.
+# See CLAUDE.md "Schemathesis Gotchas" for details.
+_InferenceConfig = type(StatefulPhaseConfig().inference)
 from schemathesis.specs.openapi.stateful import OpenAPIStateMachine
 
 from api_parity.models import ChainCase, ChainStep, RequestCase
@@ -44,7 +54,7 @@ def _create_explicit_links_only_config() -> SchemathesisConfig:
     See DESIGN.md "Explicit Links Only for Chain Generation" for rationale.
     """
     # Disable all inference algorithms (LOCATION_HEADERS, DEPENDENCY_ANALYSIS)
-    inference = InferenceConfig(algorithms=[])
+    inference = _InferenceConfig(algorithms=[])
     stateful = StatefulPhaseConfig(inference=inference)
     phases = PhasesConfig(stateful=stateful)
     project = ProjectConfig(phases=phases)

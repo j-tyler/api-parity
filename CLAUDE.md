@@ -290,6 +290,14 @@ These issues were discovered during prototype validation. Don't repeat them:
 
 4. **Override validate_response()** — Must override and return `pass` to skip built-in schema validation (we do our own comparison).
 
+5. **InferenceConfig not in public API** — To disable inference algorithms for stateful testing, `InferenceConfig` is needed but not exported in `schemathesis.config.__all__`. Access it via indirection:
+   ```python
+   from schemathesis.config import StatefulPhaseConfig
+   _InferenceConfig = type(StatefulPhaseConfig().inference)
+   disabled = _InferenceConfig(algorithms=[])
+   ```
+   If this breaks in a future version, check if `InferenceConfig` was added to the public API.
+
 ## Comparison Rules Gotchas
 
 These issues were discovered during comparison rules design. Don't repeat them:
