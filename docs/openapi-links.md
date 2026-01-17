@@ -219,6 +219,42 @@ No configuration needed—field names are parsed from the spec.
 
 5. **Match parameter names exactly** — Link parameter names must match target operation's parameter names.
 
+## Visualize Link Coverage
+
+Use `graph-chains` to generate a Mermaid flowchart showing link relationships:
+
+```bash
+api-parity graph-chains --spec openapi.yaml
+```
+
+Output:
+
+```mermaid
+flowchart LR
+    createWidget[POST /widgets] -->|201| getWidget[GET /widgets/widget_id]
+    createWidget[POST /widgets] -->|201| updateWidget[PUT /widgets/widget_id]
+    getWidget[GET /widgets/widget_id] -->|200| updateWidget[PUT /widgets/widget_id]
+    subgraph orphans[ORPHANS - no links]
+        listWidgets[GET /widgets]
+        healthCheck[GET /health]
+    end
+```
+
+This helps you:
+- **Identify orphans** — Operations with no links that won't be included in chains
+- **Find gaps** — Missing links that prevent certain chain paths
+- **Visualize flow** — See how operations connect via response data
+
+Paste the output into any Mermaid renderer (GitHub markdown, Mermaid Live Editor, etc.) to view the diagram.
+
+### Exclude Operations
+
+To exclude specific operations from the graph:
+
+```bash
+api-parity graph-chains --spec openapi.yaml --exclude healthCheck --exclude debugEndpoint
+```
+
 ## Common Issues
 
 | Problem | Cause | Fix |

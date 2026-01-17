@@ -4,6 +4,27 @@ Tasks for future development. Add items here when you identify work that shouldn
 
 ---
 
+## graph-chains: Show Actual Generated Chains
+
+The current `graph-chains` command shows the static link graph extracted from the OpenAPI spec—which operations define links to which other operations. This does NOT show what chains Schemathesis will actually generate during `explore --stateful`.
+
+**Gap:** The link graph shows potential connections, but Schemathesis chain generation involves:
+- Hypothesis exploration of the state space
+- Parameter generation and link variable substitution
+- Filtering based on response status codes
+- Chain depth limits (`--max-steps`)
+
+A spec might define links that Schemathesis cannot actually traverse (e.g., link parameters don't match, response schemas don't provide expected fields). Users debugging "why doesn't explore find chains?" need to see what Schemathesis actually generates, not just what the spec declares.
+
+**Proposed enhancement:** Add `--generated` flag to `graph-chains` that:
+1. Uses `CaseGenerator.generate_chains()` to produce actual chains
+2. Shows the generated chain sequences (not just the link graph)
+3. Highlights which links were actually used vs. declared but unused
+
+This would provide visibility into the gap between "spec says X" and "Schemathesis does Y".
+
+---
+
 ## Advanced Authentication Support
 
 v0 supports simple header-based auth configured manually in runtime config (see ARCHITECTURE.md config example with `Authorization: "Bearer ${API_TOKEN}"`). Future work for advanced auth schemes:
