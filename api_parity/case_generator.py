@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -43,6 +44,29 @@ from api_parity.models import ChainCase, ChainStep, RequestCase
 # Matches: $response.body#/fieldname or $response.body#/nested/path
 LINK_BODY_PATTERN = re.compile(r'\$response\.body#/(.+)$')
 
+# Pattern for header expressions: $response.header.{HeaderName}
+# Header names can contain alphanumeric, hyphens, and underscores
+LINK_HEADER_PATTERN = re.compile(r'\$response\.header\.([A-Za-z0-9\-_]+)$', re.IGNORECASE)
+
+
+@dataclass
+class LinkFields:
+    """Container for field references extracted from OpenAPI link expressions.
+
+    Holds both body JSONPointer paths and header names that are referenced
+    by link expressions in the spec. Used for variable extraction during
+    chain execution.
+
+    Attributes:
+        body_pointers: Set of JSONPointer paths from body expressions
+                       (e.g., {"id", "data/item/id"}).
+        header_names: Set of header names from header expressions, normalized
+                      to lowercase (e.g., {"location", "x-resource-id"}).
+    """
+
+    body_pointers: set[str] = field(default_factory=set)
+    header_names: set[str] = field(default_factory=set)
+
 
 def _create_explicit_links_only_config() -> SchemathesisConfig:
     """Create Schemathesis config that disables inference algorithms.
@@ -62,19 +86,21 @@ def _create_explicit_links_only_config() -> SchemathesisConfig:
     return SchemathesisConfig(projects=projects)
 
 
-def extract_link_fields_from_spec(spec: dict) -> set[str]:
-    """Extract all field names referenced by OpenAPI link expressions.
+def extract_link_fields_from_spec(spec: dict) -> LinkFields:
+    """Extract all field references from OpenAPI link expressions.
 
     Parses the OpenAPI spec to find all link definitions and extracts the
-    field names they reference via $response.body#/... expressions.
+    field references they contain:
+    - Body expressions ($response.body#/...) are stored as JSONPointer paths
+    - Header expressions ($response.header.X) are stored as lowercase header names
 
     Args:
         spec: Parsed OpenAPI specification dict.
 
     Returns:
-        Set of field names (top-level) referenced by links.
+        LinkFields with body_pointers and header_names sets.
     """
-    fields: set[str] = set()
+    link_fields = LinkFields()
 
     paths = spec.get("paths", {})
     for path_item in paths.values():
@@ -96,14 +122,23 @@ def extract_link_fields_from_spec(spec: dict) -> set[str]:
                     for param_expr in parameters.values():
                         if not isinstance(param_expr, str):
                             continue
-                        match = LINK_BODY_PATTERN.match(param_expr)
-                        if match:
-                            # Extract the full JSONPointer path
-                            json_pointer = match.group(1)
-                            # Store the full pointer for nested extraction
-                            fields.add(json_pointer)
 
-    return fields
+                        # Check for body expression
+                        body_match = LINK_BODY_PATTERN.match(param_expr)
+                        if body_match:
+                            # Extract the full JSONPointer path
+                            json_pointer = body_match.group(1)
+                            link_fields.body_pointers.add(json_pointer)
+                            continue
+
+                        # Check for header expression
+                        header_match = LINK_HEADER_PATTERN.match(param_expr)
+                        if header_match:
+                            # Normalize header name to lowercase per HTTP spec (RFC 7230)
+                            header_name = header_match.group(1).lower()
+                            link_fields.header_names.add(header_name)
+
+    return link_fields
 
 
 def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
@@ -195,11 +230,11 @@ class CaseGenerator:
         # Extract field names referenced by OpenAPI links
         self._link_fields = extract_link_fields_from_spec(self._raw_spec)
 
-    def get_link_fields(self) -> set[str]:
-        """Get the set of field names referenced by OpenAPI links.
+    def get_link_fields(self) -> LinkFields:
+        """Get the field references extracted from OpenAPI link expressions.
 
         Returns:
-            Set of JSONPointer paths referenced by link expressions.
+            LinkFields with body_pointers and header_names sets.
         """
         return self._link_fields
 
@@ -504,7 +539,8 @@ class CaseGenerator:
 
                 Returns:
                     Dict with link_name, source_operation, status_code, is_inferred,
-                    or None if no explicit link found in the spec.
+                    and field (the raw expression for replay), or None if no explicit
+                    link found in the spec.
                 """
                 spec = generator_self._raw_spec
                 paths = spec.get("paths", {})
@@ -537,11 +573,21 @@ class CaseGenerator:
                                     continue
                                 link_target = link_def.get("operationId") or link_def.get("operationRef")
                                 if link_target == target_op:
+                                    # Extract field expression for replay support
+                                    # Find the first parameter expression in the link
+                                    field_expr = None
+                                    parameters = link_def.get("parameters", {})
+                                    for param_expr in parameters.values():
+                                        if isinstance(param_expr, str):
+                                            field_expr = param_expr
+                                            break
+
                                     return {
                                         "link_name": link_name,
                                         "source_operation": source_op,
                                         "status_code": status_code,
                                         "is_inferred": False,
+                                        "field": field_expr,  # Original expression for replay
                                     }
 
                 # No explicit link found in spec
@@ -572,6 +618,7 @@ class CaseGenerator:
                 possible chain paths. Real HTTP execution happens later in the Executor.
                 """
                 synthetic_body = self._generate_synthetic_body()
+                synthetic_headers = self._generate_synthetic_headers()
 
                 # Create placeholder request object (required by Schemathesis)
                 req = requests.Request(
@@ -582,7 +629,7 @@ class CaseGenerator:
 
                 return SchemathesisResponse(
                     status_code=201 if case.method == "POST" else 200,
-                    headers={"content-type": ["application/json"]},
+                    headers=synthetic_headers,
                     content=json.dumps(synthetic_body).encode(),
                     request=prepared,
                     elapsed=0.1,
@@ -599,8 +646,8 @@ class CaseGenerator:
                 """
                 body: dict = {}
 
-                # Add all fields referenced by links in the spec
-                for field_pointer in generator_self._link_fields:
+                # Add all body fields referenced by links in the spec
+                for field_pointer in generator_self._link_fields.body_pointers:
                     self._set_by_jsonpointer(body, field_pointer, str(uuid.uuid4()))
 
                 # Add common non-ID fields for general compatibility
@@ -615,6 +662,27 @@ class CaseGenerator:
                     body["items"] = [{"id": str(uuid.uuid4())} for _ in range(3)]
 
                 return body
+
+            def _generate_synthetic_headers(self) -> dict[str, list[str]]:
+                """Generate synthetic response headers for link resolution.
+
+                Creates placeholder values for all headers referenced by OpenAPI link
+                expressions (e.g., $response.header.Location). Header values are lists
+                per Schemathesis Response requirements.
+                """
+                # Always include content-type
+                headers: dict[str, list[str]] = {"content-type": ["application/json"]}
+
+                # Add synthetic values for all headers referenced by links
+                for header_name in generator_self._link_fields.header_names:
+                    if header_name == "location":
+                        # Location header should be a URL-like value
+                        headers[header_name] = [f"http://placeholder/resource/{uuid.uuid4()}"]
+                    else:
+                        # Other headers get UUID values
+                        headers[header_name] = [str(uuid.uuid4())]
+
+                return headers
 
             def _set_by_jsonpointer(self, data: dict, pointer: str, value: Any) -> None:
                 """Set a value in nested data using a JSONPointer path.

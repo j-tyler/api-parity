@@ -698,13 +698,13 @@ class TestCustomFieldNames:
 
         link_fields = generator.get_link_fields()
 
-        # Custom field names should be extracted
-        assert "resource_uuid" in link_fields
-        assert "entity_identifier" in link_fields
-        assert "data/nested_id" in link_fields
+        # Custom field names should be extracted (now in body_pointers)
+        assert "resource_uuid" in link_fields.body_pointers
+        assert "entity_identifier" in link_fields.body_pointers
+        assert "data/nested_id" in link_fields.body_pointers
 
         # Standard 'id' should NOT be in this spec (it uses custom names)
-        assert "id" not in link_fields
+        assert "id" not in link_fields.body_pointers
 
     def test_chain_generation_with_custom_fields(self, tmp_path: Path):
         """Chain generation works with specs using custom field names."""

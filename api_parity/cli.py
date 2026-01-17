@@ -1372,6 +1372,7 @@ def run_replay(args: ReplayArgs) -> int:
         extract_link_fields_from_chain,
         load_bundle,
     )
+    from api_parity.case_generator import LinkFields
     from api_parity.cel_evaluator import CELEvaluator, CELSubprocessError
     from api_parity.comparator import Comparator
     from api_parity.config_loader import (
@@ -1465,7 +1466,7 @@ def run_replay(args: ReplayArgs) -> int:
 
     # Pre-load all bundles to extract link_fields for chain replay
     loaded_bundles: list[LoadedBundle] = []
-    link_fields: set[str] = set()
+    link_fields = LinkFields()
     load_errors: list[tuple[Path, str]] = []
 
     for bundle_path in bundles:
@@ -1474,7 +1475,9 @@ def run_replay(args: ReplayArgs) -> int:
             loaded_bundles.append(bundle)
             # Extract link_fields from chain bundles for variable extraction
             if bundle.bundle_type == BundleType.CHAIN and bundle.chain_case is not None:
-                link_fields.update(extract_link_fields_from_chain(bundle.chain_case))
+                chain_link_fields = extract_link_fields_from_chain(bundle.chain_case)
+                link_fields.body_pointers.update(chain_link_fields.body_pointers)
+                link_fields.header_names.update(chain_link_fields.header_names)
         except BundleLoadError as e:
             load_errors.append((bundle_path, str(e)))
 
@@ -1533,12 +1536,15 @@ def run_replay(args: ReplayArgs) -> int:
         progress_reporter = ProgressReporter(total=len(loaded_bundles), unit="bundles")
         progress_reporter.start()
 
+        # Check if we have any link fields to extract (either body or headers)
+        has_link_fields = link_fields.body_pointers or link_fields.header_names
+
         with Executor(
             target_a_config,
             target_b_config,
             default_timeout=args.timeout,
             operation_timeouts=args.operation_timeout,
-            link_fields=link_fields if link_fields else None,
+            link_fields=link_fields if has_link_fields else None,
             requests_per_second=requests_per_second,
         ) as executor:
 

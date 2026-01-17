@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import httpx
 
-from api_parity.case_generator import extract_by_jsonpointer
+from api_parity.case_generator import LinkFields, extract_by_jsonpointer
 from api_parity.models import (
     ChainCase,
     ChainExecution,
@@ -73,7 +73,7 @@ class Executor:
         target_b: TargetConfig,
         default_timeout: float = 30.0,
         operation_timeouts: dict[str, float] | None = None,
-        link_fields: set[str] | None = None,
+        link_fields: LinkFields | set[str] | None = None,
         requests_per_second: float | None = None,
     ) -> None:
         """Initialize the executor.
@@ -83,9 +83,9 @@ class Executor:
             target_b: Configuration for target B.
             default_timeout: Default timeout in seconds for requests.
             operation_timeouts: Per-operation timeout overrides.
-            link_fields: Set of JSONPointer paths to extract from responses
-                         for chain variable substitution. Parsed from OpenAPI
-                         link expressions (e.g., "id", "data/item/id").
+            link_fields: LinkFields object containing body_pointers and header_names
+                         for variable extraction. For backward compatibility, also
+                         accepts set[str] which is treated as body_pointers only.
             requests_per_second: Maximum requests per second (rate limit).
                                  If None, no rate limiting is applied.
         """
@@ -93,7 +93,15 @@ class Executor:
         self._target_b = target_b
         self._default_timeout = default_timeout
         self._operation_timeouts = operation_timeouts or {}
-        self._link_fields = link_fields or set()
+
+        # Handle both LinkFields and legacy set[str] input for backward compatibility
+        if link_fields is None:
+            self._link_fields = LinkFields()
+        elif isinstance(link_fields, LinkFields):
+            self._link_fields = link_fields
+        else:
+            # Legacy set[str] input - treat as body_pointers only
+            self._link_fields = LinkFields(body_pointers=link_fields)
 
         # Rate limiting state
         self._requests_per_second = requests_per_second
@@ -386,11 +394,13 @@ class Executor:
         """Extract variables from a response for chain substitution.
 
         Extracts fields referenced by OpenAPI link expressions. Uses the
-        link_fields set parsed from the spec at initialization.
+        link_fields parsed from the spec at initialization, including both
+        body JSONPointer paths and header names.
 
-        Variables are stored under their full JSONPointer path. Additionally,
-        if the last segment is unique (no collision with other paths), it's
-        also stored under just the last segment for simpler references.
+        Variables are stored under their full JSONPointer path for body fields.
+        Header values are stored under "header/{name}" keys (lowercase).
+        Additionally, if the last segment is unique (no collision with other
+        paths), it's also stored under just the last segment for simpler references.
 
         Args:
             response: Response to extract from.
@@ -400,31 +410,40 @@ class Executor:
         """
         extracted: dict[str, Any] = {}
 
-        if not isinstance(response.body, dict):
-            return extracted
+        # Extract body fields (if response has a dict body)
+        if isinstance(response.body, dict):
+            # First pass: extract all values under full pointer paths
+            for field_pointer in self._link_fields.body_pointers:
+                value = extract_by_jsonpointer(response.body, field_pointer)
+                if value is not None:
+                    extracted[field_pointer] = value
 
-        # First pass: extract all values under full pointer paths
-        for field_pointer in self._link_fields:
-            value = extract_by_jsonpointer(response.body, field_pointer)
-            if value is not None:
-                extracted[field_pointer] = value
+            # Second pass: add last-segment shortcuts only if no collision
+            # e.g., "data/item/id" also stores under "id" if no other path ends in "id"
+            last_segments: dict[str, list[str]] = {}
+            for field_pointer in self._link_fields.body_pointers:
+                last_segment = field_pointer.split("/")[-1]
+                if last_segment != field_pointer:  # Only for nested paths
+                    last_segments.setdefault(last_segment, []).append(field_pointer)
 
-        # Second pass: add last-segment shortcuts only if no collision
-        # e.g., "data/item/id" also stores under "id" if no other path ends in "id"
-        last_segments: dict[str, list[str]] = {}
-        for field_pointer in self._link_fields:
-            last_segment = field_pointer.split("/")[-1]
-            if last_segment != field_pointer:  # Only for nested paths
-                last_segments.setdefault(last_segment, []).append(field_pointer)
+            for last_segment, pointers in last_segments.items():
+                if len(pointers) == 1:
+                    # No collision - safe to add shortcut
+                    pointer = pointers[0]
+                    if pointer in extracted:
+                        extracted[last_segment] = extracted[pointer]
+                # If len(pointers) > 1, there's a collision - skip shortcut to avoid
+                # silent data loss. Users must use full path.
 
-        for last_segment, pointers in last_segments.items():
-            if len(pointers) == 1:
-                # No collision - safe to add shortcut
-                pointer = pointers[0]
-                if pointer in extracted:
-                    extracted[last_segment] = extracted[pointer]
-            # If len(pointers) > 1, there's a collision - skip shortcut to avoid
-            # silent data loss. Users must use full path.
+        # Extract header values
+        # Header names in link_fields are already lowercase per HTTP spec (RFC 7230)
+        # Use "header/{name}" key format to parallel body paths and avoid collisions
+        for header_name in self._link_fields.header_names:
+            # ResponseCase headers are already lowercase keys with list values
+            header_values = response.headers.get(header_name, [])
+            if header_values:
+                # Use first value (multi-value headers use first value only)
+                extracted[f"header/{header_name}"] = header_values[0]
 
         return extracted
 

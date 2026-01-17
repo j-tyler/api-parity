@@ -597,3 +597,32 @@ Binary (non-JSON) response bodies are compared using the same CEL infrastructure
 **Default behavior:** If `binary_rule` is not specified, binary bodies are not compared (match by default). This preserves backward compatibility—existing configs won't suddenly fail on binary endpoints. Users must explicitly configure `binary_rule` to enforce binary parity.
 
 **Alternative considered:** Python-level byte comparison (decode base64, compare bytes). This would enable hash-based and byte-prefix comparisons but requires a separate code path outside CEL. The CEL approach was chosen for simplicity and consistency.
+
+---
+
+# Header-Based OpenAPI Link Support
+
+Keywords: header link Location response chain stateful extraction
+Date: 20260117
+
+OpenAPI link expressions can reference values from response headers (`$response.header.Location`) in addition to body fields (`$response.body#/id`). The original implementation only supported body expressions, silently ignoring header links. This prevented chain generation through common patterns like `POST /resources` returning a `Location` header with the created resource URL.
+
+**Design decisions:**
+
+1. **Extracted key format:** Header values use `header/{name}` keys (e.g., `header/location`) to parallel body pointer paths (e.g., `id`, `data/item/id`) and avoid namespace collisions. If a body field was literally named `location`, it would be stored as `location`, not `header/location`.
+
+2. **Case normalization:** Per HTTP spec (RFC 7230), header names are case-insensitive. Header names are normalized to lowercase when storing and matching. Both `$response.header.Location` and `$response.header.location` resolve to `header/location`.
+
+3. **Multi-value headers:** HTTP headers can have multiple values. Only the first value is extracted, matching the common case for `Location`, `X-Request-Id`, etc. Array access for multi-value headers (like `Set-Cookie`) could be added later.
+
+4. **LinkFields dataclass:** Body pointers and header names are separated into distinct sets in the `LinkFields` dataclass. This makes the extraction logic explicit and allows typed handling. For backward compatibility, `Executor` accepts `set[str]` (treated as body pointers only).
+
+5. **Synthetic headers in chain discovery:** During chain generation, `_synthetic_response()` now includes synthetic header values for all referenced headers. `Location` headers get URL-like values (`http://placeholder/resource/{uuid}`); other headers get UUID strings.
+
+6. **Expression storage in link_source:** The `_find_link_between()` function now stores the original expression (`$response.body#/path` or `$response.header.HeaderName`) in `link_source.field`. This enables replay to correctly identify whether to extract from body or headers, even without the OpenAPI spec.
+
+**Backward compatibility:**
+
+- Old chain bundles using legacy JSONPath format (`$.id`) are still supported via fallback parsing
+- `Executor` accepts both `LinkFields` and `set[str]` for `link_fields` parameter
+- Specs without header links continue to work unchanged

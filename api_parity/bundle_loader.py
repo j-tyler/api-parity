@@ -14,6 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from api_parity.case_generator import LinkFields
 from api_parity.models import (
     ChainCase,
     MismatchMetadata,
@@ -55,7 +56,7 @@ class LoadedBundle:
     metadata: MismatchMetadata
 
 
-def extract_link_fields_from_chain(chain: ChainCase) -> set[str]:
+def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
     """Extract link_fields from a ChainCase for variable extraction.
 
     During replay, we don't have the OpenAPI spec to extract link_fields.
@@ -66,18 +67,39 @@ def extract_link_fields_from_chain(chain: ChainCase) -> set[str]:
         chain: The ChainCase to extract link_fields from.
 
     Returns:
-        Set of JSONPointer paths (e.g., "id", "data/item/id") needed for
+        LinkFields with body_pointers and header_names needed for
         variable extraction during chain execution.
     """
-    fields: set[str] = set()
+    link_fields = LinkFields()
 
     for step in chain.steps:
         if step.link_source is None:
             continue
 
-        # link_source.field is JSONPath format: "$.id" or "$.data.items[0].id"
+        # link_source.field contains the original expression from the spec
+        # Format: "$response.body#/path" or "$response.header.HeaderName"
         field = step.link_source.get("field")
-        if not isinstance(field, str) or not field.startswith("$."):
+        if not isinstance(field, str):
+            continue
+
+        # Check for header expression: $response.header.HeaderName
+        if field.startswith("$response.header."):
+            # Extract header name and normalize to lowercase
+            header_name = field[len("$response.header."):].lower()
+            if header_name:
+                link_fields.header_names.add(header_name)
+            continue
+
+        # Check for body expression: $response.body#/path
+        if field.startswith("$response.body#/"):
+            json_pointer = field[len("$response.body#/"):]
+            if json_pointer:
+                link_fields.body_pointers.add(json_pointer)
+            continue
+
+        # Legacy format: JSONPath like "$.id" or "$.data.items[0].id"
+        # (from older chain bundles before field expression storage)
+        if not field.startswith("$."):
             continue
 
         # Convert JSONPath to JSONPointer:
@@ -115,9 +137,9 @@ def extract_link_fields_from_chain(chain: ChainCase) -> set[str]:
             pointer_parts.append(current)
 
         if pointer_parts:
-            fields.add("/".join(pointer_parts))
+            link_fields.body_pointers.add("/".join(pointer_parts))
 
-    return fields
+    return link_fields
 
 
 def discover_bundles(directory: Path) -> list[Path]:
