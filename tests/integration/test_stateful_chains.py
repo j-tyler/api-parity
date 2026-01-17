@@ -783,3 +783,152 @@ class TestCustomFieldNames:
         links = create_resource["responses"]["201"]["links"]
         get_resource_link = links["GetResource"]
         assert get_resource_link["parameters"]["resource_id"] == "$response.body#/resource_uuid"
+
+
+# =============================================================================
+# Explicit Links Only Tests
+# =============================================================================
+
+
+class TestExplicitLinksOnly:
+    """Tests that chain generation uses only explicit OpenAPI links.
+
+    Verifies that inference algorithms (parameter name matching, Location headers)
+    are disabled, and chains are generated only from explicit OpenAPI link definitions.
+    See DESIGN.md "Explicit Links Only for Chain Generation" for rationale.
+    """
+
+    def test_spec_with_explicit_links_generates_chains(
+        self, openapi_spec_with_links: Path
+    ):
+        """Spec with explicit OpenAPI links generates multi-step chains."""
+        from api_parity.case_generator import CaseGenerator
+
+        generator = CaseGenerator(openapi_spec_with_links)
+        chains = generator.generate_chains(max_chains=3, max_steps=3)
+
+        # Should generate at least one chain
+        assert len(chains) > 0, "Spec with explicit links should generate chains"
+
+        # Chains should have multiple steps (following links)
+        for chain in chains:
+            assert len(chain.steps) >= 2, "Chains should follow links to have 2+ steps"
+
+    def test_inferable_relationships_without_explicit_links_raises_no_links_found(
+        self, tmp_path: Path
+    ):
+        """Spec with inferable relationships but no explicit links raises NoLinksFound.
+
+        This spec has POST /users returning {id} and GET /users/{userId} that could
+        be linked via parameter name inference, but since there are no explicit
+        OpenAPI links defined and inference is disabled, Schemathesis raises NoLinksFound.
+        """
+        from schemathesis.core.errors import NoLinksFound
+
+        from api_parity.case_generator import CaseGenerator
+
+        # Create spec with inferable but not explicit relationships
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/users": {
+                    "post": {
+                        "operationId": "createUser",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"name": {"type": "string"}},
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": {"type": "string", "format": "uuid"},
+                                                "name": {"type": "string"},
+                                            },
+                                        }
+                                    }
+                                },
+                                # NOTE: No "links" section - relationship must be inferred
+                            }
+                        },
+                    }
+                },
+                "/users/{userId}": {
+                    "get": {
+                        "operationId": "getUser",
+                        "parameters": [
+                            {
+                                "name": "userId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string", "format": "uuid"},
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "Success",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": {"type": "string", "format": "uuid"},
+                                                "name": {"type": "string"},
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    },
+                    "delete": {
+                        "operationId": "deleteUser",
+                        "parameters": [
+                            {
+                                "name": "userId",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string", "format": "uuid"},
+                            }
+                        ],
+                        "responses": {"204": {"description": "Deleted"}},
+                    },
+                },
+            },
+        }
+        spec_path = tmp_path / "inferable_no_links_spec.yaml"
+        with open(spec_path, "w") as f:
+            yaml.dump(spec, f)
+
+        generator = CaseGenerator(spec_path)
+
+        # With inference disabled, Schemathesis raises NoLinksFound because
+        # there are no explicit links defined. This is the expected behavior.
+        with pytest.raises(NoLinksFound):
+            generator.generate_chains(max_chains=3, max_steps=3)
+
+    def test_schemathesis_config_disables_inference(self):
+        """Verify the Schemathesis config actually disables inference algorithms."""
+        from api_parity.case_generator import _create_explicit_links_only_config
+
+        config = _create_explicit_links_only_config()
+
+        # The config should disable inference
+        phases = config.projects.default.phases
+        assert phases is not None
+        assert phases.stateful is not None
+        assert phases.stateful.inference is not None
+        assert phases.stateful.inference.algorithms == []
+        assert phases.stateful.inference.is_enabled is False

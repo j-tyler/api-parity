@@ -21,7 +21,19 @@ import yaml
 from hypothesis import Phase, settings
 from hypothesis.errors import HypothesisException
 from hypothesis.stateful import run_state_machine_as_test
+from schemathesis.config import (
+    PhasesConfig,
+    ProjectConfig,
+    ProjectsConfig,
+    SchemathesisConfig,
+    StatefulPhaseConfig,
+)
 from schemathesis.core.transport import Response as SchemathesisResponse
+
+# Get InferenceConfig via public API indirection. InferenceConfig is not exported
+# in schemathesis.config.__all__, but we need it to disable inference algorithms.
+# See CLAUDE.md "Schemathesis Gotchas" for details.
+_InferenceConfig = type(StatefulPhaseConfig().inference)
 from schemathesis.specs.openapi.stateful import OpenAPIStateMachine
 
 from api_parity.models import ChainCase, ChainStep, RequestCase
@@ -30,6 +42,24 @@ from api_parity.models import ChainCase, ChainStep, RequestCase
 # Pattern to extract field references from OpenAPI link expressions
 # Matches: $response.body#/fieldname or $response.body#/nested/path
 LINK_BODY_PATTERN = re.compile(r'\$response\.body#/(.+)$')
+
+
+def _create_explicit_links_only_config() -> SchemathesisConfig:
+    """Create Schemathesis config that disables inference algorithms.
+
+    Stateful chain generation uses only explicit OpenAPI links, not inferred
+    relationships from parameter name matching or other heuristics. This ensures
+    chains follow documented API contracts, not guessed relationships.
+
+    See DESIGN.md "Explicit Links Only for Chain Generation" for rationale.
+    """
+    # Disable all inference algorithms (LOCATION_HEADERS, DEPENDENCY_ANALYSIS)
+    inference = _InferenceConfig(algorithms=[])
+    stateful = StatefulPhaseConfig(inference=inference)
+    phases = PhasesConfig(stateful=stateful)
+    project = ProjectConfig(phases=phases)
+    projects = ProjectsConfig(default=project)
+    return SchemathesisConfig(projects=projects)
 
 
 def extract_link_fields_from_spec(spec: dict) -> set[str]:
@@ -140,8 +170,15 @@ class CaseGenerator:
         self._exclude = set(exclude_operations or [])
         self._operations_cache: list[dict[str, Any]] | None = None
 
+        # Create config that disables inference algorithms for stateful testing.
+        # Chain generation only follows explicit OpenAPI links, not inferred
+        # relationships from parameter name matching or Location headers.
+        schemathesis_config = _create_explicit_links_only_config()
+
         try:
-            self._schema = schemathesis.openapi.from_path(str(spec_path))
+            self._schema = schemathesis.openapi.from_path(
+                str(spec_path), config=schemathesis_config
+            )
         except Exception as e:
             raise CaseGeneratorError(f"Failed to load OpenAPI spec: {e}") from e
 
