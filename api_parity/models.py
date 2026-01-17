@@ -198,6 +198,21 @@ class BodyRules(BaseModel):
     field_rules: dict[str, FieldRule] = Field(
         default_factory=dict, description="JSONPath -> FieldRule mapping"
     )
+    binary_rule: FieldRule | None = Field(
+        default=None,
+        description="Rule for comparing binary (non-JSON) bodies. Compares base64-encoded strings.",
+    )
+
+    @model_validator(mode="after")
+    def validate_binary_rule_presence(self) -> Self:
+        # Binary rules only support PARITY presence mode (the default).
+        # Other modes don't make sense: binary_rule applies when both responses
+        # are binary - presence is already established by that point.
+        if self.binary_rule is not None and self.binary_rule.presence != PresenceMode.PARITY:
+            raise ValueError(
+                f"binary_rule only supports presence=parity, got {self.binary_rule.presence.value}"
+            )
+        return self
 
 
 class OperationRules(BaseModel):

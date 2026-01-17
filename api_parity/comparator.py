@@ -230,6 +230,22 @@ class Comparator:
                 details=details,
             )
 
+        # Phase 3b: Compare binary body (non-JSON responses)
+        binary_result = self._compare_binary_body(
+            response_a.body_base64,
+            response_b.body_base64,
+            rules.body.binary_rule if rules.body else None,
+        )
+        details["binary_body"] = binary_result
+
+        if not binary_result.match:
+            return ComparisonResult(
+                match=False,
+                mismatch_type=MismatchType.BODY,
+                summary=self._format_binary_summary(binary_result.differences),
+                details=details,
+            )
+
         # Phase 4: Compare extra fields (fields not in schema but allowed)
         # These fields exist in the response but aren't defined in the OpenAPI spec.
         # When additionalProperties is true/unspecified, we still need to compare them.
@@ -563,6 +579,82 @@ class Comparator:
             differences.extend(path_differences)
 
         return ComponentResult(match=len(differences) == 0, differences=differences)
+
+    def _compare_binary_body(
+        self,
+        body_a: str | None,
+        body_b: str | None,
+        binary_rule: FieldRule | None,
+    ) -> ComponentResult:
+        """Compare binary response bodies (base64-encoded).
+
+        Args:
+            body_a: Base64-encoded body from target A (None if not binary).
+            body_b: Base64-encoded body from target B (None if not binary).
+            binary_rule: Comparison rule for binary bodies.
+
+        Returns:
+            ComponentResult for binary body comparison.
+        """
+        # If no rule specified, skip all binary comparison (including presence check)
+        if binary_rule is None:
+            return ComponentResult(match=True, differences=[])
+
+        # Neither response has binary body - nothing to compare
+        if body_a is None and body_b is None:
+            return ComponentResult(match=True, differences=[])
+
+        # One has binary body, one doesn't - mismatch
+        if body_a is None or body_b is None:
+            return ComponentResult(
+                match=False,
+                differences=[
+                    FieldDifference(
+                        path="body_base64",
+                        target_a="<no binary body>" if body_a is None else "<has binary body>",
+                        target_b="<no binary body>" if body_b is None else "<has binary body>",
+                        rule="binary_presence",
+                    )
+                ],
+            )
+
+        # Evaluate the rule using CEL with base64 strings as values
+        try:
+            result = self._evaluate_field_rule(body_a, body_b, binary_rule)
+        except (CELEvaluationError, ComparatorConfigError) as e:
+            return ComponentResult(
+                match=False,
+                differences=[
+                    FieldDifference(
+                        path="body_base64",
+                        target_a=f"<{len(body_a)} chars>",
+                        target_b=f"<{len(body_b)} chars>",
+                        rule=f"error: {e}",
+                    )
+                ],
+            )
+
+        if result:
+            return ComponentResult(match=True, differences=[])
+
+        return ComponentResult(
+            match=False,
+            differences=[
+                FieldDifference(
+                    path="body_base64",
+                    target_a=f"<{len(body_a)} chars>",
+                    target_b=f"<{len(body_b)} chars>",
+                    rule=binary_rule.predefined or "custom",
+                )
+            ],
+        )
+
+    def _format_binary_summary(self, differences: list[FieldDifference]) -> str:
+        """Format a summary for binary body mismatches."""
+        if len(differences) == 1:
+            diff = differences[0]
+            return f"Binary body mismatch: {diff.rule}"
+        return f"Binary body mismatches: {len(differences)} differences"
 
     def _compare_jsonpath(
         self,

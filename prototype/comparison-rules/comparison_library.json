@@ -211,6 +211,24 @@
       "description": "Both objects have at least one key. Contents not compared.",
       "params": [],
       "expr": "size(a) > 0 && size(b) > 0"
+    },
+
+    "binary_exact_match": {
+      "description": "Binary content must be identical (compares base64-encoded strings).",
+      "params": [],
+      "expr": "a == b"
+    },
+
+    "binary_length_match": {
+      "description": "Binary content has same base64 string length. Both responses must encode to the same number of characters.",
+      "params": [],
+      "expr": "size(a) == size(b)"
+    },
+
+    "binary_nonempty": {
+      "description": "Both responses have non-empty binary content. Actual content not compared.",
+      "params": [],
+      "expr": "size(a) > 0 && size(b) > 0"
     }
   }
 }

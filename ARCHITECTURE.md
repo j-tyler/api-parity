@@ -727,9 +727,30 @@ JSON file defining how responses are compared. Model: `ComparisonRulesFile` in `
 **Key behaviors:**
 - Unspecified fields: presence parity only (both have or both lack), values not compared
 - Body rules: only apply to 2xx JSON responses
+- Binary body rules: for non-JSON responses (application/octet-stream, images, etc.)
 - Error responses: same status code class = parity, body not compared
 - Headers: case-insensitive, multi-value uses first value only
 - Wildcards (`[*]`): expand and compare by index
+
+**Binary body comparison:**
+
+For non-JSON responses, use `binary_rule` in the body rules:
+
+```json
+{
+  "body": {
+    "field_rules": {},
+    "binary_rule": {"predefined": "binary_exact_match"}
+  }
+}
+```
+
+Binary bodies are stored as base64-encoded strings. The comparison operates on these strings using CEL expressions. Available predefined comparisons:
+- `binary_exact_match` — Content must be identical
+- `binary_length_match` — Same base64 string length
+- `binary_nonempty` — Both have non-empty content
+
+If `binary_rule` is not specified and both responses have binary content, they are not compared (default match). Configure `binary_rule` to enforce binary parity.
 
 **References:**
 - Predefineds: `prototype/comparison-rules/comparison_library.json`
