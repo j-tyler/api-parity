@@ -377,3 +377,200 @@ class TestNullValues:
         # null is a present value, missing is absent - parity fails
         assert result.match is False
         assert "presence:parity" in result.details["body"].differences[0].rule
+
+
+class TestBinaryBodyComparison:
+    """Tests for binary body (body_base64) comparison."""
+
+    def test_both_no_binary(self, comparator):
+        """Neither response has binary body - match."""
+        response_a = make_response(body={"id": 1})
+        response_b = make_response(body={"id": 1})
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
+        )
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["binary_body"].match is True
+        assert result.details["binary_body"].differences == []
+
+    def test_one_has_binary_other_empty(self, comparator):
+        """One response has binary content, other has nothing - mismatch."""
+        # Both have body=None (neither is JSON), but only one has binary content
+        response_a = make_response(body=None, body_base64="SGVsbG8=")  # "Hello" in base64
+        response_b = make_response(body=None)  # No content at all
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
+        )
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.match is False
+        assert result.mismatch_type == MismatchType.BODY
+        assert "binary_presence" in result.details["binary_body"].differences[0].rule
+
+    def test_one_json_one_binary_caught_in_body_phase(self, comparator):
+        """One response is JSON, other is binary - caught in body comparison phase."""
+        response_a = make_response(body=None, body_base64="SGVsbG8=")  # Binary
+        response_b = make_response(body={"id": 1})  # JSON
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
+        )
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        # This is caught in body comparison (one has body, one doesn't)
+        assert result.match is False
+        assert result.mismatch_type == MismatchType.BODY
+        assert "body_presence" in result.details["body"].differences[0].rule
+
+    def test_no_binary_rule_both_have_binary(self, comparator):
+        """Both have binary but no rule specified - match (not compared)."""
+        response_a = make_response(body=None, body_base64="SGVsbG8=")
+        response_b = make_response(body=None, body_base64="V29ybGQ=")  # Different content
+        rules = OperationRules()  # No binary_rule specified
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["binary_body"].match is True  # Not compared, default match
+
+    def test_binary_exact_match_same(self, comparator, mock_cel):
+        """Binary exact match with identical content."""
+        response_a = make_response(body=None, body_base64="SGVsbG8=")
+        response_b = make_response(body=None, body_base64="SGVsbG8=")
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
+        )
+        mock_cel.evaluate.return_value = True
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["binary_body"].match is True
+        mock_cel.evaluate.assert_called_with("a == b", {"a": "SGVsbG8=", "b": "SGVsbG8="})
+
+    def test_binary_exact_match_different(self, comparator, mock_cel):
+        """Binary exact match with different content - mismatch."""
+        response_a = make_response(body=None, body_base64="SGVsbG8=")
+        response_b = make_response(body=None, body_base64="V29ybGQ=")
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
+        )
+        mock_cel.evaluate.return_value = False
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.match is False
+        assert result.mismatch_type == MismatchType.BODY
+        assert result.details["binary_body"].differences[0].rule == "exact_match"
+
+    def test_binary_length_match(self, comparator, mock_cel):
+        """Binary length match (CEL-based)."""
+        # Both 8 chars in base64
+        response_a = make_response(body=None, body_base64="SGVsbG8=")
+        response_b = make_response(body=None, body_base64="V29ybGQ=")
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(predefined="binary_length_match"))
+        )
+        mock_cel.evaluate.return_value = True  # size(a) == size(b)
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["binary_body"].match is True
+
+    def test_binary_custom_cel(self, comparator, mock_cel):
+        """Binary comparison with custom CEL expression."""
+        response_a = make_response(body=None, body_base64="SGVsbG8=")
+        response_b = make_response(body=None, body_base64="SGVsbG9Xb3JsZA==")
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(expr='a.startsWith("SGVs")'))
+        )
+        mock_cel.evaluate.return_value = True
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["binary_body"].match is True
+
+    def test_binary_summary_format(self, comparator, mock_cel):
+        """Summary format includes rule name."""
+        response_a = make_response(body=None, body_base64="SGVsbG8=")
+        response_b = make_response(body=None, body_base64="V29ybGQ=")
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
+        )
+        mock_cel.evaluate.return_value = False
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert "Binary body mismatch" in result.summary
+
+    def test_empty_base64_vs_empty_base64(self, comparator, mock_cel):
+        """Empty base64 strings ('') are compared, not treated as missing."""
+        response_a = make_response(body=None, body_base64="")
+        response_b = make_response(body=None, body_base64="")
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
+        )
+        mock_cel.evaluate.return_value = True
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["binary_body"].match is True
+        # CEL should be called with empty strings, not skipped
+        mock_cel.evaluate.assert_called_with("a == b", {"a": "", "b": ""})
+
+    def test_empty_base64_vs_none(self, comparator):
+        """Empty string is distinct from None - presence mismatch."""
+        response_a = make_response(body=None, body_base64="")
+        response_b = make_response(body=None, body_base64=None)
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
+        )
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.match is False
+        assert "binary_presence" in result.details["binary_body"].differences[0].rule
+
+    def test_binary_nonempty_with_empty_string(self, comparator, mock_cel):
+        """binary_nonempty fails for empty strings (size('') == 0)."""
+        response_a = make_response(body=None, body_base64="")
+        response_b = make_response(body=None, body_base64="")
+        rules = OperationRules(
+            body=BodyRules(binary_rule=FieldRule(predefined="binary_nonempty"))
+        )
+        mock_cel.evaluate.return_value = False  # size(a) > 0 && size(b) > 0 is False
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.match is False
+
+
+class TestBinaryRuleValidation:
+    """Tests for binary_rule validation in BodyRules."""
+
+    def test_binary_rule_rejects_non_parity_presence(self):
+        """binary_rule only allows presence=parity."""
+        import pytest
+
+        # REQUIRED should be rejected
+        with pytest.raises(ValueError, match="only supports presence=parity"):
+            BodyRules(binary_rule=FieldRule(presence=PresenceMode.REQUIRED, predefined="exact_match"))
+
+        # FORBIDDEN should be rejected
+        with pytest.raises(ValueError, match="only supports presence=parity"):
+            BodyRules(binary_rule=FieldRule(presence=PresenceMode.FORBIDDEN))
+
+        # OPTIONAL should be rejected
+        with pytest.raises(ValueError, match="only supports presence=parity"):
+            BodyRules(binary_rule=FieldRule(presence=PresenceMode.OPTIONAL, predefined="exact_match"))
+
+    def test_binary_rule_allows_parity(self):
+        """binary_rule accepts default parity mode (explicit or implicit)."""
+        # Explicit PARITY should work
+        rules = BodyRules(binary_rule=FieldRule(presence=PresenceMode.PARITY, predefined="exact_match"))
+        assert rules.binary_rule.presence == PresenceMode.PARITY
+
+        # Implicit PARITY (default) should work
+        rules = BodyRules(binary_rule=FieldRule(predefined="exact_match"))
+        assert rules.binary_rule.presence == PresenceMode.PARITY

@@ -23,6 +23,7 @@ def make_response(
     status_code: int = 200,
     headers: dict = None,
     body: Any = None,
+    body_base64: str | None = None,
     elapsed_ms: float = 10.0,
 ) -> ResponseCase:
     """Helper to create ResponseCase instances for testing."""
@@ -30,6 +31,7 @@ def make_response(
         status_code=status_code,
         headers=headers or {},
         body=body,
+        body_base64=body_base64,
         elapsed_ms=elapsed_ms,
     )
 

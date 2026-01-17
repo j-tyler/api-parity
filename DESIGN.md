@@ -566,3 +566,34 @@ All dependencies are pinned to exact versions. This is critical for a build-from
 - Potential for stale dependencies if not actively maintained
 
 The reproducibility guarantee outweighs these costs for a build-from-source tool.
+
+---
+
+# Binary Body Comparison via CEL
+
+Keywords: binary body comparison base64 octet-stream non-json
+Date: 20260117
+
+Binary (non-JSON) response bodies are compared using the same CEL infrastructure as JSON fields. Binary content is stored as base64-encoded strings (already implemented in the Executor), and comparisons operate on these base64 strings.
+
+**Why base64 strings for comparison:**
+
+1. **Serialization requirement** — JSON doesn't support raw bytes, so mismatch bundles require encoding. Base64 is already used for storage.
+
+2. **Reuse existing infrastructure** — CEL can compare strings. No new evaluation engine needed.
+
+3. **Consistency** — Same comparison model as JSON fields: predefined rules or custom CEL expressions.
+
+**Trade-offs accepted:**
+
+1. **Unintuitive string operations** — `string_prefix` on base64 doesn't mean "first N bytes match" due to encoding boundaries. Users wanting byte-level operations should use `binary_exact_match` and accept all-or-nothing comparison.
+
+2. **No hash comparison** — CEL doesn't have hashing functions. For large files where hash comparison would be efficient, users must accept comparing full base64 strings.
+
+3. **Memory for large binaries** — Base64 is 33% larger than raw bytes. Very large files will consume proportionally more memory during comparison.
+
+4. **Empty string is "non-empty" in CEL** — `size("")` returns 0, so `binary_nonempty` passes only for actual content. An empty `body_base64` field (`""`) is distinct from a missing field (`None`). In practice, responses with `Content-Length: 0` may have `body_base64: ""` rather than `body_base64: None`.
+
+**Default behavior:** If `binary_rule` is not specified, binary bodies are not compared (match by default). This preserves backward compatibility—existing configs won't suddenly fail on binary endpoints. Users must explicitly configure `binary_rule` to enforce binary parity.
+
+**Alternative considered:** Python-level byte comparison (decode base64, compare bytes). This would enable hash-based and byte-prefix comparisons but requires a separate code path outside CEL. The CEL approach was chosen for simplicity and consistency.

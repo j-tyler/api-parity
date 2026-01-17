@@ -51,6 +51,26 @@ def comparison_library():
                 params=["length"],
                 expr="a.substring(0, length) == b.substring(0, length)",
             ),
+            "string_length_match": PredefinedComparison(
+                description="Strings have same length",
+                params=[],
+                expr="size(a) == size(b)",
+            ),
+            "binary_exact_match": PredefinedComparison(
+                description="Binary content must be identical",
+                params=[],
+                expr="a == b",
+            ),
+            "binary_length_match": PredefinedComparison(
+                description="Binary content has same length",
+                params=[],
+                expr="size(a) == size(b)",
+            ),
+            "binary_nonempty": PredefinedComparison(
+                description="Both have non-empty binary content",
+                params=[],
+                expr="size(a) > 0 && size(b) > 0",
+            ),
         },
     )
 
