@@ -501,9 +501,11 @@ class CaseGenerator:
         step_counter = 0
 
         generator_self = self
-        # Track the previous operation and status code for link detection
-        prev_op_id: str | None = None
-        prev_status_code: int = 200
+        # Track all previous operations and status codes for link detection.
+        # Schemathesis can use extracted variables from ANY previous step, not just
+        # the immediately previous one. This list enables searching back through
+        # the chain history to find the source of a link.
+        prev_steps: list[tuple[str, int]] = []  # (operation_id, status_code)
 
         class ChainCapturingStateMachine(OpenAPIStateMachine):
             """State machine that captures chains without making HTTP calls."""
@@ -514,11 +516,10 @@ class CaseGenerator:
 
             def setup(self):
                 """Called before each test run - start a new chain."""
-                nonlocal current_steps, step_counter, prev_op_id, prev_status_code
+                nonlocal current_steps, step_counter, prev_steps
                 current_steps = []
                 step_counter = 0
-                prev_op_id = None
-                prev_status_code = 200
+                prev_steps = []
 
             def teardown(self):
                 """Called after each test run - save the completed chain."""
@@ -538,7 +539,7 @@ class CaseGenerator:
                 return synthetic responses with placeholder data so Schemathesis
                 can resolve OpenAPI links and discover possible chain paths.
                 """
-                nonlocal current_steps, step_counter, prev_op_id, prev_status_code
+                nonlocal current_steps, step_counter, prev_steps
 
                 # Extract operation info
                 op_id = case.operation.definition.raw.get("operationId", "unknown")
@@ -549,12 +550,11 @@ class CaseGenerator:
                 # Convert to our RequestCase
                 request_case = generator_self._convert_case(case, op_id)
 
-                # Find link source if this is not the first step
+                # Find link source if this is not the first step.
+                # Search ALL previous steps (most recent first) for a matching link.
                 link_source = None
-                if prev_op_id is not None:
-                    link_source = self._find_link_between(
-                        prev_op_id, op_id, prev_status_code
-                    )
+                if prev_steps:
+                    link_source = self._find_link_between(prev_steps, op_id)
 
                 # Create chain step
                 step = ChainStep(
@@ -565,20 +565,26 @@ class CaseGenerator:
                 current_steps.append(step)
                 step_counter += 1
 
-                # Update previous operation tracking
+                # Append to history for future link lookups
                 response = self._synthetic_response(case)
-                prev_op_id = op_id
-                prev_status_code = response.status_code
+                prev_steps.append((op_id, response.status_code))
 
                 return response
 
             def _find_link_between(
-                self, source_op: str, target_op: str, status_code: int
+                self, prev_steps: list[tuple[str, int]], target_op: str
             ) -> dict | None:
-                """Find the link definition connecting two operations.
+                """Find the link definition connecting a previous operation to the target.
 
-                Looks up the link in the raw OpenAPI spec that connects the source
-                operation to the target operation for the given status code.
+                Searches ALL previous steps in the chain (most recent first) to find
+                a link that targets this operation. This handles cases where Schemathesis
+                uses extracted variables from a step earlier than the immediately
+                previous one.
+
+                Args:
+                    prev_steps: List of (operation_id, status_code) tuples from
+                                all previous steps in the chain.
+                    target_op: The operation ID of the current step.
 
                 Returns:
                     Dict with link_name, source_operation, status_code, is_inferred,
@@ -588,53 +594,56 @@ class CaseGenerator:
                 spec = generator_self._raw_spec
                 paths = spec.get("paths", {})
 
-                # Find the source operation in the spec
-                for path_item in paths.values():
-                    if not isinstance(path_item, dict):
-                        continue
-                    for method_or_key, operation in path_item.items():
-                        if not isinstance(operation, dict) or method_or_key.startswith("$"):
+                # Search most recent steps first - links are more likely to come
+                # from recent operations
+                for source_op, status_code in reversed(prev_steps):
+                    # Find the source operation in the spec
+                    for path_item in paths.values():
+                        if not isinstance(path_item, dict):
                             continue
-
-                        op_id = operation.get("operationId")
-                        if op_id != source_op:
-                            continue
-
-                        # Look for links in responses
-                        responses = operation.get("responses", {})
-                        for resp_code, response_def in responses.items():
-                            if not isinstance(response_def, dict):
+                        for method_or_key, operation in path_item.items():
+                            if not isinstance(operation, dict) or method_or_key.startswith("$"):
                                 continue
 
-                            # Match status code: exact, wildcard (2XX), or default
-                            if not self._matches_status_code(str(resp_code), status_code):
+                            op_id = operation.get("operationId")
+                            if op_id != source_op:
                                 continue
 
-                            links = response_def.get("links", {})
-                            for link_name, link_def in links.items():
-                                if not isinstance(link_def, dict):
+                            # Look for links in responses
+                            responses = operation.get("responses", {})
+                            for resp_code, response_def in responses.items():
+                                if not isinstance(response_def, dict):
                                     continue
-                                link_target = link_def.get("operationId") or link_def.get("operationRef")
-                                if link_target == target_op:
-                                    # Extract all parameter expressions for replay support
-                                    # Store as dict mapping param name to expression
-                                    parameters = link_def.get("parameters", {})
-                                    param_expressions = {
-                                        k: v for k, v in parameters.items()
-                                        if isinstance(v, str)
-                                    }
 
-                                    # For backwards compatibility, also store first expression as "field"
-                                    field_expr = next(iter(param_expressions.values()), None) if param_expressions else None
+                                # Match status code: exact, wildcard (2XX), or default
+                                if not self._matches_status_code(str(resp_code), status_code):
+                                    continue
 
-                                    return {
-                                        "link_name": link_name,
-                                        "source_operation": source_op,
-                                        "status_code": status_code,
-                                        "is_inferred": False,
-                                        "field": field_expr,  # First expression (backwards compat)
-                                        "parameters": param_expressions,  # All expressions
-                                    }
+                                links = response_def.get("links", {})
+                                for link_name, link_def in links.items():
+                                    if not isinstance(link_def, dict):
+                                        continue
+                                    link_target = link_def.get("operationId") or link_def.get("operationRef")
+                                    if link_target == target_op:
+                                        # Extract all parameter expressions for replay support
+                                        # Store as dict mapping param name to expression
+                                        parameters = link_def.get("parameters", {})
+                                        param_expressions = {
+                                            k: v for k, v in parameters.items()
+                                            if isinstance(v, str)
+                                        }
+
+                                        # For backwards compatibility, also store first expression as "field"
+                                        field_expr = next(iter(param_expressions.values()), None) if param_expressions else None
+
+                                        return {
+                                            "link_name": link_name,
+                                            "source_operation": source_op,
+                                            "status_code": status_code,
+                                            "is_inferred": False,
+                                            "field": field_expr,  # First expression (backwards compat)
+                                            "parameters": param_expressions,  # All expressions
+                                        }
 
                 # No explicit link found in spec
                 return None
