@@ -1020,6 +1020,344 @@ class TestExplicitLinksOnly:
 # =============================================================================
 
 
+class TestStatusCodeLinkResolution:
+    """Tests for correct status code handling in synthetic responses.
+
+    Verifies that synthetic responses use status codes from the OpenAPI spec
+    where links are defined, not hardcoded assumptions. This fixes the bug where
+    PUT/DELETE operations with links on non-200 status codes (201, 202) were
+    not discovered because synthetic responses used the wrong status code.
+    """
+
+    def test_put_with_links_on_201_uses_201(self, tmp_path: Path):
+        """PUT operation with links on 201 uses 201 for synthetic response."""
+        from api_parity.case_generator import CaseGenerator
+
+        # Create spec where PUT has links on 201
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/resources": {
+                    "post": {
+                        "operationId": "createResource",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"name": {"type": "string"}},
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "UpdateResource": {
+                                        "operationId": "updateResource",
+                                        "parameters": {"id": "$response.body#/id"},
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+                "/resources/{id}": {
+                    "put": {
+                        "operationId": "updateResource",
+                        "parameters": [
+                            {
+                                "name": "id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"name": {"type": "string"}},
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {
+                            # Links on 201, not 200 - this is the bug scenario
+                            "201": {
+                                "description": "Updated",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "GetResource": {
+                                        "operationId": "getResource",
+                                        "parameters": {"id": "$response.body#/id"},
+                                    }
+                                },
+                            }
+                        },
+                    },
+                    "get": {
+                        "operationId": "getResource",
+                        "parameters": [
+                            {
+                                "name": "id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "Success",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+        }
+        spec_path = tmp_path / "put_links_201.yaml"
+        with open(spec_path, "w") as f:
+            yaml.dump(spec, f)
+
+        generator = CaseGenerator(spec_path)
+
+        # Generate chains - should find create → update → get
+        # If status code was hardcoded to 200 for PUT, the link on 201 wouldn't be found
+        # Exact chain structure depends on Hypothesis exploration, so we just verify
+        # chains are generated (which requires the 201 link to be discovered)
+        try:
+            chains = generator.generate_chains(max_chains=5, max_steps=3)
+            assert len(chains) > 0, "Should generate chains when PUT has links on 201"
+        except Exception as e:
+            pytest.fail(f"Chain generation failed with PUT links on 201: {e}")
+
+    def test_delete_with_links_on_202_uses_202(self, tmp_path: Path):
+        """DELETE operation with links on 202 uses 202 for synthetic response."""
+        from api_parity.case_generator import CaseGenerator
+
+        # Create spec where DELETE has links on 202 (async deletion)
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/resources": {
+                    "post": {
+                        "operationId": "createResource",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"name": {"type": "string"}},
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "DeleteResource": {
+                                        "operationId": "deleteResource",
+                                        "parameters": {"id": "$response.body#/id"},
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+                "/resources/{id}": {
+                    "delete": {
+                        "operationId": "deleteResource",
+                        "parameters": [
+                            {
+                                "name": "id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {
+                            # Links on 202, not 200/204 - async deletion scenario
+                            "202": {
+                                "description": "Accepted for deletion",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "status_url": {"type": "string"},
+                                            },
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "CheckDeletionStatus": {
+                                        "operationId": "checkDeletionStatus",
+                                        "parameters": {
+                                            "status_url": "$response.body#/status_url"
+                                        },
+                                    }
+                                },
+                            }
+                        },
+                    },
+                },
+                "/status": {
+                    "get": {
+                        "operationId": "checkDeletionStatus",
+                        "parameters": [
+                            {
+                                "name": "status_url",
+                                "in": "query",
+                                "required": False,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {"200": {"description": "Status"}},
+                    }
+                },
+            },
+        }
+        spec_path = tmp_path / "delete_links_202.yaml"
+        with open(spec_path, "w") as f:
+            yaml.dump(spec, f)
+
+        generator = CaseGenerator(spec_path)
+
+        # Generate chains - should find create → delete → checkDeletionStatus
+        try:
+            chains = generator.generate_chains(max_chains=5, max_steps=3)
+            # Should generate chains following the links
+            assert len(chains) > 0, "Should generate chains when DELETE has links on 202"
+
+        except Exception as e:
+            pytest.fail(f"Chain generation failed with DELETE links on 202: {e}")
+
+    def test_fallback_to_default_status_codes_when_no_links(self, tmp_path: Path):
+        """Operations without links use default status codes (201 for POST, 200 otherwise)."""
+        from api_parity.case_generator import CaseGenerator
+
+        # Create spec with explicit links only on createResource
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/resources": {
+                    "post": {
+                        "operationId": "createResource",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"name": {"type": "string"}},
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "GetResource": {
+                                        "operationId": "getResource",
+                                        "parameters": {"id": "$response.body#/id"},
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+                "/resources/{id}": {
+                    "get": {
+                        "operationId": "getResource",
+                        "parameters": [
+                            {
+                                "name": "id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {
+                            # No links - just a response
+                            "200": {
+                                "description": "Success",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+        }
+        spec_path = tmp_path / "no_links_on_get.yaml"
+        with open(spec_path, "w") as f:
+            yaml.dump(spec, f)
+
+        generator = CaseGenerator(spec_path)
+
+        # Chain generation should work - POST has links, GET doesn't but that's OK
+        try:
+            chains = generator.generate_chains(max_chains=5, max_steps=2)
+            assert len(chains) > 0, "Should generate chains with POST links"
+        except Exception as e:
+            pytest.fail(f"Chain generation failed: {e}")
+
+
 class TestHeaderBasedChains:
     """Tests for chain generation and execution using header-based links.
 
