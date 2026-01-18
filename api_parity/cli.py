@@ -193,6 +193,14 @@ def parse_operation_timeout(value: str) -> tuple[str, float]:
 
 
 @dataclass
+class LintSpecArgs:
+    """Parsed arguments for lint-spec mode."""
+
+    spec: Path
+    output: str  # "text" or "json"
+
+
+@dataclass
 class ListOperationsArgs:
     """Parsed arguments for list-operations mode."""
 
@@ -256,6 +264,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True, help="Execution mode")
+
+    # Lint-spec subcommand
+    lint_spec_parser = subparsers.add_parser(
+        "lint-spec",
+        help="Analyze an OpenAPI spec for api-parity-specific issues",
+    )
+    lint_spec_parser.add_argument(
+        "--spec",
+        type=Path,
+        required=True,
+        help="Path to OpenAPI specification file (YAML or JSON)",
+    )
+    lint_spec_parser.add_argument(
+        "--output",
+        type=str,
+        choices=["text", "json"],
+        default="text",
+        help="Output format (default: text)",
+    )
 
     # List-operations subcommand
     list_ops_parser = subparsers.add_parser(
@@ -487,6 +514,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_lint_spec_args(namespace: argparse.Namespace) -> LintSpecArgs:
+    """Convert parsed namespace to LintSpecArgs dataclass."""
+    return LintSpecArgs(spec=namespace.spec, output=namespace.output)
+
+
 def parse_list_ops_args(namespace: argparse.Namespace) -> ListOperationsArgs:
     """Convert parsed namespace to ListOperationsArgs dataclass."""
     return ListOperationsArgs(spec=namespace.spec)
@@ -555,14 +587,14 @@ def parse_replay_args(namespace: argparse.Namespace) -> ReplayArgs:
     )
 
 
-def parse_args(args: list[str] | None = None) -> ListOperationsArgs | GraphChainsArgs | ExploreArgs | ReplayArgs:
+def parse_args(args: list[str] | None = None) -> LintSpecArgs | ListOperationsArgs | GraphChainsArgs | ExploreArgs | ReplayArgs:
     """Parse command-line arguments and return typed args dataclass.
 
     Args:
         args: Command-line arguments to parse. If None, uses sys.argv[1:].
 
     Returns:
-        ListOperationsArgs, GraphChainsArgs, ExploreArgs, or ReplayArgs depending on the subcommand.
+        LintSpecArgs, ListOperationsArgs, GraphChainsArgs, ExploreArgs, or ReplayArgs depending on the subcommand.
 
     Raises:
         SystemExit: If arguments are invalid (argparse behavior).
@@ -570,7 +602,9 @@ def parse_args(args: list[str] | None = None) -> ListOperationsArgs | GraphChain
     parser = build_parser()
     namespace = parser.parse_args(args)
 
-    if namespace.command == "list-operations":
+    if namespace.command == "lint-spec":
+        return parse_lint_spec_args(namespace)
+    elif namespace.command == "list-operations":
         return parse_list_ops_args(namespace)
     elif namespace.command == "graph-chains":
         return parse_graph_chains_args(namespace)
@@ -588,7 +622,9 @@ def main() -> int:
     try:
         parsed = parse_args()
 
-        if isinstance(parsed, ListOperationsArgs):
+        if isinstance(parsed, LintSpecArgs):
+            return run_lint_spec(parsed)
+        elif isinstance(parsed, ListOperationsArgs):
             return run_list_operations(parsed)
         elif isinstance(parsed, GraphChainsArgs):
             return run_graph_chains(parsed)
@@ -600,6 +636,37 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nInterrupted", file=sys.stderr)
         return 1
+
+
+def run_lint_spec(args: LintSpecArgs) -> int:
+    """Run lint-spec mode.
+
+    Analyzes an OpenAPI spec for api-parity-specific issues including link
+    connectivity, expression coverage, and schema completeness.
+    """
+    import json
+
+    from api_parity.spec_linter import (
+        SpecLinter,
+        SpecLinterError,
+        format_lint_result_text,
+    )
+
+    try:
+        linter = SpecLinter(args.spec)
+    except SpecLinterError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    result = linter.lint()
+
+    if args.output == "json":
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(format_lint_result_text(result))
+
+    # Return non-zero if errors were found
+    return 1 if result.has_errors() else 0
 
 
 def run_list_operations(args: ListOperationsArgs) -> int:
