@@ -59,12 +59,23 @@ class HeaderRef:
     HTTP headers can have multiple values. This dataclass tracks which header
     to extract and optionally which specific value index.
 
+    HTTP headers are case-insensitive per RFC 7230, but OpenAPI link expressions
+    use a specific case (e.g., $response.header.Location). We store both:
+    - original_name: The case from the OpenAPI spec (e.g., "Location")
+    - name: Lowercase for HTTP-compliant lookups (e.g., "location")
+
+    Schemathesis resolves links using the spec's original case, so synthetic
+    headers must use original_name as dict keys. Variable extraction uses
+    lowercase name for case-insensitive matching against actual HTTP responses.
+
     Attributes:
-        name: Lowercase header name (e.g., "location", "set-cookie").
+        name: Lowercase header name for variable extraction (e.g., "location").
+        original_name: Original case from OpenAPI spec for link resolution (e.g., "Location").
         index: If None, extracts all values as list. If int, extracts specific index.
     """
 
     name: str
+    original_name: str
     index: int | None = None
 
 
@@ -153,12 +164,18 @@ def extract_link_fields_from_spec(spec: dict) -> LinkFields:
                         # Check for header expression
                         header_match = LINK_HEADER_PATTERN.match(param_expr)
                         if header_match:
-                            # Normalize header name to lowercase per HTTP spec (RFC 7230)
-                            header_name = header_match.group(1).lower()
+                            # Preserve original case for Schemathesis link resolution,
+                            # also store lowercase for HTTP-compliant variable extraction
+                            original_name = header_match.group(1)
+                            header_name = original_name.lower()
                             # Capture optional array index
                             index_str = header_match.group(2)
                             index = int(index_str) if index_str is not None else None
-                            link_fields.headers.append(HeaderRef(name=header_name, index=index))
+                            link_fields.headers.append(HeaderRef(
+                                name=header_name,
+                                original_name=original_name,
+                                index=index,
+                            ))
 
     return link_fields
 
@@ -695,31 +712,44 @@ class CaseGenerator:
                 expressions (e.g., $response.header.Location). Header values are lists
                 per Schemathesis Response requirements. Multi-value headers get multiple
                 synthetic values to support array indexing.
+
+                IMPORTANT: Uses original case from OpenAPI spec as dict keys (e.g., "Location"
+                not "location"). Schemathesis resolves $response.header.Location by looking
+                for the exact case from the spec. See HeaderRef for details.
                 """
                 # Always include content-type
                 headers: dict[str, list[str]] = {"content-type": ["application/json"]}
 
-                # Collect unique header names and max index requested
-                header_max_indices: dict[str, int] = {}
+                # Collect header info: max index needed and original case name
+                # Use lowercase as key for deduplication, store (original_name, max_index)
+                header_info: dict[str, tuple[str, int]] = {}
                 for header_ref in generator_self._link_fields.headers:
-                    current_max = header_max_indices.get(header_ref.name, 0)
+                    lowercase = header_ref.name
+                    if lowercase in header_info:
+                        orig_name, current_max = header_info[lowercase]
+                    else:
+                        orig_name = header_ref.original_name
+                        current_max = 0
+
                     if header_ref.index is not None:
-                        header_max_indices[header_ref.name] = max(current_max, header_ref.index + 1)
+                        new_max = max(current_max, header_ref.index + 1)
                     else:
                         # No index means we need at least one value
-                        header_max_indices[header_ref.name] = max(current_max, 1)
+                        new_max = max(current_max, 1)
+                    header_info[lowercase] = (orig_name, new_max)
 
                 # Add synthetic values for all headers referenced by links
-                for header_name, count in header_max_indices.items():
+                # Use original_name as dict key so Schemathesis can find it
+                for lowercase, (original_name, count) in header_info.items():
                     values = []
                     for i in range(count):
-                        if header_name == "location":
+                        if lowercase == "location":
                             # Location header should be a URL-like value
                             values.append(f"http://placeholder/resource/{uuid.uuid4()}")
                         else:
                             # Other headers get UUID values
                             values.append(str(uuid.uuid4()))
-                    headers[header_name] = values
+                    headers[original_name] = values
 
                 return headers
 
