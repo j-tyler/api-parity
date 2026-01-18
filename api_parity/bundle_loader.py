@@ -77,10 +77,16 @@ def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
         # Check for header expression: $response.header.HeaderName or HeaderName[index]
         header_match = LINK_HEADER_PATTERN.match(expr)
         if header_match:
-            header_name = header_match.group(1).lower()
+            # Preserve original case for HeaderRef consistency (matches case_generator.py)
+            original_name = header_match.group(1)
+            header_name = original_name.lower()
             index_str = header_match.group(2)
             index = int(index_str) if index_str is not None else None
-            link_fields.headers.append(HeaderRef(name=header_name, index=index))
+            link_fields.headers.append(HeaderRef(
+                name=header_name,
+                original_name=original_name,
+                index=index,
+            ))
             return
 
         # Check for body expression: $response.body#/path

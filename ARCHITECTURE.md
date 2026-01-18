@@ -283,7 +283,7 @@ The `generate_chains()` method uses Schemathesis's state machine to discover mul
 
 **Dynamic field extraction:** Link field references are dynamically parsed from the OpenAPI spec at initialization via `extract_link_fields_from_spec()`. The CaseGenerator extracts:
 - Body expressions (`$response.body#/path`) → stored in `LinkFields.body_pointers`
-- Header expressions (`$response.header.HeaderName` or `$response.header.HeaderName[index]`) → stored in `LinkFields.headers` as `HeaderRef` objects (lowercase name, optional index)
+- Header expressions (`$response.header.HeaderName` or `$response.header.HeaderName[index]`) → stored in `LinkFields.headers` as `HeaderRef` objects with `name` (lowercase), `original_name` (spec case for synthetic headers), and optional `index`
 
 These are used for synthetic response generation during chain discovery (both synthetic body fields and synthetic headers). This enables chain generation with header-based links (e.g., `Location` header), not just body field references. Multi-value headers (like `Set-Cookie`) support array indexing for accessing specific values.
 

@@ -16,4 +16,6 @@ For each file changed:
 
 Be thorough and critical. The goal is to catch issues before they become problems, not to be nice about suboptimal work.
 
+**Before flagging**: Trace the code path. Read tests related to the code paths together.
+
 **Important:** Number each issue sequentially (e.g., #1, #2, #3) for easy reference in follow-up commands like `/double-down`.

@@ -618,7 +618,7 @@ OpenAPI link expressions can reference values from response headers (`$response.
    - `$response.header.Set-Cookie[0]` → extracts first value, stored at `header/set-cookie/0`
    - `$response.header.Set-Cookie[1]` → extracts second value, stored at `header/set-cookie/1`
 
-4. **HeaderRef dataclass:** Header references are stored as `HeaderRef` objects containing the lowercase header name and optional array index. The `LinkFields.headers` is a list of `HeaderRef` objects, allowing multiple references to the same header with different indices.
+4. **HeaderRef dataclass:** Header references are stored as `HeaderRef` objects with `name` (lowercase for HTTP extraction), `original_name` (spec case for synthetic header generation), and optional `index`. Both name fields are required—`original_name` enables Schemathesis to resolve links during chain discovery.
 
 5. **Synthetic headers in chain discovery:** During chain generation, `_synthetic_response()` generates synthetic header values for all referenced headers. For multi-value header access, generates enough synthetic values to satisfy the maximum requested index. `Location` headers get URL-like values; other headers get UUID strings.
 
