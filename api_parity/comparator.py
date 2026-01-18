@@ -36,11 +36,6 @@ if TYPE_CHECKING:
     from api_parity.schema_validator import SchemaValidator
 
 
-# =============================================================================
-# Exceptions
-# =============================================================================
-
-
 class ComparatorError(Exception):
     """Base class for comparator errors."""
 
@@ -51,11 +46,6 @@ class JSONPathError(ComparatorError):
 
 class ComparatorConfigError(ComparatorError):
     """Invalid comparison rule configuration."""
-
-
-# =============================================================================
-# Sentinel for Missing Fields
-# =============================================================================
 
 
 class _NotFound:
@@ -80,31 +70,14 @@ class _NotFound:
 NOT_FOUND = _NotFound()
 
 
-# =============================================================================
-# Presence Check Result
-# =============================================================================
-
-
 @dataclass
 class PresenceResult:
-    """Result of a field presence check.
-
-    Attributes:
-        passed: Whether the presence check passed.
-        a_present: Whether the field is present in response A.
-        b_present: Whether the field is present in response B.
-        skip_value_comparison: If True, skip value comparison (field absent in one/both).
-    """
+    """Result of a field presence check."""
 
     passed: bool
     a_present: bool
     b_present: bool
-    skip_value_comparison: bool
-
-
-# =============================================================================
-# Comparator
-# =============================================================================
+    skip_value_comparison: bool  # True when field absent in one/both responses
 
 
 class Comparator:
@@ -279,13 +252,8 @@ class Comparator:
     ) -> tuple[ComponentResult, list[str], list[str]]:
         """Validate both responses against OpenAPI schema.
 
-        Args:
-            response_a: Response from target A.
-            response_b: Response from target B.
-            operation_id: The operationId for schema lookup.
-
-        Returns:
-            Tuple of (ComponentResult, extra_fields_a, extra_fields_b).
+        Returns (result, extra_fields_a, extra_fields_b) where extra_fields
+        are fields present in responses but not defined in the schema.
         """
         differences: list[FieldDifference] = []
         extra_fields_a: list[str] = []
@@ -337,15 +305,6 @@ class Comparator:
         """Compare extra fields (not defined in schema) between responses.
 
         Extra fields are compared with equality by default.
-
-        Args:
-            body_a: Body from target A.
-            body_b: Body from target B.
-            extra_fields_a: Extra fields found in response A.
-            extra_fields_b: Extra fields found in response B.
-
-        Returns:
-            ComponentResult for extra fields comparison.
         """
         differences: list[FieldDifference] = []
 
@@ -407,16 +366,7 @@ class Comparator:
         status_b: int,
         rule: FieldRule | None,
     ) -> ComponentResult:
-        """Compare status codes.
-
-        Args:
-            status_a: Status code from target A.
-            status_b: Status code from target B.
-            rule: Optional rule; defaults to exact_match.
-
-        Returns:
-            ComponentResult for status code comparison.
-        """
+        """Compare status codes. Defaults to exact_match if rule is None."""
         if rule is None:
             # Default: exact match
             if status_a == status_b:
@@ -471,16 +421,7 @@ class Comparator:
         headers_b: dict[str, list[str]],
         header_rules: dict[str, FieldRule],
     ) -> ComponentResult:
-        """Compare response headers.
-
-        Args:
-            headers_a: Headers from target A (lowercase keys, list values).
-            headers_b: Headers from target B (lowercase keys, list values).
-            header_rules: Header name -> FieldRule mapping.
-
-        Returns:
-            ComponentResult for header comparison.
-        """
+        """Compare response headers. Headers dicts have lowercase keys, list values."""
         differences: list[FieldDifference] = []
 
         for header_name, rule in header_rules.items():
@@ -540,16 +481,7 @@ class Comparator:
         body_b: Any,
         body_rules: BodyRules | None,
     ) -> ComponentResult:
-        """Compare response bodies.
-
-        Args:
-            body_a: Body from target A (parsed JSON or None).
-            body_b: Body from target B (parsed JSON or None).
-            body_rules: Body comparison rules.
-
-        Returns:
-            ComponentResult for body comparison.
-        """
+        """Compare response bodies (parsed JSON or None for non-JSON responses)."""
         # Handle None bodies (non-JSON responses)
         if body_a is None and body_b is None:
             return ComponentResult(match=True, differences=[])
@@ -586,16 +518,7 @@ class Comparator:
         body_b: str | None,
         binary_rule: FieldRule | None,
     ) -> ComponentResult:
-        """Compare binary response bodies (base64-encoded).
-
-        Args:
-            body_a: Base64-encoded body from target A (None if not binary).
-            body_b: Base64-encoded body from target B (None if not binary).
-            binary_rule: Comparison rule for binary bodies.
-
-        Returns:
-            ComponentResult for binary body comparison.
-        """
+        """Compare binary response bodies (base64-encoded, None if not binary)."""
         # If no rule specified, skip all binary comparison (including presence check)
         if binary_rule is None:
             return ComponentResult(match=True, differences=[])
@@ -666,15 +589,6 @@ class Comparator:
         """Compare values at a JSONPath location.
 
         Handles wildcards by expanding the path and comparing paired values.
-
-        Args:
-            body_a: Body from target A.
-            body_b: Body from target B.
-            jsonpath: JSONPath expression.
-            rule: Field comparison rule.
-
-        Returns:
-            List of FieldDifference for any mismatches.
         """
         differences: list[FieldDifference] = []
 
@@ -733,17 +647,7 @@ class Comparator:
         value_b: Any,
         rule: FieldRule,
     ) -> FieldDifference | None:
-        """Compare a single field value pair.
-
-        Args:
-            path: Path for error reporting.
-            value_a: Value from target A (may be NOT_FOUND).
-            value_b: Value from target B (may be NOT_FOUND).
-            rule: Comparison rule.
-
-        Returns:
-            FieldDifference if mismatch, None if match.
-        """
+        """Compare a single field value pair. Values may be NOT_FOUND sentinel."""
         # Check presence
         presence_result = self._check_presence(value_a, value_b, rule.presence)
 
@@ -791,13 +695,7 @@ class Comparator:
     ) -> PresenceResult:
         """Check if field presence satisfies the presence mode.
 
-        Args:
-            value_a: Value from target A (NOT_FOUND if missing).
-            value_b: Value from target B (NOT_FOUND if missing).
-            presence: Required presence mode.
-
-        Returns:
-            PresenceResult with check outcome.
+        Values should be NOT_FOUND sentinel if the field is missing.
         """
         a_present = value_a is not NOT_FOUND
         b_present = value_b is not NOT_FOUND
@@ -870,17 +768,8 @@ class Comparator:
     ) -> bool:
         """Evaluate a field comparison rule.
 
-        Args:
-            value_a: Value from target A.
-            value_b: Value from target B.
-            rule: The field rule to evaluate.
-
-        Returns:
-            True if comparison passes, False otherwise.
-
-        Raises:
-            ComparatorConfigError: If rule configuration is invalid.
-            CELEvaluationError: If CEL evaluation fails.
+        Raises ComparatorConfigError for invalid config, CELEvaluationError for
+        CEL failures. Returns True if comparison passes.
         """
         if rule.expr is not None:
             # Custom CEL expression
@@ -897,14 +786,7 @@ class Comparator:
     def _expand_predefined(self, rule: FieldRule) -> str:
         """Expand a predefined rule to its CEL expression.
 
-        Args:
-            rule: FieldRule with predefined set.
-
-        Returns:
-            The expanded CEL expression.
-
-        Raises:
-            ComparatorConfigError: If predefined not found or params missing.
+        Raises ComparatorConfigError if predefined not found or params missing.
         """
         if rule.predefined not in self._library.predefined:
             raise ComparatorConfigError(f"Unknown predefined: {rule.predefined}")
@@ -934,17 +816,9 @@ class Comparator:
         body: Any,
         path: str,
     ) -> list[tuple[str, Any]]:
-        """Expand a JSONPath against a body.
+        """Expand a JSONPath against a body. Returns (concrete_path, value) tuples.
 
-        Args:
-            body: The JSON body to search.
-            path: JSONPath expression.
-
-        Returns:
-            List of (concrete_path, value) tuples for all matches.
-
-        Raises:
-            JSONPathError: If path is syntactically invalid.
+        Raises JSONPathError if path is syntactically invalid.
         """
         # Use cache for compiled paths
         if path not in self._jsonpath_cache:
@@ -963,16 +837,9 @@ class Comparator:
         headers: dict[str, list[str]],
         name: str,
     ) -> Any:
-        """Get a header value (case-insensitive).
+        """Get a header value (case-insensitive). Returns NOT_FOUND if missing.
 
         Multi-value headers return only the first value per design.
-
-        Args:
-            headers: Response headers dict (lowercase keys, list values).
-            name: Header name to find.
-
-        Returns:
-            First header value, or NOT_FOUND if not present.
         """
         # Headers are stored with lowercase keys
         name_lower = name.lower()

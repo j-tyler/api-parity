@@ -29,26 +29,25 @@ except ImportError:
 
 
 def load_json(path: Path) -> dict:
-    """Load JSON file."""
     with open(path) as f:
         return json.load(f)
 
 
-def load_library(script_dir: Path) -> dict:
-    """Load the predefined comparison library."""
+def load_predefined_library(script_dir: Path) -> dict[str, dict]:
+    """Load comparison_library.json and return predefined comparisons dict."""
     library_path = script_dir / "comparison_library.json"
     library = load_json(library_path)
     return library["predefined"]
 
 
-def load_schema(script_dir: Path) -> dict:
-    """Load the JSON Schema."""
+def load_json_schema(script_dir: Path) -> dict:
+    """Load comparison_rules.schema.json for validation."""
     schema_path = script_dir / "comparison_rules.schema.json"
     return load_json(schema_path)
 
 
-def validate_config(config: dict, schema: dict) -> list[str]:
-    """Validate config against schema. Returns list of error messages."""
+def validate_config_against_schema(config: dict, schema: dict) -> list[str]:
+    """Validate config against JSON Schema, returning list of error messages."""
     errors = []
     validator = jsonschema.Draft202012Validator(schema)
     for error in validator.iter_errors(config):
@@ -57,38 +56,34 @@ def validate_config(config: dict, schema: dict) -> list[str]:
     return errors
 
 
-def inline_predefined(comparison: dict, library: dict) -> dict:
+def inline_predefined_to_cel(comparison: dict, library: dict[str, dict]) -> dict:
     """
-    Convert a predefined comparison to a CEL expression.
+    Convert predefined comparison to CEL expression.
 
-    Input:  {"predefined": "numeric_tolerance", "tolerance": 0.01}
-    Output: {"expr": "(a - b) <= 0.01 && (b - a) <= 0.01"}
+    Example: {"predefined": "numeric_tolerance", "tolerance": 0.01}
+          -> {"expr": "(a - b) <= 0.01 && (b - a) <= 0.01"}
     """
     if "expr" in comparison:
-        # Already a custom expression, return as-is
-        return comparison
+        return comparison  # Already a CEL expression
 
     if "predefined" not in comparison:
-        # Presence-only rule (no value comparison), return as-is
         if "presence" in comparison:
-            return comparison
-        raise ValueError(f"Invalid comparison: {comparison}")
+            return comparison  # Presence-only rule, no value comparison
+        raise ValueError(f"Invalid comparison (expected 'expr', 'predefined', or 'presence'): {comparison}")
 
     name = comparison["predefined"]
     if name not in library:
-        raise ValueError(f"Unknown predefined comparison: {name}")
+        raise ValueError(f"Unknown predefined comparison '{name}'. Available: {list(library.keys())}")
 
     definition = library[name]
     expr = definition["expr"]
 
-    # Substitute parameters into expression
     for param in definition["params"]:
         if param not in comparison:
             raise ValueError(f"Missing required parameter '{param}' for predefined '{name}'")
         value = comparison[param]
-        # Handle string values (need quoting and escaping) vs numeric
         if isinstance(value, str):
-            # Escape backslashes first, then quotes for CEL string literal
+            # Escape for CEL string literal: backslashes first, then quotes
             escaped = value.replace("\\", "\\\\").replace('"', '\\"')
             expr = expr.replace(param, f'"{escaped}"')
         else:
@@ -97,32 +92,30 @@ def inline_predefined(comparison: dict, library: dict) -> dict:
     return {"expr": expr}
 
 
-def inline_field_rules(field_rules: dict, library: dict) -> dict:
-    """Inline all field rules."""
+def inline_field_rules(field_rules: dict, library: dict[str, dict]) -> dict:
     return {
-        path: inline_predefined(comparison, library)
+        path: inline_predefined_to_cel(comparison, library)
         for path, comparison in field_rules.items()
     }
 
 
-def inline_body_rules(body: dict, library: dict) -> dict:
-    """Inline body comparison rules."""
+def inline_body_rules(body: dict, library: dict[str, dict]) -> dict:
     result = copy.deepcopy(body)
     if "field_rules" in result:
         result["field_rules"] = inline_field_rules(result["field_rules"], library)
     return result
 
 
-def inline_comparison_rules(rules: dict, library: dict) -> dict:
-    """Inline a comparison_rules object."""
+def inline_comparison_rules(rules: dict, library: dict[str, dict]) -> dict:
+    """Inline all predefined comparisons in a comparison_rules object to CEL."""
     result = copy.deepcopy(rules)
 
     if "status_code" in result:
-        result["status_code"] = inline_predefined(result["status_code"], library)
+        result["status_code"] = inline_predefined_to_cel(result["status_code"], library)
 
     if "headers" in result:
         result["headers"] = {
-            name: inline_predefined(rule, library)
+            name: inline_predefined_to_cel(rule, library)
             for name, rule in result["headers"].items()
         }
 
@@ -132,8 +125,8 @@ def inline_comparison_rules(rules: dict, library: dict) -> dict:
     return result
 
 
-def inline_config(config: dict, library: dict) -> dict:
-    """Inline all predefined comparisons in the config."""
+def inline_all_predefined_in_config(config: dict, library: dict[str, dict]) -> dict:
+    """Inline all predefined comparisons in config to CEL expressions."""
     result = copy.deepcopy(config)
 
     if "default_rules" in result:
@@ -157,20 +150,18 @@ def main():
     config_path = Path(sys.argv[1])
     script_dir = Path(__file__).parent
 
-    # Load files
     print(f"Loading config: {config_path}")
     config = load_json(config_path)
 
     print(f"Loading library: {script_dir / 'comparison_library.json'}")
-    library = load_library(script_dir)
+    library = load_predefined_library(script_dir)
     print(f"  Loaded {len(library)} predefined comparisons")
 
     print(f"Loading schema: {script_dir / 'comparison_rules.schema.json'}")
-    schema = load_schema(script_dir)
+    schema = load_json_schema(script_dir)
 
-    # Validate
     print("\nValidating config against schema...")
-    errors = validate_config(config, schema)
+    errors = validate_config_against_schema(config, schema)
     if errors:
         print("Validation FAILED:")
         for error in errors:
@@ -178,9 +169,8 @@ def main():
         sys.exit(1)
     print("Validation PASSED")
 
-    # Inline
     print("\nInlining predefined comparisons...")
-    inlined = inline_config(config, library)
+    inlined = inline_all_predefined_in_config(config, library)
 
     # Output
     print("\n" + "=" * 60)

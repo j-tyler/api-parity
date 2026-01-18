@@ -118,18 +118,10 @@ def _create_explicit_links_only_config() -> SchemathesisConfig:
 
 
 def extract_link_fields_from_spec(spec: dict) -> LinkFields:
-    """Extract all field references from OpenAPI link expressions.
+    """Extract field references from all OpenAPI link expressions in the spec.
 
-    Parses the OpenAPI spec to find all link definitions and extracts the
-    field references they contain:
-    - Body expressions ($response.body#/...) are stored as JSONPointer paths
-    - Header expressions ($response.header.X) are stored as lowercase header names
-
-    Args:
-        spec: Parsed OpenAPI specification dict.
-
-    Returns:
-        LinkFields with body_pointers and header_names sets.
+    Finds body expressions ($response.body#/path) and header expressions
+    ($response.header.Name) used in link parameter mappings.
     """
     link_fields = LinkFields()
 
@@ -182,15 +174,7 @@ def extract_link_fields_from_spec(spec: dict) -> LinkFields:
 
 
 def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
-    """Extract a value from nested data using a JSONPointer path.
-
-    Args:
-        data: The data structure to extract from (dict or list).
-        pointer: JSONPointer path without leading slash (e.g., "id" or "data/items/0/id").
-
-    Returns:
-        The extracted value, or None if path doesn't exist.
-    """
+    """Extract value at JSONPointer path (no leading slash), or None if missing."""
     if not pointer:
         return data
 
@@ -274,19 +258,11 @@ class CaseGenerator:
         self._schema_generator = SchemaValueGenerator(self._raw_spec)
 
     def get_link_fields(self) -> LinkFields:
-        """Get the field references extracted from OpenAPI link expressions.
-
-        Returns:
-            LinkFields with body_pointers and header_names sets.
-        """
+        """Return field references extracted from OpenAPI link expressions."""
         return self._link_fields
 
     def get_operations(self) -> list[dict[str, Any]]:
-        """Get all operations from the spec.
-
-        Returns:
-            List of operation info dicts with operationId, method, path.
-        """
+        """Return filtered operations as dicts with operation_id, method, path."""
         if self._operations_cache is not None:
             return self._operations_cache
 
@@ -308,13 +284,10 @@ class CaseGenerator:
         return operations
 
     def get_all_operation_ids(self) -> set[str]:
-        """Get all operation IDs from the spec (ignores exclude filter).
+        """Return all operationIds in spec, ignoring exclude filter.
 
-        Useful for validation where you need to check against all spec
-        operations, not just the filtered ones.
-
-        Returns:
-            Set of all operationIds in the spec.
+        Unlike get_operations(), includes excluded operations - useful for
+        validation against the full spec.
         """
         operation_ids = set()
         for result in self._schema.get_all_operations():
@@ -331,15 +304,7 @@ class CaseGenerator:
         max_cases: int | None = None,
         seed: int | None = None,
     ) -> Iterator[RequestCase]:
-        """Generate test cases for all operations.
-
-        Args:
-            max_cases: Maximum total cases to generate (None for no limit).
-            seed: Random seed for reproducibility.
-
-        Yields:
-            RequestCase objects ready for execution.
-        """
+        """Generate test cases for all non-excluded operations."""
         cases_per_operation = max_cases or 100
         if max_cases:
             # Distribute cases across operations
@@ -380,17 +345,7 @@ class CaseGenerator:
         max_cases: int,
         seed: int | None,
     ) -> Iterator[RequestCase]:
-        """Generate cases for a single operation.
-
-        Args:
-            operation: Schemathesis operation object.
-            operation_id: The operation's ID.
-            max_cases: Maximum cases for this operation.
-            seed: Random seed.
-
-        Yields:
-            RequestCase objects.
-        """
+        """Generate up to max_cases RequestCase objects for one operation."""
         from hypothesis import given
 
         strategy = operation.as_strategy()
@@ -412,24 +367,13 @@ class CaseGenerator:
             yield self._convert_case(schemathesis_case, operation_id)
 
     def _convert_case(self, case: Any, operation_id: str) -> RequestCase:
-        """Convert a Schemathesis case to our RequestCase model.
-
-        Args:
-            case: Schemathesis Case object.
-            operation_id: The operation ID.
-
-        Returns:
-            RequestCase model instance.
-        """
-        # Path parameters
+        """Convert a Schemathesis case to our RequestCase model."""
         path_params = dict(case.path_parameters) if case.path_parameters else {}
 
-        # Compute rendered path
         rendered_path = case.path
         for key, value in path_params.items():
             rendered_path = rendered_path.replace(f"{{{key}}}", str(value))
 
-        # Query parameters - normalize to lists
         query: dict[str, list[str]] = {}
         if case.query:
             for key, value in case.query.items():
@@ -438,7 +382,6 @@ class CaseGenerator:
                 else:
                     query[key] = [str(value)]
 
-        # Headers - normalize to lists
         headers: dict[str, list[str]] = {}
         if case.headers:
             for key, value in case.headers.items():
@@ -447,14 +390,13 @@ class CaseGenerator:
                 else:
                     headers[key] = [str(value)]
 
-        # Cookies
         cookies: dict[str, str] = {}
         if case.cookies:
             cookies = {str(k): str(v) for k, v in case.cookies.items()}
 
-        # Body - check for NotSet sentinel
         body: Any = None
         media_type: str | None = None
+        # Schemathesis uses NotSet sentinel for absent body; check by type name
         if case.body is not None and str(type(case.body).__name__) != "NotSet":
             body = case.body
             media_type = case.media_type
@@ -481,17 +423,8 @@ class CaseGenerator:
     ) -> list[ChainCase]:
         """Generate stateful request chains following OpenAPI links.
 
-        Uses Schemathesis state machine to generate multi-step sequences.
-        Chains are generated without making HTTP calls - the executor handles
-        actual execution.
-
-        Args:
-            max_chains: Maximum number of chains to generate (default 20).
-            max_steps: Maximum steps per chain (default 6).
-            seed: Random seed for reproducibility.
-
-        Returns:
-            List of ChainCase objects ready for execution.
+        Uses Schemathesis state machine to discover multi-step sequences.
+        Chains are templates only - no HTTP calls are made during generation.
         """
         max_chains = max_chains or 20
 
@@ -574,22 +507,14 @@ class CaseGenerator:
             def _find_link_between(
                 self, prev_steps: list[tuple[str, int]], target_op: str
             ) -> dict | None:
-                """Find the link definition connecting a previous operation to the target.
+                """Find link in spec connecting any previous step to target_op.
 
-                Searches ALL previous steps in the chain (most recent first) to find
-                a link that targets this operation. This handles cases where Schemathesis
-                uses extracted variables from a step earlier than the immediately
-                previous one.
+                Searches ALL previous steps (most recent first) because Schemathesis
+                can use extracted variables from any earlier step, not just the
+                immediately previous one.
 
-                Args:
-                    prev_steps: List of (operation_id, status_code) tuples from
-                                all previous steps in the chain.
-                    target_op: The operation ID of the current step.
-
-                Returns:
-                    Dict with link_name, source_operation, status_code, is_inferred,
-                    and field (the raw expression for replay), or None if no explicit
-                    link found in the spec.
+                Returns dict with link_name, source_operation, status_code,
+                is_inferred, field, parameters; or None if no explicit link found.
                 """
                 spec = generator_self._raw_spec
                 paths = spec.get("paths", {})
@@ -666,15 +591,10 @@ class CaseGenerator:
                 return False
 
             def _find_status_code_with_links(self, operation_id: str, method: str) -> int:
-                """Find a status code that has links defined for this operation.
+                """Return lowest 2xx status code with links, or fallback (201/200).
 
-                Examines the OpenAPI spec to find which status codes have links
-                defined for the operation. Returns the lowest 2xx status code with
-                links, or falls back to 201 for POST / 200 otherwise.
-
-                This fixes the bug where PUT/DELETE operations with links on
-                non-200 status codes (e.g., 201, 202) were not discovered because
-                the synthetic response used the wrong status code.
+                Without this, PUT/DELETE with links on 201/202 were missed because
+                synthetic responses defaulted to 200 which had no links.
                 """
                 spec = generator_self._raw_spec
                 paths = spec.get("paths", {})
@@ -729,11 +649,10 @@ class CaseGenerator:
                 return 201 if method.upper() == "POST" else 200
 
             def _synthetic_response(self, case) -> SchemathesisResponse:
-                """Generate synthetic response for link resolution during chain discovery.
+                """Placeholder response for Schemathesis link resolution.
 
-                This is NOT a mock for testing - it's a placeholder response that
-                allows Schemathesis to resolve OpenAPI link expressions and discover
-                possible chain paths. Real HTTP execution happens later in the Executor.
+                NOT a mock - just enables chain discovery. Real HTTP calls happen
+                in Executor during actual execution.
                 """
                 # Extract operation info for schema-aware generation
                 op_id = case.operation.definition.raw.get("operationId", "unknown")
@@ -761,17 +680,10 @@ class CaseGenerator:
             def _generate_synthetic_body(
                 self, operation_id: str, status_code: int
             ) -> dict:
-                """Generate synthetic response body for link resolution.
+                """Generate placeholder values for link-referenced fields.
 
-                Creates placeholder values ONLY for fields referenced by OpenAPI links
-                so Schemathesis can resolve link expressions during chain discovery.
-                Real response data comes from actual HTTP execution in the Executor.
-
-                Uses schema-aware generation to produce values that satisfy constraints
-                (e.g., enums) defined in the OpenAPI spec. This enables chain discovery
-                through operations with constrained parameters.
-
-                See DESIGN.md "Schema-Driven Synthetic Value Generation" for rationale.
+                Uses schema-aware generation to satisfy constraints (enums, formats).
+                See DESIGN.md "Schema-Driven Synthetic Value Generation".
                 """
                 body: dict = {}
 
@@ -797,16 +709,11 @@ class CaseGenerator:
                 return body
 
             def _generate_synthetic_headers(self) -> dict[str, list[str]]:
-                """Generate synthetic response headers for link resolution.
+                """Generate placeholder values for link-referenced headers.
 
-                Creates placeholder values for all headers referenced by OpenAPI link
-                expressions (e.g., $response.header.Location). Header values are lists
-                per Schemathesis Response requirements. Multi-value headers get multiple
-                synthetic values to support array indexing.
-
-                IMPORTANT: Uses original case from OpenAPI spec as dict keys (e.g., "Location"
-                not "location"). Schemathesis resolves $response.header.Location by looking
-                for the exact case from the spec. See HeaderRef for details.
+                GOTCHA: Dict keys use original case from spec (e.g., "Location" not
+                "location") because Schemathesis matches $response.header.Location
+                exactly. See HeaderRef docstring.
                 """
                 # Always include content-type
                 headers: dict[str, list[str]] = {"content-type": ["application/json"]}
@@ -844,12 +751,7 @@ class CaseGenerator:
                 return headers
 
             def _set_by_jsonpointer(self, data: dict, pointer: str, value: Any) -> None:
-                """Set a value in nested data using a JSONPointer path.
-
-                Creates intermediate dicts/lists as needed. Handles both dict keys
-                and array indices in the path (e.g., "items/0/id" creates
-                {"items": [{"id": value}]}).
-                """
+                """Set value at JSONPointer path, creating intermediate dicts/lists."""
                 parts = pointer.split("/")
                 current = data
 

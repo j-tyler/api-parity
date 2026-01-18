@@ -122,7 +122,9 @@ class SchemaValidator:
                 else:
                     self._spec = json.load(f)
         except Exception as e:
-            raise SchemaExtractionError(f"Failed to load OpenAPI spec: {e}") from e
+            raise SchemaExtractionError(
+                f"Failed to load OpenAPI spec from {spec_path}: {e}"
+            ) from e
 
     def validate_response(
         self,
@@ -140,20 +142,15 @@ class SchemaValidator:
         Returns:
             ValidationResult with validity status and any violations or extra fields.
         """
-        # Get the schema for this operation+status_code
         response_schema = self._get_response_schema(operation_id, status_code)
 
-        # No schema defined for this operation+status_code - pass validation
         if response_schema is None:
             return ValidationResult(valid=True)
 
-        # No body to validate
         if body is None:
-            # If schema expects content, this might be a violation
-            # But for simplicity, we treat None body as valid (matches "no content" case)
+            # Treat None body as valid to match "no content" responses
             return ValidationResult(valid=True)
 
-        # Validate against schema
         violations: list[SchemaViolation] = []
         extra_fields: list[str] = []
 
@@ -180,7 +177,6 @@ class SchemaValidator:
                 )
             )
 
-        # If schema allows extra fields, identify them for comparison
         if response_schema.allows_extra_fields and isinstance(body, dict):
             extra_fields = self._find_extra_fields(body, response_schema.schema, "$")
 
@@ -269,12 +265,10 @@ class SchemaValidator:
         Returns:
             ResponseSchema if found, None otherwise.
         """
-        # Find the operation by operationId
         operation = self._find_operation(operation_id)
         if operation is None:
             return None
 
-        # Get responses for this operation
         responses = operation.get("responses", {})
 
         # Look for exact status code match first, then "default"
@@ -290,10 +284,9 @@ class SchemaValidator:
         if response_def is None:
             return None
 
-        # Handle $ref if present
         response_def = self._resolve_ref(response_def)
 
-        # Get content -> application/json -> schema
+        # Navigate OpenAPI structure: content -> application/json -> schema
         content = response_def.get("content", {})
         json_content = content.get("application/json", {})
         schema = json_content.get("schema")
@@ -301,10 +294,7 @@ class SchemaValidator:
         if schema is None:
             return None
 
-        # Resolve $ref in schema
         schema = self._resolve_schema_refs(schema)
-
-        # Determine if additionalProperties allows extra fields
         allows_extra = self._allows_additional_properties(schema)
 
         return ResponseSchema(schema=schema, allows_extra_fields=allows_extra)
@@ -380,17 +370,14 @@ class SchemaValidator:
         if not isinstance(schema, dict):
             return schema
 
-        # Handle $ref at this level
         if "$ref" in schema:
             ref = schema["$ref"]
             if ref in visited:
                 # Cycle detected - return unresolved to break recursion
                 return schema
             resolved = self._resolve_ref(schema)
-            # Recursively resolve nested refs with updated visited set
             return self._resolve_schema_refs(resolved, visited | {ref})
 
-        # Recursively process nested schemas
         result = {}
         for key, value in schema.items():
             if key == "properties" and isinstance(value, dict):
@@ -427,12 +414,10 @@ class SchemaValidator:
 
         additional = schema.get("additionalProperties")
 
-        # Explicitly false means no additional properties
         if additional is False:
             return False
 
-        # True, unspecified, or a schema (object) means allowed
-        return True
+        return True  # True, unspecified, or schema object all allow extras
 
     def _find_extra_fields(
         self,
@@ -457,7 +442,6 @@ class SchemaValidator:
         if not isinstance(schema, dict):
             return extra
 
-        # Handle arrays - check items in the array
         if isinstance(body, list):
             items_schema = schema.get("items", {})
             if items_schema:
@@ -468,21 +452,17 @@ class SchemaValidator:
                     extra.extend(item_extra)
             return extra
 
-        # Handle objects
         if not isinstance(body, dict):
             return extra
 
-        # Get defined properties from schema
         properties = schema.get("properties", {})
         defined_fields = set(properties.keys())
 
-        # Find fields in body not in schema
         for field_name in body.keys():
             if field_name not in defined_fields:
                 field_path = f"{path}.{field_name}"
                 extra.append(field_path)
             else:
-                # Recursively check nested objects/arrays
                 nested_body = body[field_name]
                 nested_schema = properties.get(field_name, {})
                 nested_extra = self._find_extra_fields(

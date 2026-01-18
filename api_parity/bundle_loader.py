@@ -32,8 +32,6 @@ class BundleType(Enum):
 class BundleLoadError(Exception):
     """Error loading a mismatch bundle."""
 
-    pass
-
 
 @dataclass
 class LoadedBundle:
@@ -170,7 +168,6 @@ def _detect_bundle_type_from_data(
     Raises:
         BundleLoadError: If bundle type cannot be determined.
     """
-    # Primary: Check diff_data type field
     if diff_data is not None:
         bundle_type = diff_data.get("type")
         if bundle_type == "stateless":
@@ -178,7 +175,6 @@ def _detect_bundle_type_from_data(
         elif bundle_type == "chain":
             return BundleType.CHAIN
 
-    # Fallback: Check which case file exists
     if (bundle_path / "chain.json").is_file():
         return BundleType.CHAIN
     elif (bundle_path / "case.json").is_file():
@@ -252,7 +248,6 @@ def load_bundle(bundle_path: Path) -> LoadedBundle:
     # Detect bundle type from already-loaded diff data
     bundle_type = _detect_bundle_type_from_data(original_diff, bundle_path)
 
-    # Load metadata.json (required)
     metadata_path = bundle_path / "metadata.json"
     if not metadata_path.is_file():
         raise BundleLoadError(f"Missing metadata.json in {bundle_path}")
@@ -265,7 +260,6 @@ def load_bundle(bundle_path: Path) -> LoadedBundle:
     except Exception as e:
         raise BundleLoadError(f"Invalid metadata.json: {e}") from e
 
-    # Load case based on type
     request_case: RequestCase | None = None
     chain_case: ChainCase | None = None
 

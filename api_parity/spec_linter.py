@@ -20,8 +20,6 @@ from api_parity.case_generator import LINK_BODY_PATTERN, LINK_HEADER_PATTERN
 
 @dataclass
 class LintMessage:
-    """A single lint message (error, warning, or info)."""
-
     level: str  # "error", "warning", "info"
     code: str  # Short code for the issue type
     message: str  # Human-readable message
@@ -31,8 +29,6 @@ class LintMessage:
 
 @dataclass
 class LintResult:
-    """Result of linting an OpenAPI spec."""
-
     errors: list[LintMessage] = field(default_factory=list)
     warnings: list[LintMessage] = field(default_factory=list)
     info: list[LintMessage] = field(default_factory=list)
@@ -43,7 +39,6 @@ class LintResult:
     operations_with_response_schemas: int = 0
 
     def add(self, msg: LintMessage) -> None:
-        """Add a message to the appropriate list based on level."""
         if msg.level == "error":
             self.errors.append(msg)
         elif msg.level == "warning":
@@ -52,7 +47,6 @@ class LintResult:
             self.info.append(msg)
 
     def has_errors(self) -> bool:
-        """Return True if there are any errors."""
         return len(self.errors) > 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -72,7 +66,6 @@ class LintResult:
         }
 
     def _msg_to_dict(self, msg: LintMessage) -> dict[str, Any]:
-        """Convert a LintMessage to dictionary."""
         result = {
             "level": msg.level,
             "code": msg.code,
@@ -130,7 +123,6 @@ class SpecLinter:
         self._build_operation_index()
 
     def _build_operation_index(self) -> None:
-        """Build index of all operations in the spec."""
         paths = self._spec.get("paths", {})
         for path, path_item in paths.items():
             if not isinstance(path_item, dict):
@@ -243,9 +235,9 @@ class SpecLinter:
                 },
             ))
 
-        # Identify entry points (inbound only, no outbound)
-        entry_only = ops_with_inbound - ops_with_outbound
-        for op_id in sorted(entry_only):
+        # Chain terminators: have inbound links but no outbound (chains end here)
+        terminators = ops_with_inbound - ops_with_outbound
+        for op_id in sorted(terminators):
             result.add(LintMessage(
                 level="info",
                 code="chain-terminator",
@@ -253,10 +245,9 @@ class SpecLinter:
                 operation_id=op_id,
             ))
 
-        # Identify terminators (outbound only, no inbound)
-        # These are entry points for chains
-        outbound_only = ops_with_outbound - ops_with_inbound
-        for op_id in sorted(outbound_only):
+        # Entry points: have outbound links but no inbound (chains start here)
+        entry_points = ops_with_outbound - ops_with_inbound
+        for op_id in sorted(entry_points):
             result.add(LintMessage(
                 level="info",
                 code="chain-entry-point",

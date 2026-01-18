@@ -15,21 +15,21 @@ from pathlib import Path
 SPEC_PATH = Path(__file__).parent / "sample_api.yaml"
 
 
-def unwrap_result(result):
-    """Schemathesis wraps operations in Ok/Err results."""
+def unwrap_schemathesis_result(result):
+    """Schemathesis wraps operations in Ok/Err results - must call .ok() to unwrap."""
     if hasattr(result, 'ok'):
         return result.ok()
     return result
 
 
-def get_operation_id(operation):
-    """Get operationId from operation definition."""
+def get_operation_id(operation) -> str:
+    """Extract operationId, falling back to method_path if not defined."""
     raw = operation.definition.raw
     return raw.get('operationId', f"{operation.method}_{operation.path}")
 
 
 def explore_schema_structure():
-    """Understand what a loaded schema looks like."""
+    """Print schema info and operations with their OpenAPI links."""
     print("=" * 60)
     print("LOADING SCHEMA")
     print("=" * 60)
@@ -45,7 +45,7 @@ def explore_schema_structure():
     print("=" * 60)
 
     for result in schema.get_all_operations():
-        operation = unwrap_result(result)
+        operation = unwrap_schemathesis_result(result)
         raw = operation.definition.raw
         op_id = get_operation_id(operation)
 
@@ -61,8 +61,8 @@ def explore_schema_structure():
                     print(f"    -> {link_name}: {link_def.get('operationId')}")
 
 
-def generate_cases_for_operation(operation, max_cases=10):
-    """Generate test cases for a single operation using Hypothesis."""
+def generate_cases_for_operation(operation, max_cases: int = 10) -> list:
+    """Generate test cases using Hypothesis without making HTTP calls."""
     from hypothesis import given, settings, Phase
 
     strategy = operation.as_strategy()
@@ -76,23 +76,21 @@ def generate_cases_for_operation(operation, max_cases=10):
     try:
         collect_cases()
     except Exception:
-        pass  # Hypothesis exits when max_examples reached
+        pass  # Hypothesis raises when max_examples reached - expected behavior
 
     return collected
 
 
-def case_to_dict(case):
-    """Convert a Schemathesis Case to a dictionary for inspection."""
+def case_to_dict(case) -> dict:
+    """Convert a Schemathesis Case to a JSON-serializable dictionary."""
     result = {
         "operation_id": get_operation_id(case.operation),
         "method": case.method,
         "path_template": case.path,
     }
 
-    # Path parameters
     if case.path_parameters:
         result["path_parameters"] = dict(case.path_parameters)
-        # Compute formatted path
         formatted = case.path
         for k, v in case.path_parameters.items():
             formatted = formatted.replace(f"{{{k}}}", str(v))
@@ -101,27 +99,12 @@ def case_to_dict(case):
         result["path_parameters"] = {}
         result["formatted_path"] = case.path
 
-    # Query parameters
-    if case.query:
-        result["query"] = dict(case.query)
-    else:
-        result["query"] = {}
+    result["query"] = dict(case.query) if case.query else {}
+    result["headers"] = dict(case.headers) if case.headers else {}
+    result["cookies"] = dict(case.cookies) if case.cookies else {}
 
-    # Headers
-    if case.headers:
-        result["headers"] = dict(case.headers)
-    else:
-        result["headers"] = {}
-
-    # Cookies
-    if case.cookies:
-        result["cookies"] = dict(case.cookies)
-    else:
-        result["cookies"] = {}
-
-    # Body
+    # Schemathesis uses NotSet sentinel for absent body - check by type name
     if hasattr(case, 'body') and case.body is not None:
-        # Check if it's the NotSet sentinel
         if not str(type(case.body).__name__) == 'NotSet':
             result["body"] = case.body
             result["media_type"] = case.media_type
@@ -129,7 +112,7 @@ def case_to_dict(case):
     return result
 
 
-def generate_all_cases(max_per_operation=50):
+def generate_all_cases(max_per_operation: int = 50) -> list[dict]:
     """Generate cases for all operations in the schema."""
     print("\n" + "=" * 60)
     print("GENERATING CASES (NO HTTP CALLS)")
@@ -139,7 +122,7 @@ def generate_all_cases(max_per_operation=50):
     all_cases = []
 
     for result in schema.get_all_operations():
-        operation = unwrap_result(result)
+        operation = unwrap_schemathesis_result(result)
         op_id = get_operation_id(operation)
         print(f"\nGenerating cases for: {op_id}")
 
@@ -154,7 +137,7 @@ def generate_all_cases(max_per_operation=50):
 
 
 def explore_stateful_testing():
-    """Explore Schemathesis stateful testing / link traversal."""
+    """Check state machine availability and stateful module exports."""
     print("\n" + "=" * 60)
     print("STATEFUL TESTING EXPLORATION")
     print("=" * 60)
@@ -176,7 +159,7 @@ def explore_stateful_testing():
 
 
 def explore_case_methods():
-    """Explore what methods are available on Case objects."""
+    """Print Case object attributes and as_transport_kwargs() output."""
     print("\n" + "=" * 60)
     print("CASE OBJECT EXPLORATION")
     print("=" * 60)
@@ -184,7 +167,7 @@ def explore_case_methods():
     schema = from_path(SPEC_PATH)
 
     for result in schema.get_all_operations():
-        operation = unwrap_result(result)
+        operation = unwrap_schemathesis_result(result)
         cases = generate_cases_for_operation(operation, 1)
         if cases:
             case = cases[0]

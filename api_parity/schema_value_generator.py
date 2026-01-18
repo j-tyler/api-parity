@@ -27,11 +27,7 @@ class SchemaValueGenerator:
     """
 
     def __init__(self, spec: dict[str, Any]) -> None:
-        """Initialize with parsed OpenAPI spec for $ref resolution.
-
-        Args:
-            spec: Parsed OpenAPI specification dict.
-        """
+        """Initialize with parsed OpenAPI spec for $ref resolution."""
         self._spec = spec
 
     def generate(self, schema: dict[str, Any] | None) -> Any:
@@ -54,17 +50,10 @@ class SchemaValueGenerator:
         14. Fallback - UUID string
 
         Note: Composition schemas (allOf/anyOf/oneOf) are not handled; uses fallback.
-
-        Args:
-            schema: JSON Schema dict (may be None or empty).
-
-        Returns:
-            A value satisfying the schema constraints.
         """
         if schema is None:
             return str(uuid.uuid4())
 
-        # Resolve $ref if present
         schema = self._resolve_ref(schema)
 
         # Priority 1: enum constraint - always takes precedence
@@ -115,24 +104,14 @@ class SchemaValueGenerator:
     ) -> dict[str, Any] | None:
         """Navigate from a schema to a nested field's schema using JSONPointer path.
 
-        Handles:
-        - Object properties: "data" -> schema.properties.data
-        - Array items: "items/0" -> schema.items (arrays are homogeneous)
-        - $ref resolution during navigation
-
-        Args:
-            schema: Starting schema (typically a response schema).
-            pointer: JSONPointer path without leading slash (e.g., "id", "data/items/0/id").
-
-        Returns:
-            The schema for the field at the pointer path, or None if not found.
+        Handles object properties ("data" -> schema.properties.data), array items
+        ("items/0" -> schema.items since arrays are homogeneous), and $ref resolution.
+        Pointer should omit leading slash (e.g., "id", "data/items/0/id").
         """
         if not pointer:
             return schema
 
-        # Resolve $ref at current level
         schema = self._resolve_ref(schema)
-
         parts = pointer.split("/")
         current = schema
 
@@ -140,10 +119,9 @@ class SchemaValueGenerator:
             if current is None:
                 return None
 
-            # Resolve $ref at each level
             current = self._resolve_ref(current)
 
-            # Handle array index - arrays are homogeneous, return items schema
+            # Array index: return items schema (arrays are homogeneous)
             if part.isdigit():
                 items_schema = current.get("items")
                 if items_schema is None:
@@ -151,32 +129,27 @@ class SchemaValueGenerator:
                 current = items_schema
                 continue
 
-            # Handle object property
+            # Object property
             schema_type = current.get("type")
             if schema_type == "object" or "properties" in current:
                 properties = current.get("properties", {})
                 if part in properties:
                     current = properties[part]
                     continue
-                # Property not found
                 return None
 
-            # Handle array at this level (items/... pattern)
+            # Array: descend into items, then look for property
             if schema_type == "array":
                 items_schema = current.get("items")
                 if items_schema is None:
                     return None
-                # Navigate into items schema
-                current = items_schema
-                # Now look for the property in items
-                current = self._resolve_ref(current)
+                current = self._resolve_ref(items_schema)
                 properties = current.get("properties", {})
                 if part in properties:
                     current = properties[part]
                     continue
                 return None
 
-            # Unknown structure
             return None
 
         return self._resolve_ref(current)
@@ -184,40 +157,25 @@ class SchemaValueGenerator:
     def get_response_schema(
         self, operation_id: str, status_code: int
     ) -> dict[str, Any] | None:
-        """Get the response schema for an operation and status code.
-
-        Args:
-            operation_id: The operationId to look up.
-            status_code: The HTTP status code.
-
-        Returns:
-            The response body schema, or None if not found.
-        """
-        # Find operation by operationId
+        """Get response body schema for an operation. Tries exact status, then wildcard (2XX), then default."""
         operation = self._find_operation(operation_id)
         if operation is None:
             return None
 
-        # Get responses
         responses = operation.get("responses", {})
-
-        # Look for exact status code match first, then wildcards, then default
         status_str = str(status_code)
         response_def = responses.get(status_str)
         if response_def is None:
-            # Try wildcard (2XX, 3XX, etc.)
             wildcard = f"{status_code // 100}XX"
             response_def = responses.get(wildcard)
         if response_def is None:
             response_def = responses.get("default")
-
         if response_def is None:
             return None
 
-        # Resolve $ref if present
         response_def = self._resolve_ref(response_def)
 
-        # Get content -> application/json -> schema
+        # Navigate: content -> application/json -> schema
         content = response_def.get("content", {})
         json_content = content.get("application/json", {})
         schema = json_content.get("schema")
@@ -228,20 +186,12 @@ class SchemaValueGenerator:
         return self._resolve_ref(schema)
 
     def _find_operation(self, operation_id: str) -> dict[str, Any] | None:
-        """Find an operation by its operationId.
-
-        Args:
-            operation_id: The operationId to find.
-
-        Returns:
-            The operation definition dict, or None if not found.
-        """
+        """Search paths for an operation matching the given operationId."""
         paths = self._spec.get("paths", {})
         for path_item in paths.values():
             if not isinstance(path_item, dict):
                 continue
             for method_or_key, operation in path_item.items():
-                # Skip non-operation keys like 'parameters', '$ref'
                 if not isinstance(operation, dict) or method_or_key.startswith("$"):
                     continue
                 if operation.get("operationId") == operation_id:
@@ -251,16 +201,8 @@ class SchemaValueGenerator:
     def _resolve_ref(
         self, obj: dict[str, Any], visited: frozenset[str] | None = None
     ) -> dict[str, Any]:
-        """Resolve a $ref reference in the spec.
-
-        Handles circular references by tracking visited paths.
-
-        Args:
-            obj: Object that may contain a $ref.
-            visited: Set of already-visited $ref paths to detect cycles.
-
-        Returns:
-            The resolved object, or the original if $ref not found or circular.
+        """Resolve $ref to its target schema. Tracks visited refs to handle cycles.
+        Returns original object if not a ref, external ref, or circular.
         """
         if not isinstance(obj, dict):
             return obj
@@ -269,17 +211,13 @@ class SchemaValueGenerator:
         if ref is None:
             return obj
 
-        # Initialize visited set
         if visited is None:
             visited = frozenset()
 
-        # Detect circular reference
-        if ref in visited:
+        if ref in visited:  # Circular reference
             return obj
 
-        # Parse the $ref path (e.g., "#/components/schemas/Widget")
-        if not ref.startswith("#/"):
-            # External refs not supported
+        if not ref.startswith("#/"):  # External refs not supported
             return obj
 
         parts = ref[2:].split("/")
@@ -291,7 +229,6 @@ class SchemaValueGenerator:
                 return obj
 
         if isinstance(resolved, dict):
-            # Recursively resolve nested $refs
             return self._resolve_ref(resolved, visited | {ref})
 
         return obj

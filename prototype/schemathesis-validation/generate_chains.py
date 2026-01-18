@@ -50,36 +50,32 @@ class CapturedChain:
 class ChainCapturingStateMachine(OpenAPIStateMachine):
     """State machine that captures chains without making HTTP calls."""
 
-    # Class-level storage for captured chains
+    # Class-level (not instance) because Hypothesis creates new instances per test run
+    # and we need to collect across all runs
     captured_chains: list[CapturedChain] = []
     current_chain: CapturedChain | None = None
     step_counter: int = 0
 
     def validate_response(self, response, case, **kwargs):
-        """Skip validation - we're just generating chains, not testing."""
-        pass
+        pass  # Skip - we're capturing structure, not validating responses
 
     def setup(self):
-        """Called before each test run."""
-        # Start a new chain
+        """Called by Hypothesis before each test run - start new chain."""
         self.__class__.current_chain = CapturedChain(
             chain_id=str(uuid.uuid4())[:8]
         )
         self.__class__.step_counter = 0
 
     def teardown(self):
-        """Called after each test run."""
-        # Save completed chain if it has steps
+        """Called by Hypothesis after each test run - save completed chain."""
         if self.current_chain and self.current_chain.steps:
             self.__class__.captured_chains.append(self.current_chain)
         self.__class__.current_chain = None
 
     def call(self, case, **kwargs) -> Response:
-        """Override call to capture the case instead of making HTTP request."""
-        # Extract case info
+        """Capture case data and return mock response instead of making HTTP call."""
         op_id = case.operation.definition.raw.get('operationId', 'unknown')
 
-        # Build formatted path
         formatted_path = case.path
         path_params = {}
         if case.path_parameters:
@@ -101,17 +97,14 @@ class ChainCapturingStateMachine(OpenAPIStateMachine):
             media_type=case.media_type if hasattr(case, 'media_type') else None,
         )
 
-        # Add to current chain
         if self.__class__.current_chain:
             self.__class__.current_chain.steps.append(step)
 
         self.__class__.step_counter += 1
 
-        # Return a mock response that allows chain to continue
-        # We need to return data that the links can use
+        # Mock response with data that OpenAPI links can extract for next step
         mock_body = self._generate_mock_response(case)
 
-        # Create a mock PreparedRequest
         import requests
         req = requests.Request(
             method=case.method,
@@ -130,10 +123,9 @@ class ChainCapturingStateMachine(OpenAPIStateMachine):
         )
 
     def _generate_mock_response(self, case) -> dict:
-        """Generate mock response body for link resolution."""
+        """Generate mock response body with fields that OpenAPI links can extract."""
         op_id = case.operation.definition.raw.get('operationId', '')
 
-        # For operations that create/return items, return an id
         if 'create' in op_id.lower() or 'Item' in op_id:
             return {
                 'id': str(uuid.uuid4()),
@@ -156,29 +148,25 @@ class ChainCapturingStateMachine(OpenAPIStateMachine):
             return {'id': str(uuid.uuid4())}
 
 
-def generate_chains(max_chains=20, max_steps_per_chain=10):
-    """Generate chains using the state machine."""
+def generate_chains(max_chains: int = 20, max_steps_per_chain: int = 10) -> list[CapturedChain]:
+    """Generate request chains by running Hypothesis on the state machine."""
     print("=" * 60)
     print("GENERATING CHAINS")
     print("=" * 60)
 
     schema = from_path(SPEC_PATH)
 
-    # Create our capturing state machine
     OriginalStateMachine = schema.as_state_machine()
 
-    # Create a subclass that inherits from our capturing class
+    # MRO: ChainCapturingStateMachine methods override OriginalStateMachine
     class CapturingMachine(ChainCapturingStateMachine, OriginalStateMachine):
         pass
 
-    # Reset captured chains
     ChainCapturingStateMachine.captured_chains = []
 
-    # Run the state machine using Hypothesis
-    from hypothesis import settings, Phase, given
+    from hypothesis import settings, Phase
     from hypothesis.stateful import run_state_machine_as_test
 
-    # Configure to generate multiple chains
     @settings(
         max_examples=max_chains,
         stateful_step_count=max_steps_per_chain,
@@ -192,8 +180,7 @@ def generate_chains(max_chains=20, max_steps_per_chain=10):
     try:
         run_test()
     except Exception as e:
-        # Hypothesis may raise when done, that's ok
-        print(f"Note: {type(e).__name__}: {e}")
+        print(f"Note: {type(e).__name__}: {e}")  # Hypothesis raises when done
 
     return ChainCapturingStateMachine.captured_chains
 

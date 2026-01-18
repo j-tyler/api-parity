@@ -22,14 +22,12 @@ import (
 	"github.com/google/cel-go/common/types"
 )
 
-// Request is the JSON structure received from Python.
 type Request struct {
 	ID   string         `json:"id"`
 	Expr string         `json:"expr"`
 	Data map[string]any `json:"data"`
 }
 
-// Response is the JSON structure sent back to Python.
 type Response struct {
 	ID     string `json:"id"`
 	OK     bool   `json:"ok"`
@@ -48,13 +46,11 @@ func main() {
 	const maxTokenSize = 10 * 1024 * 1024 // 10 MB
 	reader.Buffer(make([]byte, 64*1024), maxTokenSize)
 
-	// Send ready signal
 	if err := writeJSON(writer, map[string]bool{"ready": true}); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to write ready: %v\n", err)
+		fmt.Fprintf(os.Stderr, "failed to write ready signal: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Process requests
 	for reader.Scan() {
 		line := reader.Text()
 		if line == "" {
@@ -114,12 +110,8 @@ func evaluate(req Request) Response {
 }
 
 func evaluateSync(req Request) Response {
-	// Build CEL environment with variables from data
-	opts := []cel.EnvOption{
-		cel.DefaultUTCTimeZone(true),
-	}
-
-	// Declare variables based on data keys
+	// DynType allows any JSON value - CEL infers actual types at runtime
+	opts := []cel.EnvOption{cel.DefaultUTCTimeZone(true)}
 	for key := range req.Data {
 		opts = append(opts, cel.Variable(key, cel.DynType))
 	}
@@ -129,25 +121,22 @@ func evaluateSync(req Request) Response {
 		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("env creation failed: %v", err)}
 	}
 
-	// Compile expression
 	ast, issues := env.Compile(req.Expr)
 	if issues != nil && issues.Err() != nil {
 		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("compile error: %v", issues.Err())}
 	}
 
-	// Create program
 	prg, err := env.Program(ast)
 	if err != nil {
 		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("program creation failed: %v", err)}
 	}
 
-	// Evaluate
 	out, _, err := prg.Eval(req.Data)
 	if err != nil {
 		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("evaluation error: %v", err)}
 	}
 
-	// Convert result to bool
+	// All comparison rules must return boolean - reject other types
 	if out.Type() != types.BoolType {
 		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("result is not boolean: got %v", out.Type())}
 	}

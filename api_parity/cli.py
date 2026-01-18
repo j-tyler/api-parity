@@ -1715,7 +1715,7 @@ def _replay_loaded_bundle(
     stats: "ReplayStats",
     target_a_info: "TargetInfo",
     target_b_info: "TargetInfo",
-    get_operation_rules: Callable,
+    get_operation_rules: Callable[["ComparisonRules", str], Any],
 ) -> None:
     """Replay a pre-loaded mismatch bundle."""
     from api_parity.bundle_loader import BundleType
@@ -1760,7 +1760,7 @@ def _replay_stateless_bundle(
     stats: "ReplayStats",
     target_a_info: "TargetInfo",
     target_b_info: "TargetInfo",
-    get_operation_rules: Callable,
+    get_operation_rules: Callable[["ComparisonRules", str], Any],
 ) -> None:
     """Replay a stateless (single-request) bundle."""
     from api_parity.executor import RequestError
@@ -1827,7 +1827,7 @@ def _replay_chain_bundle(
     stats: "ReplayStats",
     target_a_info: "TargetInfo",
     target_b_info: "TargetInfo",
-    get_operation_rules: Callable,
+    get_operation_rules: Callable[["ComparisonRules", str], Any],
 ) -> None:
     """Replay a chain (stateful) bundle."""
     from api_parity.executor import RequestError

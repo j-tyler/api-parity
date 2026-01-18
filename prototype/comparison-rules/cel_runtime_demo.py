@@ -20,23 +20,12 @@ from typing import Any
 
 class MockCELRuntime:
     """
-    Mock CEL evaluator for demonstration.
-
-    In production, replace with actual CEL library:
-        import celpy
-        env = celpy.Environment()
-        ast = env.compile(expr)
-        prog = env.program(ast)
-        result = prog.evaluate({"a": val_a, "b": val_b})
+    Mock CEL evaluator - handles only expressions from our predefined library.
+    Production uses Go subprocess with real CEL (see cmd/cel-evaluator/).
     """
 
     def evaluate(self, expr: str, a: Any, b: Any) -> bool:
-        """
-        Evaluate a CEL expression with bindings a and b.
-
-        This mock handles only the expressions in our predefined library.
-        A real CEL runtime would handle arbitrary expressions.
-        """
+        """Evaluate CEL expression with bindings a and b, return bool result."""
         # Simple exact match
         if expr == "a == b":
             return a == b
@@ -93,7 +82,7 @@ class MockCELRuntime:
 
 
 def demo():
-    """Run demonstration comparisons."""
+    """Run test cases through mock CEL runtime and show comparison example."""
     runtime = MockCELRuntime()
 
     test_cases = [
@@ -136,24 +125,23 @@ def demo():
 
     for expr, a, b, expected in test_cases:
         result = runtime.evaluate(expr, a, b)
-        status = "✓" if result == expected else "✗"
         if result == expected:
             passed += 1
+            status = "PASS"
         else:
             failed += 1
+            status = "FAIL"
 
-        # Truncate long expressions
         display_expr = expr if len(expr) <= 45 else expr[:42] + "..."
 
-        print(f"{status} {display_expr}")
-        print(f"    a={repr(a)}, b={repr(b)}")
-        print(f"    result={result}, expected={expected}")
+        print(f"[{status}] {display_expr}")
+        print(f"       a={repr(a)}, b={repr(b)}")
+        print(f"       result={result}, expected={expected}")
         print()
 
     print("=" * 70)
     print(f"Results: {passed} passed, {failed} failed")
 
-    # Show how this integrates with inlined config
     print()
     print("=" * 70)
     print("Integration Example: Comparing API Responses")
@@ -188,22 +176,19 @@ def demo():
     print()
 
     for path, rule in inlined_rules.items():
-        # Extract field name from JSONPath (simplified)
-        field = path.replace("$.", "")
+        field = path.replace("$.", "")  # Simplified JSONPath extraction
         val_a = response_a.get(field)
         val_b = response_b.get(field)
 
         try:
             result = runtime.evaluate(rule["expr"], val_a, val_b)
             status = "MATCH" if result else "MISMATCH"
-            symbol = "✓" if result else "✗"
-        except NotImplementedError as e:
+        except NotImplementedError:
             status = "ERROR"
-            symbol = "?"
 
-        print(f"  {symbol} {path}: {status}")
-        print(f"      A: {repr(val_a)}")
-        print(f"      B: {repr(val_b)}")
+        print(f"  [{status}] {path}")
+        print(f"          A: {repr(val_a)}")
+        print(f"          B: {repr(val_b)}")
         print()
 
 

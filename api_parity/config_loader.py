@@ -19,6 +19,7 @@ import yaml
 from api_parity.models import (
     ComparisonLibrary,
     ComparisonRulesFile,
+    FieldRule,
     OperationRules,
     RuntimeConfig,
     TargetConfig,
@@ -34,19 +35,7 @@ DEFAULT_LIBRARY_PATH = Path(__file__).parent.parent / "prototype" / "comparison-
 
 
 def load_runtime_config(config_path: Path) -> RuntimeConfig:
-    """Load runtime configuration from a YAML file.
-
-    Supports ${ENV_VAR} substitution in string values.
-
-    Args:
-        config_path: Path to the YAML config file.
-
-    Returns:
-        RuntimeConfig model instance.
-
-    Raises:
-        ConfigError: If loading or validation fails.
-    """
+    """Load runtime configuration from YAML with ${ENV_VAR} substitution."""
     if not config_path.exists():
         raise ConfigError(f"Config file not found: {config_path}")
 
@@ -69,17 +58,7 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
 
 
 def load_comparison_rules(rules_path: Path) -> ComparisonRulesFile:
-    """Load comparison rules from a JSON file.
-
-    Args:
-        rules_path: Path to the JSON rules file.
-
-    Returns:
-        ComparisonRulesFile model instance.
-
-    Raises:
-        ConfigError: If loading or validation fails.
-    """
+    """Load comparison rules from JSON."""
     if not rules_path.exists():
         raise ConfigError(f"Comparison rules file not found: {rules_path}")
 
@@ -96,17 +75,7 @@ def load_comparison_rules(rules_path: Path) -> ComparisonRulesFile:
 
 
 def load_comparison_library(library_path: Path | None = None) -> ComparisonLibrary:
-    """Load the comparison library (predefined comparisons).
-
-    Args:
-        library_path: Path to the library JSON file. Uses default if None.
-
-    Returns:
-        ComparisonLibrary model instance.
-
-    Raises:
-        ConfigError: If loading or validation fails.
-    """
+    """Load predefined comparisons from library JSON. Uses DEFAULT_LIBRARY_PATH if None."""
     path = library_path or DEFAULT_LIBRARY_PATH
 
     if not path.exists():
@@ -128,18 +97,10 @@ def get_operation_rules(
     rules_file: ComparisonRulesFile,
     operation_id: str,
 ) -> OperationRules:
-    """Get effective rules for an operation.
+    """Get effective rules for an operation, merging defaults with any override.
 
-    Operation-specific rules override defaults for any key they define.
-    There is no deep merging - if an operation specifies body rules,
-    the entire body section is replaced.
-
-    Args:
-        rules_file: Loaded comparison rules file.
-        operation_id: The operation ID to get rules for.
-
-    Returns:
-        OperationRules to use for comparison.
+    Override semantics: operation rules replace defaults at the field level
+    (status_code, headers, body). No deep merging within fields.
     """
     default = rules_file.default_rules
     override = rules_file.operation_rules.get(operation_id)
@@ -159,15 +120,7 @@ def resolve_comparison_rules_path(
     config_path: Path,
     rules_ref: str,
 ) -> Path:
-    """Resolve comparison rules path relative to config file.
-
-    Args:
-        config_path: Path to the config file (for relative resolution).
-        rules_ref: The comparison_rules value from config.
-
-    Returns:
-        Resolved absolute path to the rules file.
-    """
+    """Resolve rules_ref relative to config_path's directory. Absolute paths pass through."""
     rules_path = Path(rules_ref)
     if rules_path.is_absolute():
         return rules_path
@@ -179,19 +132,7 @@ def validate_targets(
     target_a_name: str,
     target_b_name: str,
 ) -> tuple[TargetConfig, TargetConfig]:
-    """Validate and extract target configurations.
-
-    Args:
-        config: Runtime configuration.
-        target_a_name: Name of target A.
-        target_b_name: Name of target B.
-
-    Returns:
-        Tuple of (target_a_config, target_b_config).
-
-    Raises:
-        ConfigError: If targets are not found or invalid.
-    """
+    """Validate that both targets exist and are different, then return their configs."""
     if target_a_name not in config.targets:
         available = ", ".join(config.targets.keys())
         raise ConfigError(
@@ -211,14 +152,7 @@ def validate_targets(
 
 
 def _substitute_env_vars(data: Any) -> Any:
-    """Recursively substitute ${ENV_VAR} patterns in data.
-
-    Args:
-        data: Data structure to process.
-
-    Returns:
-        Data with environment variables substituted.
-    """
+    """Recursively substitute ${ENV_VAR} patterns in strings within data."""
     if isinstance(data, str):
         return _substitute_string(data)
     elif isinstance(data, dict):
@@ -229,17 +163,7 @@ def _substitute_env_vars(data: Any) -> Any:
 
 
 def _substitute_string(s: str) -> str:
-    """Substitute ${ENV_VAR} patterns in a string.
-
-    Args:
-        s: String to process.
-
-    Returns:
-        String with environment variables substituted.
-
-    Raises:
-        ConfigError: If referenced environment variable is not set.
-    """
+    """Substitute ${ENV_VAR} patterns. Raises ConfigError if env var is not set."""
     pattern = re.compile(r"\$\{([^}]+)\}")
 
     def replacer(match: re.Match) -> str:
@@ -250,11 +174,6 @@ def _substitute_string(s: str) -> str:
         return value
 
     return pattern.sub(replacer, s)
-
-
-# =============================================================================
-# Cross-Validation Functions
-# =============================================================================
 
 
 class ValidationWarning:
@@ -308,20 +227,10 @@ def validate_comparison_rules(
     library: ComparisonLibrary,
     spec_operation_ids: set[str],
 ) -> ValidationResult:
-    """Validate comparison rules against spec and library.
+    """Validate rules against spec and library.
 
-    Checks:
-    1. operationIds in operation_rules exist in the spec
-    2. Predefined names are valid (exist in library)
-    3. Required parameters for predefined rules are present
-
-    Args:
-        rules: Loaded comparison rules file.
-        library: Loaded comparison library.
-        spec_operation_ids: Set of valid operationIds from the OpenAPI spec.
-
-    Returns:
-        ValidationResult with any warnings or errors.
+    Checks: (1) operationIds exist in spec, (2) predefined names exist in library,
+    (3) required parameters for predefined rules are present.
     """
     result = ValidationResult()
     valid_predefined = set(library.predefined.keys())
@@ -356,15 +265,7 @@ def _validate_operation_rules(
     context: str,
     result: ValidationResult,
 ) -> None:
-    """Validate predefined names and parameters in an OperationRules instance.
-
-    Args:
-        rules: The OperationRules to validate.
-        valid_predefined: Set of valid predefined comparison names.
-        library: The comparison library (for parameter checking).
-        context: Context string for error messages (e.g., "default_rules").
-        result: ValidationResult to add warnings/errors to.
-    """
+    """Validate predefined names and parameters in rules. Adds issues to result."""
     # Check status_code rule
     if rules.status_code and rules.status_code.predefined:
         _validate_field_rule(
@@ -391,21 +292,13 @@ def _validate_operation_rules(
 
 
 def _validate_field_rule(
-    rule: "FieldRule",
+    rule: FieldRule,
     valid_predefined: set[str],
     library: ComparisonLibrary,
     context: str,
     result: ValidationResult,
 ) -> None:
-    """Validate a single field rule's predefined name and parameters.
-
-    Args:
-        rule: The FieldRule to validate.
-        valid_predefined: Set of valid predefined comparison names.
-        library: The comparison library.
-        context: Context string for error messages.
-        result: ValidationResult to add warnings/errors to.
-    """
+    """Validate a field rule's predefined name exists and has required params."""
     predefined_name = rule.predefined
     if predefined_name not in valid_predefined:
         result.add_error(
@@ -432,20 +325,7 @@ def validate_cli_operation_ids(
     operation_timeouts: dict[str, float],
     spec_operation_ids: set[str],
 ) -> ValidationResult:
-    """Validate CLI-specified operationIds against the spec.
-
-    Checks:
-    1. --exclude operationIds exist in the spec
-    2. --operation-timeout operationIds exist in the spec
-
-    Args:
-        exclude_ops: List of operationIds from --exclude flags.
-        operation_timeouts: Dict of operationId -> timeout from --operation-timeout.
-        spec_operation_ids: Set of valid operationIds from the OpenAPI spec.
-
-    Returns:
-        ValidationResult with any warnings or errors.
-    """
+    """Warn if --exclude or --operation-timeout operationIds don't exist in spec."""
     result = ValidationResult()
 
     # Check --exclude operationIds

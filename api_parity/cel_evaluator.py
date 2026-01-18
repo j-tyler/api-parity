@@ -150,19 +150,8 @@ class CELEvaluator:
             self._process = None
 
     def evaluate(self, expression: str, data: dict[str, Any]) -> bool:
-        """Evaluate a CEL expression with the given data.
-
-        Args:
-            expression: CEL expression string (e.g., "a == b")
-            data: Dictionary of variable bindings (e.g., {"a": 1, "b": 1})
-
-        Returns:
-            Boolean result of the expression evaluation.
-
-        Raises:
-            CELEvaluationError: If the expression fails to evaluate.
-            CELSubprocessError: If the subprocess crashes and cannot be restarted.
-        """
+        """Evaluate a CEL expression. Raises CELEvaluationError on failure,
+        CELSubprocessError if subprocess crashes and cannot be restarted."""
         if self._process is None:
             raise CELSubprocessError("CEL evaluator not running")
 
@@ -170,11 +159,10 @@ class CELEvaluator:
         request = {"id": request_id, "expr": expression, "data": data}
 
         try:
-            # Send request
             self._process.stdin.write(json.dumps(request) + "\n")
             self._process.stdin.flush()
 
-            # Wait for response with timeout to prevent indefinite blocking
+            # Timeout prevents indefinite blocking if subprocess hangs
             ready, _, _ = select.select(
                 [self._process.stdout], [], [], self.EVALUATION_TIMEOUT
             )
@@ -183,24 +171,21 @@ class CELEvaluator:
                     f"CEL evaluation timeout ({self.EVALUATION_TIMEOUT}s)"
                 )
 
-            # Read response
             response_line = self._process.stdout.readline()
             if not response_line:
-                # EOF - subprocess died
+                # EOF means subprocess died - restart and retry
                 self._restart_subprocess()
-                # Retry the request after restart
                 return self.evaluate(expression, data)
 
             response = json.loads(response_line)
 
         except BrokenPipeError:
-            # Subprocess died while writing
+            # Subprocess died while writing - restart and retry
             self._restart_subprocess()
             return self.evaluate(expression, data)
         except json.JSONDecodeError as e:
             raise CELEvaluationError(f"Invalid response from subprocess: {response_line}") from e
 
-        # Validate response ID matches request
         if response.get("id") != request_id:
             raise CELEvaluationError(
                 f"Response ID mismatch: expected {request_id}, got {response.get('id')}"
