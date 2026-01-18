@@ -656,6 +656,69 @@ class CaseGenerator:
                     return spec_code[0] == actual_str[0]
                 return False
 
+            def _find_status_code_with_links(self, operation_id: str, method: str) -> int:
+                """Find a status code that has links defined for this operation.
+
+                Examines the OpenAPI spec to find which status codes have links
+                defined for the operation. Returns the lowest 2xx status code with
+                links, or falls back to 201 for POST / 200 otherwise.
+
+                This fixes the bug where PUT/DELETE operations with links on
+                non-200 status codes (e.g., 201, 202) were not discovered because
+                the synthetic response used the wrong status code.
+                """
+                spec = generator_self._raw_spec
+                paths = spec.get("paths", {})
+
+                # Find this operation in the spec
+                for path_item in paths.values():
+                    if not isinstance(path_item, dict):
+                        continue
+                    for method_or_key, operation in path_item.items():
+                        if not isinstance(operation, dict) or method_or_key.startswith("$"):
+                            continue
+                        if operation.get("operationId") != operation_id:
+                            continue
+
+                        # Found the operation - look for responses with links
+                        responses = operation.get("responses", {})
+
+                        # Collect all 2xx status codes that have links
+                        status_codes_with_links = []
+                        for resp_code, response_def in responses.items():
+                            if not isinstance(response_def, dict):
+                                continue
+                            links = response_def.get("links", {})
+                            if not links:
+                                continue
+
+                            # Parse status code (handle wildcards like "2XX" and "default")
+                            if resp_code == "default":
+                                # default could be any status, use fallback
+                                continue
+                            if resp_code.endswith("XX"):
+                                # Wildcard like "2XX" - use representative value
+                                try:
+                                    base = int(resp_code[0])
+                                    status_codes_with_links.append(base * 100)
+                                except ValueError:
+                                    continue
+                            else:
+                                try:
+                                    code = int(resp_code)
+                                    # Only consider 2xx success codes
+                                    if 200 <= code < 300:
+                                        status_codes_with_links.append(code)
+                                except ValueError:
+                                    continue
+
+                        # Return lowest 2xx status code with links
+                        if status_codes_with_links:
+                            return min(status_codes_with_links)
+
+                # Fallback: POST typically returns 201, others return 200
+                return 201 if method.upper() == "POST" else 200
+
             def _synthetic_response(self, case) -> SchemathesisResponse:
                 """Generate synthetic response for link resolution during chain discovery.
 
@@ -665,7 +728,7 @@ class CaseGenerator:
                 """
                 # Extract operation info for schema-aware generation
                 op_id = case.operation.definition.raw.get("operationId", "unknown")
-                status_code = 201 if case.method == "POST" else 200
+                status_code = self._find_status_code_with_links(op_id, case.method)
                 synthetic_body = self._generate_synthetic_body(op_id, status_code)
                 synthetic_headers = self._generate_synthetic_headers()
 
@@ -677,7 +740,7 @@ class CaseGenerator:
                 prepared = req.prepare()
 
                 return SchemathesisResponse(
-                    status_code=201 if case.method == "POST" else 200,
+                    status_code=status_code,
                     headers=synthetic_headers,
                     content=json.dumps(synthetic_body).encode(),
                     request=prepared,

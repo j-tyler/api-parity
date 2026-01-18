@@ -740,3 +740,30 @@ Date: 20260118
 - `tests/test_schema_value_generator.py` — Unit tests for all constraint types
 - `tests/integration/test_enum_chain_generation.py` — Integration tests with enum-constrained spec
 - `tests/fixtures/enum_chain_spec.yaml` — Test fixture demonstrating enum constraints in chains
+
+---
+
+# Spec-Based Status Code for Synthetic Responses
+
+Keywords: status code synthetic response chain generation links PUT DELETE 201 202
+Date: 20260118
+
+During chain discovery, synthetic responses must use the correct status code to enable Schemathesis to find OpenAPI links. The original implementation used hardcoded logic: `status_code = 201 if case.method == "POST" else 200`. This broke chain discovery for operations with links on non-200 status codes.
+
+**Problem scenarios:**
+- PUT with links on 201 (update returns created resource)
+- DELETE with links on 202 (async deletion returns status tracking)
+
+When the synthetic response used 200, `_find_link_between()` couldn't find links defined on 201/202, breaking chain continuation.
+
+**Solution:** The `_find_status_code_with_links()` method examines the OpenAPI spec to find which status codes have links defined for each operation. It returns the lowest 2xx status code with links, falling back to the original logic (201 for POST, 200 otherwise) when no links are found.
+
+**Key behaviors:**
+1. Searches all 2xx responses for the operation looking for links
+2. Handles wildcard status codes like "2XX" (uses representative value 200)
+3. Ignores "default" responses (could be any status)
+4. Returns the minimum 2xx code with links (prefers lower codes for consistency)
+5. Falls back to 201/200 when operation has no links or isn't found in spec
+
+**Files affected:**
+- `api_parity/case_generator.py` — Added `_find_status_code_with_links()` method in `ChainCapturingStateMachine`
