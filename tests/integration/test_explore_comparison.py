@@ -14,7 +14,7 @@ from tests.integration.explore_helpers import (
 class TestStatusCodeMismatch:
     """Tests for status code mismatch detection."""
 
-    def test_status_code_mismatch_detected(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_status_code_mismatch_detected(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test that different status codes between targets are detected as mismatch.
 
         We test this by hitting a non-existent widget on both servers - they should
@@ -22,8 +22,8 @@ class TestStatusCodeMismatch:
         we'd get a mismatch.
         """
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
         out_dir = tmp_path / "artifacts"
@@ -63,7 +63,7 @@ class TestStatusCodeMismatch:
 class TestComparisonRuleVerification:
     """Tests verifying specific comparison rules work correctly."""
 
-    def test_numeric_tolerance_allows_small_differences(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_numeric_tolerance_allows_small_differences(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test that numeric_tolerance rule allows prices within tolerance.
 
         Variant B adds 0.001 to prices, which is within the 0.01 tolerance.
@@ -98,10 +98,10 @@ class TestComparisonRuleVerification:
         config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: {rules_path}
 """
@@ -138,7 +138,7 @@ comparison_rules: {rules_path}
                 # Should be MATCH due to tolerance
                 assert "MATCH" in line, f"Expected createWidget to MATCH due to tolerance, got: {line}"
 
-    def test_unordered_array_allows_shuffled_elements(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_unordered_array_allows_shuffled_elements(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test that unordered_array rule treats shuffled arrays as matching.
 
         Variant B shuffles arrays. With unordered_array rule, this should MATCH.
@@ -171,10 +171,10 @@ comparison_rules: {rules_path}
         config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: {rules_path}
 """
@@ -208,7 +208,7 @@ comparison_rules: {rules_path}
             if "getUserProfile:" in line:
                 assert "MATCH" in line, f"Expected getUserProfile to MATCH with unordered_array, got: {line}"
 
-    def test_operation_rules_override_defaults(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_operation_rules_override_defaults(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test that operation_rules completely override default_rules for that operation."""
         # Default rules require exact_match, operation rules use ignore
         rules = {
@@ -239,10 +239,10 @@ comparison_rules: {rules_path}
         config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: {rules_path}
 """
@@ -276,7 +276,7 @@ comparison_rules: {rules_path}
             if "healthCheck:" in line:
                 assert "MATCH" in line, f"Expected healthCheck to MATCH due to override, got: {line}"
 
-    def test_presence_required_fails_when_missing(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_presence_required_fails_when_missing(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test that presence: required fails when field is missing."""
         rules = {
             "version": "1",
@@ -300,10 +300,10 @@ comparison_rules: {rules_path}
         config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: {rules_path}
 """
@@ -337,7 +337,7 @@ comparison_rules: {rules_path}
             if "healthCheck:" in line:
                 assert "MISMATCH" in line, f"Expected healthCheck to MISMATCH, got: {line}"
 
-    def test_presence_optional_passes_when_missing(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_presence_optional_passes_when_missing(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test that presence: optional passes even when field is missing."""
         rules = {
             "version": "1",
@@ -364,10 +364,10 @@ comparison_rules: {rules_path}
         config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: {rules_path}
 """
@@ -405,7 +405,7 @@ comparison_rules: {rules_path}
 class TestHeaderMismatch:
     """Tests for header comparison and mismatch detection."""
 
-    def test_header_comparison_with_rules(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_header_comparison_with_rules(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test that header rules are applied during comparison."""
         rules = {
             "version": "1",
@@ -438,10 +438,10 @@ class TestHeaderMismatch:
         config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: {rules_path}
 """

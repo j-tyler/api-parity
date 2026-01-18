@@ -259,6 +259,11 @@ def _substitute_string(s: str) -> str:
 # Cross-Validation Functions
 # =============================================================================
 
+# Warnings vs Errors: Warnings are for stale config (operationId no longer in spec)
+# - run can proceed. Errors are for broken config (unknown predefined) - run would
+# fail at comparison time, so catch early.
+
+
 class ValidationWarning:
     """A non-fatal validation warning."""
 

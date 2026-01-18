@@ -17,7 +17,7 @@ from tests.integration.explore_helpers import (
 class TestConfigFeatures:
     """Tests for configuration features."""
 
-    def test_config_features_comprehensive(self, monkeypatch, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_config_features_comprehensive(self, monkeypatch, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test comprehensive configuration features.
 
         Combined test verifying:
@@ -26,8 +26,8 @@ class TestConfigFeatures:
         - Relative comparison_rules paths work
         """
         # Test 1: Environment variable substitution
-        monkeypatch.setenv("TEST_PORT_A", str(dual_servers["a"].port))
-        monkeypatch.setenv("TEST_PORT_B", str(dual_servers["b"].port))
+        monkeypatch.setenv("TEST_PORT_A", str(fixture_dual_mock_servers["a"].port))
+        monkeypatch.setenv("TEST_PORT_B", str(fixture_dual_mock_servers["b"].port))
 
         config = f"""
 targets:
@@ -66,8 +66,8 @@ comparison_rules: {COMPARISON_RULES}
 
         assert result.returncode == 0
         # Verify the substituted URLs appear in output
-        assert str(dual_servers["a"].port) in result.stdout
-        assert str(dual_servers["b"].port) in result.stdout
+        assert str(fixture_dual_mock_servers["a"].port) in result.stdout
+        assert str(fixture_dual_mock_servers["b"].port) in result.stdout
 
         # Test 2: Relative comparison_rules path
         config_dir = tmp_path / "configs"
@@ -79,10 +79,10 @@ comparison_rules: {COMPARISON_RULES}
         config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: ../rules/rules.json
 """
@@ -110,7 +110,7 @@ comparison_rules: ../rules/rules.json
         assert result.returncode == 0
         assert "Validation successful" in result.stdout
 
-    def test_config_error_handling(self, dual_servers, tmp_path):
+    def test_config_error_handling(self, fixture_dual_mock_servers, tmp_path):
         """Test error handling for configuration problems.
 
         Combined test verifying:
@@ -118,8 +118,8 @@ comparison_rules: ../rules/rules.json
         - Malformed comparison rules are rejected
         """
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
 
@@ -150,10 +150,10 @@ comparison_rules: ../rules/rules.json
         config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: {rules_path}
 """

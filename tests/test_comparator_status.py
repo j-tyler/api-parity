@@ -1,7 +1,7 @@
 """Unit tests for Comparator status code comparison and comparison order."""
 
 from api_parity.models import BodyRules, FieldRule, MismatchType, OperationRules
-from tests.conftest import make_response
+from tests.conftest import make_response_case
 
 # Import shared fixtures
 pytest_plugins = ["tests.comparator_fixtures"]
@@ -12,8 +12,8 @@ class TestStatusCodeComparison:
 
     def test_exact_match_no_rule(self, comparator):
         """Default behavior is exact match."""
-        response_a = make_response(status_code=200)
-        response_b = make_response(status_code=200)
+        response_a = make_response_case(status_code=200)
+        response_b = make_response_case(status_code=200)
         rules = OperationRules()
 
         result = comparator.compare(response_a, response_b, rules)
@@ -23,8 +23,8 @@ class TestStatusCodeComparison:
 
     def test_mismatch_no_rule(self, comparator):
         """Different status codes fail with default rules."""
-        response_a = make_response(status_code=200)
-        response_b = make_response(status_code=201)
+        response_a = make_response_case(status_code=200)
+        response_b = make_response_case(status_code=201)
         rules = OperationRules()
 
         result = comparator.compare(response_a, response_b, rules)
@@ -35,8 +35,8 @@ class TestStatusCodeComparison:
 
     def test_with_custom_rule(self, comparator, mock_cel):
         """Status code comparison uses custom rule when provided."""
-        response_a = make_response(status_code=200)
-        response_b = make_response(status_code=201)
+        response_a = make_response_case(status_code=200)
+        response_b = make_response_case(status_code=201)
         rules = OperationRules(
             status_code=FieldRule(predefined="ignore"),
         )
@@ -49,8 +49,8 @@ class TestStatusCodeComparison:
 
     def test_rule_returns_false(self, comparator, mock_cel):
         """Status code mismatch when rule returns False."""
-        response_a = make_response(status_code=200)
-        response_b = make_response(status_code=201)
+        response_a = make_response_case(status_code=200)
+        response_b = make_response_case(status_code=201)
         rules = OperationRules(
             status_code=FieldRule(predefined="exact_match"),
         )
@@ -67,8 +67,8 @@ class TestComparisonOrder:
 
     def test_status_checked_before_headers(self, comparator, mock_cel):
         """Status code is checked before headers."""
-        response_a = make_response(status_code=200, headers={"x-test": ["a"]})
-        response_b = make_response(status_code=500, headers={"x-test": ["b"]})
+        response_a = make_response_case(status_code=200, headers={"x-test": ["a"]})
+        response_b = make_response_case(status_code=500, headers={"x-test": ["b"]})
         rules = OperationRules(
             headers={"x-test": FieldRule(predefined="exact_match")},
         )
@@ -82,12 +82,12 @@ class TestComparisonOrder:
 
     def test_headers_checked_before_body(self, comparator, mock_cel):
         """Headers are checked before body."""
-        response_a = make_response(
+        response_a = make_response_case(
             status_code=200,
             headers={"content-type": ["a"]},
             body={"id": 1},
         )
-        response_b = make_response(
+        response_b = make_response_case(
             status_code=200,
             headers={"content-type": ["b"]},
             body={"id": 2},

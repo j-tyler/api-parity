@@ -46,10 +46,6 @@ def make_response_case(
     )
 
 
-# Backward-compatible alias (used by many existing tests)
-make_response = make_response_case
-
-
 class PortReservation:
     """Holds a reserved port with socket kept open to prevent races.
 
@@ -253,35 +249,6 @@ def fixture_cel_evaluator_path() -> Path:
             "Run: go build -o cel-evaluator ./cmd/cel-evaluator"
         )
     return cel_path
-
-
-# Backward-compatible fixture aliases
-
-
-@pytest.fixture(scope="session")
-def test_api_spec(fixture_test_api_spec: Path) -> Path:
-    """Alias for fixture_test_api_spec (backward compatibility)."""
-    return fixture_test_api_spec
-
-
-@pytest.fixture(scope="session")
-def comparison_rules_path(fixture_comparison_rules_path: Path) -> Path:
-    """Alias for fixture_comparison_rules_path (backward compatibility)."""
-    return fixture_comparison_rules_path
-
-
-@pytest.fixture(scope="session")
-def dual_servers(
-    fixture_dual_mock_servers: dict[str, MockServer],
-) -> dict[str, MockServer]:
-    """Alias for fixture_dual_mock_servers (backward compatibility)."""
-    return fixture_dual_mock_servers
-
-
-@pytest.fixture(scope="function")
-def cel_evaluator_exists(fixture_cel_evaluator_path: Path) -> Path:
-    """Alias for fixture_cel_evaluator_path (backward compatibility)."""
-    return fixture_cel_evaluator_path
 
 
 # =============================================================================

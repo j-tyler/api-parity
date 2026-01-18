@@ -175,6 +175,9 @@ class Executor:
     ) -> tuple[ResponseCase, ResponseCase]:
         """Execute a request against both targets (serially, A then B).
 
+        Serial execution simplifies debugging (timing differences don't mask issues)
+        and keeps rate limiting predictable.
+
         Args:
             request: The request to execute.
 

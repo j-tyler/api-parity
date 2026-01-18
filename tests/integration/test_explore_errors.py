@@ -16,7 +16,7 @@ from tests.integration.explore_helpers import (
 class TestErrorHandling:
     """Tests for error handling edge cases."""
 
-    def test_connection_and_input_errors(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_connection_and_input_errors(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test error handling for connection and input errors.
 
         Combined test verifying:
@@ -91,8 +91,8 @@ comparison_rules: {COMPARISON_RULES}
         spec_path.write_text("not a valid openapi spec")
 
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
 
@@ -115,7 +115,7 @@ comparison_rules: {COMPARISON_RULES}
         assert result.returncode == 1
         assert "Error" in result.stderr
 
-    def test_invalid_cel_expression_recorded_as_mismatch(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_invalid_cel_expression_recorded_as_mismatch(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test that invalid CEL expressions are recorded as mismatches with error info."""
         rules = {
             "version": "1",
@@ -139,10 +139,10 @@ comparison_rules: {COMPARISON_RULES}
         config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: {rules_path}
 """

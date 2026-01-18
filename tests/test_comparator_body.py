@@ -1,7 +1,7 @@
 """Unit tests for Comparator body comparison and presence modes."""
 
 from api_parity.models import BodyRules, FieldRule, MismatchType, OperationRules, PresenceMode
-from tests.conftest import make_response
+from tests.conftest import make_response_case
 
 # Import shared fixtures
 pytest_plugins = ["tests.comparator_fixtures"]
@@ -12,8 +12,8 @@ class TestPresenceModes:
 
     def test_parity_both_present(self, comparator, mock_cel):
         """PARITY: both present passes."""
-        response_a = make_response(body={"name": "Alice"})
-        response_b = make_response(body={"name": "Bob"})
+        response_a = make_response_case(body={"name": "Alice"})
+        response_b = make_response_case(body={"name": "Bob"})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.name": FieldRule(presence=PresenceMode.PARITY, predefined="ignore")}
@@ -27,8 +27,8 @@ class TestPresenceModes:
 
     def test_parity_both_absent(self, comparator):
         """PARITY: both absent passes."""
-        response_a = make_response(body={"foo": 1})
-        response_b = make_response(body={"bar": 2})
+        response_a = make_response_case(body={"foo": 1})
+        response_b = make_response_case(body={"bar": 2})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.name": FieldRule(presence=PresenceMode.PARITY)}
@@ -41,8 +41,8 @@ class TestPresenceModes:
 
     def test_parity_one_present_fails(self, comparator):
         """PARITY: one present, one absent fails."""
-        response_a = make_response(body={"name": "Alice"})
-        response_b = make_response(body={})
+        response_a = make_response_case(body={"name": "Alice"})
+        response_b = make_response_case(body={})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.name": FieldRule(presence=PresenceMode.PARITY)}
@@ -57,8 +57,8 @@ class TestPresenceModes:
 
     def test_required_both_present(self, comparator, mock_cel):
         """REQUIRED: both present passes."""
-        response_a = make_response(body={"id": 1})
-        response_b = make_response(body={"id": 2})
+        response_a = make_response_case(body={"id": 1})
+        response_b = make_response_case(body={"id": 2})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.id": FieldRule(presence=PresenceMode.REQUIRED, predefined="ignore")}
@@ -72,8 +72,8 @@ class TestPresenceModes:
 
     def test_required_one_absent_fails(self, comparator):
         """REQUIRED: one absent fails."""
-        response_a = make_response(body={"id": 1})
-        response_b = make_response(body={})
+        response_a = make_response_case(body={"id": 1})
+        response_b = make_response_case(body={})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.id": FieldRule(presence=PresenceMode.REQUIRED)}
@@ -87,8 +87,8 @@ class TestPresenceModes:
 
     def test_required_both_absent_fails(self, comparator):
         """REQUIRED: both absent fails."""
-        response_a = make_response(body={})
-        response_b = make_response(body={})
+        response_a = make_response_case(body={})
+        response_b = make_response_case(body={})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.id": FieldRule(presence=PresenceMode.REQUIRED)}
@@ -102,8 +102,8 @@ class TestPresenceModes:
 
     def test_forbidden_both_absent(self, comparator):
         """FORBIDDEN: both absent passes."""
-        response_a = make_response(body={"foo": 1})
-        response_b = make_response(body={"bar": 2})
+        response_a = make_response_case(body={"foo": 1})
+        response_b = make_response_case(body={"bar": 2})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.secret": FieldRule(presence=PresenceMode.FORBIDDEN)}
@@ -116,8 +116,8 @@ class TestPresenceModes:
 
     def test_forbidden_one_present_fails(self, comparator):
         """FORBIDDEN: one present fails."""
-        response_a = make_response(body={"secret": "value"})
-        response_b = make_response(body={})
+        response_a = make_response_case(body={"secret": "value"})
+        response_b = make_response_case(body={})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.secret": FieldRule(presence=PresenceMode.FORBIDDEN)}
@@ -131,8 +131,8 @@ class TestPresenceModes:
 
     def test_forbidden_both_present_fails(self, comparator):
         """FORBIDDEN: both present fails."""
-        response_a = make_response(body={"secret": "a"})
-        response_b = make_response(body={"secret": "b"})
+        response_a = make_response_case(body={"secret": "a"})
+        response_b = make_response_case(body={"secret": "b"})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.secret": FieldRule(presence=PresenceMode.FORBIDDEN)}
@@ -145,8 +145,8 @@ class TestPresenceModes:
 
     def test_optional_both_present(self, comparator, mock_cel):
         """OPTIONAL: both present, compares values."""
-        response_a = make_response(body={"nickname": "Al"})
-        response_b = make_response(body={"nickname": "Bob"})
+        response_a = make_response_case(body={"nickname": "Al"})
+        response_b = make_response_case(body={"nickname": "Bob"})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.nickname": FieldRule(presence=PresenceMode.OPTIONAL, predefined="exact_match")}
@@ -160,8 +160,8 @@ class TestPresenceModes:
 
     def test_optional_one_absent(self, comparator):
         """OPTIONAL: one absent passes without value comparison."""
-        response_a = make_response(body={"nickname": "Al"})
-        response_b = make_response(body={})
+        response_a = make_response_case(body={"nickname": "Al"})
+        response_b = make_response_case(body={})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.nickname": FieldRule(presence=PresenceMode.OPTIONAL, predefined="exact_match")}
@@ -174,8 +174,8 @@ class TestPresenceModes:
 
     def test_optional_both_absent(self, comparator):
         """OPTIONAL: both absent passes."""
-        response_a = make_response(body={})
-        response_b = make_response(body={})
+        response_a = make_response_case(body={})
+        response_b = make_response_case(body={})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.nickname": FieldRule(presence=PresenceMode.OPTIONAL, predefined="exact_match")}
@@ -188,8 +188,8 @@ class TestPresenceModes:
 
     def test_presence_only_rule(self, comparator):
         """Presence-only rule (no predefined/expr) only checks presence."""
-        response_a = make_response(body={"id": 1})
-        response_b = make_response(body={"id": 999})  # Different value
+        response_a = make_response_case(body={"id": 1})
+        response_b = make_response_case(body={"id": 999})  # Different value
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.id": FieldRule(presence=PresenceMode.PARITY)}  # No predefined/expr
@@ -207,8 +207,8 @@ class TestBodyComparison:
 
     def test_both_bodies_none(self, comparator):
         """Both None bodies match."""
-        response_a = make_response(body=None)
-        response_b = make_response(body=None)
+        response_a = make_response_case(body=None)
+        response_b = make_response_case(body=None)
         rules = OperationRules()
 
         result = comparator.compare(response_a, response_b, rules)
@@ -217,8 +217,8 @@ class TestBodyComparison:
 
     def test_one_body_none_mismatch(self, comparator):
         """One body None, one not is a mismatch."""
-        response_a = make_response(body={"id": 1})
-        response_b = make_response(body=None)
+        response_a = make_response_case(body={"id": 1})
+        response_b = make_response_case(body=None)
         rules = OperationRules()
 
         result = comparator.compare(response_a, response_b, rules)
@@ -229,8 +229,8 @@ class TestBodyComparison:
 
     def test_no_body_rules(self, comparator):
         """No body rules means body passes."""
-        response_a = make_response(body={"different": 1})
-        response_b = make_response(body={"values": 2})
+        response_a = make_response_case(body={"different": 1})
+        response_b = make_response_case(body={"values": 2})
         rules = OperationRules()  # No body rules
 
         result = comparator.compare(response_a, response_b, rules)
@@ -239,8 +239,8 @@ class TestBodyComparison:
 
     def test_simple_field_match(self, comparator, mock_cel):
         """Simple field comparison works."""
-        response_a = make_response(body={"name": "Alice"})
-        response_b = make_response(body={"name": "Alice"})
+        response_a = make_response_case(body={"name": "Alice"})
+        response_b = make_response_case(body={"name": "Alice"})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.name": FieldRule(predefined="exact_match")}
@@ -255,8 +255,8 @@ class TestBodyComparison:
 
     def test_nested_field_path(self, comparator, mock_cel):
         """Nested JSONPath works."""
-        response_a = make_response(body={"user": {"profile": {"name": "Alice"}}})
-        response_b = make_response(body={"user": {"profile": {"name": "Alice"}}})
+        response_a = make_response_case(body={"user": {"profile": {"name": "Alice"}}})
+        response_b = make_response_case(body={"user": {"profile": {"name": "Alice"}}})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.user.profile.name": FieldRule(predefined="exact_match")}
@@ -270,8 +270,8 @@ class TestBodyComparison:
 
     def test_array_index_path(self, comparator, mock_cel):
         """Array index path works."""
-        response_a = make_response(body={"items": [{"id": 1}, {"id": 2}]})
-        response_b = make_response(body={"items": [{"id": 1}, {"id": 2}]})
+        response_a = make_response_case(body={"items": [{"id": 1}, {"id": 2}]})
+        response_b = make_response_case(body={"items": [{"id": 1}, {"id": 2}]})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.items[0].id": FieldRule(predefined="exact_match")}
@@ -285,8 +285,8 @@ class TestBodyComparison:
 
     def test_multiple_field_rules(self, comparator, mock_cel):
         """Multiple field rules all checked."""
-        response_a = make_response(body={"id": 1, "name": "Alice", "age": 30})
-        response_b = make_response(body={"id": 1, "name": "Alice", "age": 30})
+        response_a = make_response_case(body={"id": 1, "name": "Alice", "age": 30})
+        response_b = make_response_case(body={"id": 1, "name": "Alice", "age": 30})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={
@@ -305,8 +305,8 @@ class TestBodyComparison:
 
     def test_one_field_mismatch(self, comparator, mock_cel):
         """One field mismatch causes overall mismatch."""
-        response_a = make_response(body={"id": 1, "name": "Alice"})
-        response_b = make_response(body={"id": 1, "name": "Bob"})
+        response_a = make_response_case(body={"id": 1, "name": "Alice"})
+        response_b = make_response_case(body={"id": 1, "name": "Bob"})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={
@@ -332,8 +332,8 @@ class TestNullValues:
 
     def test_null_vs_null(self, comparator, mock_cel):
         """null == null comparison."""
-        response_a = make_response(body={"value": None})
-        response_b = make_response(body={"value": None})
+        response_a = make_response_case(body={"value": None})
+        response_b = make_response_case(body={"value": None})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.value": FieldRule(predefined="exact_match")}
@@ -349,8 +349,8 @@ class TestNullValues:
 
     def test_null_vs_value(self, comparator, mock_cel):
         """null vs non-null comparison."""
-        response_a = make_response(body={"value": None})
-        response_b = make_response(body={"value": 42})
+        response_a = make_response_case(body={"value": None})
+        response_b = make_response_case(body={"value": 42})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.value": FieldRule(predefined="exact_match")}
@@ -364,8 +364,8 @@ class TestNullValues:
 
     def test_null_vs_missing_with_parity(self, comparator):
         """null (present with null value) vs missing field."""
-        response_a = make_response(body={"value": None})  # Field present, value is null
-        response_b = make_response(body={})  # Field missing
+        response_a = make_response_case(body={"value": None})  # Field present, value is null
+        response_b = make_response_case(body={})  # Field missing
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.value": FieldRule(presence=PresenceMode.PARITY)}
@@ -384,8 +384,8 @@ class TestBinaryBodyComparison:
 
     def test_both_no_binary(self, comparator):
         """Neither response has binary body - match."""
-        response_a = make_response(body={"id": 1})
-        response_b = make_response(body={"id": 1})
+        response_a = make_response_case(body={"id": 1})
+        response_b = make_response_case(body={"id": 1})
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         )
@@ -398,8 +398,8 @@ class TestBinaryBodyComparison:
     def test_one_has_binary_other_empty(self, comparator):
         """One response has binary content, other has nothing - mismatch."""
         # Both have body=None (neither is JSON), but only one has binary content
-        response_a = make_response(body=None, body_base64="SGVsbG8=")  # "Hello" in base64
-        response_b = make_response(body=None)  # No content at all
+        response_a = make_response_case(body=None, body_base64="SGVsbG8=")  # "Hello" in base64
+        response_b = make_response_case(body=None)  # No content at all
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         )
@@ -412,8 +412,8 @@ class TestBinaryBodyComparison:
 
     def test_one_json_one_binary_caught_in_body_phase(self, comparator):
         """One response is JSON, other is binary - caught in body comparison phase."""
-        response_a = make_response(body=None, body_base64="SGVsbG8=")  # Binary
-        response_b = make_response(body={"id": 1})  # JSON
+        response_a = make_response_case(body=None, body_base64="SGVsbG8=")  # Binary
+        response_b = make_response_case(body={"id": 1})  # JSON
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         )
@@ -427,8 +427,8 @@ class TestBinaryBodyComparison:
 
     def test_no_binary_rule_both_have_binary(self, comparator):
         """Both have binary but no rule specified - match (not compared)."""
-        response_a = make_response(body=None, body_base64="SGVsbG8=")
-        response_b = make_response(body=None, body_base64="V29ybGQ=")  # Different content
+        response_a = make_response_case(body=None, body_base64="SGVsbG8=")
+        response_b = make_response_case(body=None, body_base64="V29ybGQ=")  # Different content
         rules = OperationRules()  # No binary_rule specified
 
         result = comparator.compare(response_a, response_b, rules)
@@ -437,8 +437,8 @@ class TestBinaryBodyComparison:
 
     def test_binary_exact_match_same(self, comparator, mock_cel):
         """Binary exact match with identical content."""
-        response_a = make_response(body=None, body_base64="SGVsbG8=")
-        response_b = make_response(body=None, body_base64="SGVsbG8=")
+        response_a = make_response_case(body=None, body_base64="SGVsbG8=")
+        response_b = make_response_case(body=None, body_base64="SGVsbG8=")
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         )
@@ -451,8 +451,8 @@ class TestBinaryBodyComparison:
 
     def test_binary_exact_match_different(self, comparator, mock_cel):
         """Binary exact match with different content - mismatch."""
-        response_a = make_response(body=None, body_base64="SGVsbG8=")
-        response_b = make_response(body=None, body_base64="V29ybGQ=")
+        response_a = make_response_case(body=None, body_base64="SGVsbG8=")
+        response_b = make_response_case(body=None, body_base64="V29ybGQ=")
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         )
@@ -467,8 +467,8 @@ class TestBinaryBodyComparison:
     def test_binary_length_match(self, comparator, mock_cel):
         """Binary length match (CEL-based)."""
         # Both 8 chars in base64
-        response_a = make_response(body=None, body_base64="SGVsbG8=")
-        response_b = make_response(body=None, body_base64="V29ybGQ=")
+        response_a = make_response_case(body=None, body_base64="SGVsbG8=")
+        response_b = make_response_case(body=None, body_base64="V29ybGQ=")
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="binary_length_match"))
         )
@@ -480,8 +480,8 @@ class TestBinaryBodyComparison:
 
     def test_binary_custom_cel(self, comparator, mock_cel):
         """Binary comparison with custom CEL expression."""
-        response_a = make_response(body=None, body_base64="SGVsbG8=")
-        response_b = make_response(body=None, body_base64="SGVsbG9Xb3JsZA==")
+        response_a = make_response_case(body=None, body_base64="SGVsbG8=")
+        response_b = make_response_case(body=None, body_base64="SGVsbG9Xb3JsZA==")
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(expr='a.startsWith("SGVs")'))
         )
@@ -493,8 +493,8 @@ class TestBinaryBodyComparison:
 
     def test_binary_summary_format(self, comparator, mock_cel):
         """Summary format includes rule name."""
-        response_a = make_response(body=None, body_base64="SGVsbG8=")
-        response_b = make_response(body=None, body_base64="V29ybGQ=")
+        response_a = make_response_case(body=None, body_base64="SGVsbG8=")
+        response_b = make_response_case(body=None, body_base64="V29ybGQ=")
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         )
@@ -506,8 +506,8 @@ class TestBinaryBodyComparison:
 
     def test_empty_base64_vs_empty_base64(self, comparator, mock_cel):
         """Empty base64 strings ('') are compared, not treated as missing."""
-        response_a = make_response(body=None, body_base64="")
-        response_b = make_response(body=None, body_base64="")
+        response_a = make_response_case(body=None, body_base64="")
+        response_b = make_response_case(body=None, body_base64="")
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         )
@@ -521,8 +521,8 @@ class TestBinaryBodyComparison:
 
     def test_empty_base64_vs_none(self, comparator):
         """Empty string is distinct from None - presence mismatch."""
-        response_a = make_response(body=None, body_base64="")
-        response_b = make_response(body=None, body_base64=None)
+        response_a = make_response_case(body=None, body_base64="")
+        response_b = make_response_case(body=None, body_base64=None)
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         )
@@ -534,8 +534,8 @@ class TestBinaryBodyComparison:
 
     def test_binary_nonempty_with_empty_string(self, comparator, mock_cel):
         """binary_nonempty fails for empty strings (size('') == 0)."""
-        response_a = make_response(body=None, body_base64="")
-        response_b = make_response(body=None, body_base64="")
+        response_a = make_response_case(body=None, body_base64="")
+        response_b = make_response_case(body=None, body_base64="")
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="binary_nonempty"))
         )
