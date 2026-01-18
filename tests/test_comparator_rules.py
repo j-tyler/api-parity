@@ -5,7 +5,7 @@ Tests predefined rule expansion, custom expressions, and CEL error capture.
 
 from api_parity.cel_evaluator import CELEvaluationError
 from api_parity.models import BodyRules, FieldRule, MismatchType, OperationRules
-from tests.conftest import make_response
+from tests.conftest import make_response_case
 
 # Import shared fixtures
 pytest_plugins = ["tests.comparator_fixtures"]
@@ -16,8 +16,8 @@ class TestPredefinedExpansion:
 
     def test_no_params(self, comparator, mock_cel):
         """Predefined with no params expands correctly."""
-        response_a = make_response(body={"value": 1})
-        response_b = make_response(body={"value": 1})
+        response_a = make_response_case(body={"value": 1})
+        response_b = make_response_case(body={"value": 1})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.value": FieldRule(predefined="exact_match")}
@@ -31,8 +31,8 @@ class TestPredefinedExpansion:
 
     def test_numeric_param(self, comparator, mock_cel):
         """Numeric parameter substituted correctly."""
-        response_a = make_response(body={"value": 1.0})
-        response_b = make_response(body={"value": 1.005})
+        response_a = make_response_case(body={"value": 1.0})
+        response_b = make_response_case(body={"value": 1.005})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.value": FieldRule(predefined="numeric_tolerance", tolerance=0.01)}
@@ -50,8 +50,8 @@ class TestPredefinedExpansion:
 
     def test_string_param_escaped(self, comparator, mock_cel):
         """String parameters are properly escaped."""
-        response_a = make_response(body={"id": "abc-123"})
-        response_b = make_response(body={"id": "xyz-456"})
+        response_a = make_response_case(body={"id": "abc-123"})
+        response_b = make_response_case(body={"id": "xyz-456"})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.id": FieldRule(predefined="both_match_regex", pattern="^[a-z]+-\\d+$")}
@@ -68,8 +68,8 @@ class TestPredefinedExpansion:
 
     def test_string_param_with_quotes_escaped(self, comparator, mock_cel):
         """String parameters with quotes are escaped."""
-        response_a = make_response(body={"value": 'say "hello"'})
-        response_b = make_response(body={"value": 'say "hi"'})
+        response_a = make_response_case(body={"value": 'say "hello"'})
+        response_b = make_response_case(body={"value": 'say "hi"'})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.value": FieldRule(predefined="both_match_regex", pattern='say ".*"')}
@@ -86,8 +86,8 @@ class TestPredefinedExpansion:
 
     def test_unknown_predefined_error(self, comparator):
         """Unknown predefined raises ComparatorConfigError."""
-        response_a = make_response(body={"value": 1})
-        response_b = make_response(body={"value": 1})
+        response_a = make_response_case(body={"value": 1})
+        response_b = make_response_case(body={"value": 1})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.value": FieldRule(predefined="nonexistent_rule")}
@@ -102,8 +102,8 @@ class TestPredefinedExpansion:
 
     def test_missing_required_param(self, comparator):
         """Missing required parameter raises error."""
-        response_a = make_response(body={"value": 1.0})
-        response_b = make_response(body={"value": 1.0})
+        response_a = make_response_case(body={"value": 1.0})
+        response_b = make_response_case(body={"value": 1.0})
         rules = OperationRules(
             body=BodyRules(
                 # numeric_tolerance requires 'tolerance' param
@@ -123,8 +123,8 @@ class TestCustomExpressions:
 
     def test_custom_expr_used(self, comparator, mock_cel):
         """Custom expression is passed directly to CEL."""
-        response_a = make_response(body={"value": 10})
-        response_b = make_response(body={"value": 20})
+        response_a = make_response_case(body={"value": 10})
+        response_b = make_response_case(body={"value": 20})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.value": FieldRule(expr="a < b")}
@@ -138,8 +138,8 @@ class TestCustomExpressions:
 
     def test_custom_expr_reports_as_custom(self, comparator, mock_cel):
         """Custom expression failures report as 'custom'."""
-        response_a = make_response(body={"value": 10})
-        response_b = make_response(body={"value": 5})
+        response_a = make_response_case(body={"value": 10})
+        response_b = make_response_case(body={"value": 5})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.value": FieldRule(expr="a < b")}
@@ -158,8 +158,8 @@ class TestCELErrorHandling:
 
     def test_status_code_cel_error(self, comparator, mock_cel):
         """CEL error in status code comparison is captured."""
-        response_a = make_response(status_code=200)
-        response_b = make_response(status_code=201)
+        response_a = make_response_case(status_code=200)
+        response_b = make_response_case(status_code=201)
         rules = OperationRules(
             status_code=FieldRule(expr="invalid_expression"),
         )
@@ -172,8 +172,8 @@ class TestCELErrorHandling:
 
     def test_header_cel_error(self, comparator, mock_cel):
         """CEL error in header comparison is captured."""
-        response_a = make_response(headers={"x-test": ["value"]})
-        response_b = make_response(headers={"x-test": ["value"]})
+        response_a = make_response_case(headers={"x-test": ["value"]})
+        response_b = make_response_case(headers={"x-test": ["value"]})
         rules = OperationRules(
             headers={"x-test": FieldRule(expr="broken")},
         )
@@ -186,8 +186,8 @@ class TestCELErrorHandling:
 
     def test_body_cel_error(self, comparator, mock_cel):
         """CEL error in body comparison is captured."""
-        response_a = make_response(body={"value": 1})
-        response_b = make_response(body={"value": 2})
+        response_a = make_response_case(body={"value": 1})
+        response_b = make_response_case(body={"value": 2})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.value": FieldRule(expr="a.nonexistent()")}

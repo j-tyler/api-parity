@@ -28,25 +28,37 @@ from pydantic import BaseModel, Field
 
 # --- Storage ---
 
-class Storage:
-    """In-memory storage for test data."""
+# Predictable UUIDs for seed data so tests can reference known entities.
+# Pattern: prefix encodes entity type, suffix encodes sequence number.
+#   Users:   00000000-0000-0000-0000-00000000000{N}
+#   Widgets: 10000000-0000-0000-0000-00000000000{N}
+# Tests can hardcode these IDs when they need a known entity without creating one.
+SEED_USER_ID_PREFIX = "00000000-0000-0000-0000-00000000000"
+SEED_WIDGET_ID_PREFIX = "10000000-0000-0000-0000-00000000000"
 
-    def __init__(self):
-        self.widgets: dict[str, dict] = {}
-        self.users: dict[str, dict] = {}
-        self.orders: dict[str, dict] = {}
+
+class MockServerStorage:
+    """In-memory storage for mock server test data.
+
+    Named explicitly to avoid grep collisions with generic "Storage" classes.
+    """
+
+    def __init__(self) -> None:
+        self.widgets: dict[str, dict[str, Any]] = {}
+        self.users: dict[str, dict[str, Any]] = {}
+        self.orders: dict[str, dict[str, Any]] = {}
         self.start_time = datetime.now(timezone.utc)
         self._seed_data()
 
-    def _seed_data(self):
-        """Seed with some initial data for GET tests."""
-        # Seed users
+    def _seed_data(self) -> None:
+        """Seed initial data so GET tests work without prior POST calls."""
+        # Seed users with predictable IDs
         for i, (username, roles) in enumerate([
             ("alice", ["admin", "user"]),
             ("bob", ["user", "moderator"]),
             ("charlie", ["guest"]),
         ]):
-            user_id = f"00000000-0000-0000-0000-00000000000{i+1}"
+            user_id = f"{SEED_USER_ID_PREFIX}{i+1}"
             self.users[user_id] = {
                 "id": user_id,
                 "username": username,
@@ -61,13 +73,13 @@ class Storage:
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
 
-        # Seed widgets
+        # Seed widgets with predictable IDs
         for i, (name, category, price) in enumerate([
             ("Gizmo Pro", "gadgets", 29.99),
             ("Super Wrench", "tools", 15.50),
             ("Bolt Pack", "parts", 5.99),
         ]):
-            widget_id = f"10000000-0000-0000-0000-00000000000{i+1}"
+            widget_id = f"{SEED_WIDGET_ID_PREFIX}{i+1}"
             self.widgets[widget_id] = {
                 "id": widget_id,
                 "name": name,
@@ -82,42 +94,71 @@ class Storage:
             }
 
 
-storage = Storage()
+storage = MockServerStorage()
 
 
 # --- Variant behavior ---
 
-class VariantBehavior:
-    """Controls variant-specific behavior for testing comparisons."""
+class MockServerVariantBehavior:
+    """Controls variant-specific behavior for testing api-parity comparison rules.
 
-    def __init__(self, variant: str = "a"):
+    The purpose of variants is to simulate two API implementations with controlled
+    differences, allowing tests to verify that comparison rules detect (or tolerate)
+    specific types of discrepancies.
+
+    Variant "a" (default): Canonical behavior - returns values exactly as stored.
+    Variant "b": Introduces controlled differences to test comparison rules:
+        - Price differences within numeric tolerance thresholds
+        - Array element reordering to test unordered_array rules
+        - Score variations within tolerance bounds
+    """
+
+    def __init__(self, variant: str = "a") -> None:
         self.variant = variant
 
     def adjust_price(self, price: float) -> float:
-        """Variant B adds small price difference within tolerance."""
+        """Variant B adds 0.001 to prices to test numeric tolerance rules.
+
+        The 0.001 delta is designed to be within a typical 0.01 tolerance threshold,
+        so tests can verify that "numeric" comparison rules correctly allow this
+        difference while "exact" rules would flag it as a mismatch.
+        """
         if self.variant == "b":
-            # Add small difference within 0.01 tolerance (no rounding to preserve difference)
             return price + 0.001
         return price
 
-    def shuffle_array(self, arr: list) -> list:
-        """Variant B shuffles arrays."""
+    def shuffle_array(self, arr: list[Any]) -> list[Any]:
+        """Variant B shuffles arrays to test unordered_array comparison rules.
+
+        Tests can verify that unordered_array rules pass despite different ordering,
+        while exact array rules would flag the reordering as a mismatch.
+        """
         if self.variant == "b" and len(arr) > 1:
             result = arr.copy()
+            # No fixed seed: tests verify shuffle-tolerance, not specific orderings.
+            # Randomness makes tests more robust by exercising different permutations.
             random.shuffle(result)
             return result
         return arr
 
     def generate_request_id(self) -> str:
-        """Always generates unique request IDs."""
+        """Generate unique request ID - differs on every call in both variants.
+
+        Tests use 'ignore' rules on request_id fields since they're intentionally
+        volatile and should not cause comparison failures.
+        """
         return str(uuid.uuid4())
 
     def generate_confirmation_code(self) -> str:
-        """Always generates unique confirmation codes."""
+        """Generate unique confirmation code - differs on every call in both variants.
+
+        Similar to request_id, confirmation codes are volatile and tests must
+        configure 'ignore' rules to avoid false mismatch reports.
+        """
         return f"CONF-{uuid.uuid4().hex[:8].upper()}"
 
 
-behavior = VariantBehavior()
+behavior = MockServerVariantBehavior()
 
 
 # --- Request/Response Models ---
@@ -333,7 +374,8 @@ async def get_user_profile(user_id: str, response: Response):
     user = storage.users[user_id].copy()
     user["roles"] = behavior.shuffle_array(user["roles"])
 
-    # Apply small score variations for variant b
+    # Variant B applies score variations within typical tolerance bounds.
+    # These deltas test that numeric rules with tolerances pass while exact rules fail.
     if behavior.variant == "b":
         user["scores"] = {
             "reputation": round(user["scores"]["reputation"] + 0.05, 1),
@@ -440,8 +482,10 @@ def main():
                         help="Behavior variant (a=standard, b=slight differences)")
     args = parser.parse_args()
 
+    # Global behavior object is replaced at runtime to support --variant flag.
+    # This is intentional module-level state for the mock server subprocess.
     global behavior
-    behavior = VariantBehavior(args.variant)
+    behavior = MockServerVariantBehavior(args.variant)
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 

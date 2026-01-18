@@ -1,7 +1,7 @@
 """Unit tests for Comparator header comparison."""
 
 from api_parity.models import FieldRule, MismatchType, OperationRules, PresenceMode
-from tests.conftest import make_response
+from tests.conftest import make_response_case
 
 # Import shared fixtures
 pytest_plugins = ["tests.comparator_fixtures"]
@@ -12,8 +12,8 @@ class TestHeaderComparison:
 
     def test_no_header_rules(self, comparator):
         """No header rules means headers pass."""
-        response_a = make_response(headers={"content-type": ["application/json"]})
-        response_b = make_response(headers={"content-type": ["text/plain"]})
+        response_a = make_response_case(headers={"content-type": ["application/json"]})
+        response_b = make_response_case(headers={"content-type": ["text/plain"]})
         rules = OperationRules()
 
         result = comparator.compare(response_a, response_b, rules)
@@ -22,8 +22,8 @@ class TestHeaderComparison:
 
     def test_header_exact_match(self, comparator, mock_cel):
         """Headers match when values are equal."""
-        response_a = make_response(headers={"content-type": ["application/json"]})
-        response_b = make_response(headers={"content-type": ["application/json"]})
+        response_a = make_response_case(headers={"content-type": ["application/json"]})
+        response_b = make_response_case(headers={"content-type": ["application/json"]})
         rules = OperationRules(
             headers={"content-type": FieldRule(predefined="exact_match")},
         )
@@ -35,8 +35,8 @@ class TestHeaderComparison:
 
     def test_header_mismatch(self, comparator, mock_cel):
         """Headers don't match when values differ."""
-        response_a = make_response(headers={"content-type": ["application/json"]})
-        response_b = make_response(headers={"content-type": ["text/plain"]})
+        response_a = make_response_case(headers={"content-type": ["application/json"]})
+        response_b = make_response_case(headers={"content-type": ["text/plain"]})
         rules = OperationRules(
             headers={"content-type": FieldRule(predefined="exact_match")},
         )
@@ -49,8 +49,8 @@ class TestHeaderComparison:
 
     def test_header_case_insensitive(self, comparator, mock_cel):
         """Header names are case-insensitive."""
-        response_a = make_response(headers={"Content-Type": ["application/json"]})
-        response_b = make_response(headers={"content-type": ["application/json"]})
+        response_a = make_response_case(headers={"Content-Type": ["application/json"]})
+        response_b = make_response_case(headers={"content-type": ["application/json"]})
         rules = OperationRules(
             headers={"CONTENT-TYPE": FieldRule(predefined="exact_match")},
         )
@@ -62,8 +62,8 @@ class TestHeaderComparison:
 
     def test_header_multi_value_uses_first(self, comparator, mock_cel):
         """Multi-value headers use only the first value."""
-        response_a = make_response(headers={"x-custom": ["first", "second"]})
-        response_b = make_response(headers={"x-custom": ["first", "different"]})
+        response_a = make_response_case(headers={"x-custom": ["first", "second"]})
+        response_b = make_response_case(headers={"x-custom": ["first", "different"]})
         rules = OperationRules(
             headers={"x-custom": FieldRule(predefined="exact_match")},
         )
@@ -80,8 +80,8 @@ class TestHeaderPresence:
 
     def test_header_required_missing_in_a(self, comparator):
         """Header REQUIRED but missing in A fails."""
-        response_a = make_response(headers={})
-        response_b = make_response(headers={"x-request-id": ["abc"]})
+        response_a = make_response_case(headers={})
+        response_b = make_response_case(headers={"x-request-id": ["abc"]})
         rules = OperationRules(
             headers={"x-request-id": FieldRule(presence=PresenceMode.REQUIRED)},
         )
@@ -94,8 +94,8 @@ class TestHeaderPresence:
 
     def test_header_optional_missing_in_b(self, comparator):
         """Header OPTIONAL and missing in B passes."""
-        response_a = make_response(headers={"x-optional": ["value"]})
-        response_b = make_response(headers={})
+        response_a = make_response_case(headers={"x-optional": ["value"]})
+        response_b = make_response_case(headers={})
         rules = OperationRules(
             headers={"x-optional": FieldRule(presence=PresenceMode.OPTIONAL)},
         )
@@ -106,8 +106,8 @@ class TestHeaderPresence:
 
     def test_header_forbidden_present_fails(self, comparator):
         """Header FORBIDDEN but present fails."""
-        response_a = make_response(headers={"x-internal": ["secret"]})
-        response_b = make_response(headers={})
+        response_a = make_response_case(headers={"x-internal": ["secret"]})
+        response_b = make_response_case(headers={})
         rules = OperationRules(
             headers={"x-internal": FieldRule(presence=PresenceMode.FORBIDDEN)},
         )
@@ -123,14 +123,14 @@ class TestMultipleHeaderRules:
 
     def test_multiple_header_rules_all_pass(self, comparator, mock_cel):
         """Multiple header rules all passing."""
-        response_a = make_response(
+        response_a = make_response_case(
             headers={
                 "content-type": ["application/json"],
                 "x-request-id": ["abc"],
                 "x-version": ["1.0"],
             }
         )
-        response_b = make_response(
+        response_b = make_response_case(
             headers={
                 "content-type": ["application/json"],
                 "x-request-id": ["xyz"],
@@ -153,13 +153,13 @@ class TestMultipleHeaderRules:
 
     def test_multiple_header_rules_one_fails(self, comparator, mock_cel):
         """Multiple header rules with one failing."""
-        response_a = make_response(
+        response_a = make_response_case(
             headers={
                 "content-type": ["application/json"],
                 "x-version": ["1.0"],
             }
         )
-        response_b = make_response(
+        response_b = make_response_case(
             headers={
                 "content-type": ["application/json"],
                 "x-version": ["2.0"],
@@ -183,14 +183,14 @@ class TestMultipleHeaderRules:
 
     def test_multiple_header_rules_mixed_presence(self, comparator):
         """Multiple header rules with mixed presence modes."""
-        response_a = make_response(
+        response_a = make_response_case(
             headers={
                 "x-required": ["present"],
                 # x-optional missing
                 # x-forbidden missing
             }
         )
-        response_b = make_response(
+        response_b = make_response_case(
             headers={
                 "x-required": ["present"],
                 "x-optional": ["extra"],

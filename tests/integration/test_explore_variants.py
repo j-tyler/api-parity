@@ -15,7 +15,7 @@ from tests.integration.explore_helpers import (
 class TestVariantBehaviorVerification:
     """Tests verifying that variant server differences are correctly handled by rules."""
 
-    def test_variant_differences_and_mismatches(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_variant_differences_and_mismatches(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test variant server differences and mismatch handling.
 
         Combined test verifying:
@@ -52,10 +52,10 @@ class TestVariantBehaviorVerification:
         config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: {rules_path}
 """
@@ -102,10 +102,10 @@ comparison_rules: {rules_path}
         strict_config = f"""
 targets:
   server_a:
-    base_url: "http://127.0.0.1:{dual_servers['a'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['a'].port}"
     headers: {{}}
   server_b:
-    base_url: "http://127.0.0.1:{dual_servers['b'].port}"
+    base_url: "http://127.0.0.1:{fixture_dual_mock_servers['b'].port}"
     headers: {{}}
 comparison_rules: {strict_rules_path}
 """
@@ -144,7 +144,7 @@ comparison_rules: {strict_rules_path}
                 bundles = list(mismatches_dir.iterdir())
                 assert len(bundles) == summary["mismatches"]
 
-    def test_same_variant_all_match(self, tmp_path, cel_evaluator_exists):
+    def test_same_variant_all_match(self, tmp_path, fixture_cel_evaluator_path):
         """Test that comparing same variant server to itself produces mostly matches."""
         reservation_a = PortReservation()
         reservation_b = PortReservation()

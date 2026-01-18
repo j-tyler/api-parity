@@ -895,7 +895,7 @@ Mock FastAPI server (`tests/integration/mock_server.py`) with two variants for d
 **Key files:**
 - `tests/fixtures/test_api.yaml` — OpenAPI spec exercising comparison scenarios
 - `tests/fixtures/comparison_rules.json` — Rules for all predefined types
-- `tests/conftest.py` — Pytest fixtures (`dual_servers`, `mock_server_a`, etc.)
+- `tests/conftest.py` — Pytest fixtures (`fixture_dual_mock_servers`, `fixture_cel_evaluator_path`, etc.)
 
 ### Test Layers
 

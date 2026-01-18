@@ -4,7 +4,7 @@ Tests wildcard paths, recursive descent, caching, and error handling.
 """
 
 from api_parity.models import BodyRules, FieldRule, OperationRules
-from tests.conftest import make_response
+from tests.conftest import make_response_case
 
 # Import shared fixtures
 pytest_plugins = ["tests.comparator_fixtures"]
@@ -15,8 +15,8 @@ class TestWildcardPaths:
 
     def test_wildcard_same_length(self, comparator, mock_cel):
         """Wildcard paths with same array length compare elements."""
-        response_a = make_response(body={"items": [{"id": 1}, {"id": 2}]})
-        response_b = make_response(body={"items": [{"id": 1}, {"id": 2}]})
+        response_a = make_response_case(body={"items": [{"id": 1}, {"id": 2}]})
+        response_b = make_response_case(body={"items": [{"id": 1}, {"id": 2}]})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.items[*].id": FieldRule(predefined="exact_match")}
@@ -32,8 +32,8 @@ class TestWildcardPaths:
 
     def test_wildcard_different_length(self, comparator):
         """Wildcard paths with different array lengths mismatch."""
-        response_a = make_response(body={"items": [{"id": 1}, {"id": 2}]})
-        response_b = make_response(body={"items": [{"id": 1}]})
+        response_a = make_response_case(body={"items": [{"id": 1}, {"id": 2}]})
+        response_b = make_response_case(body={"items": [{"id": 1}]})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.items[*].id": FieldRule(predefined="exact_match")}
@@ -47,8 +47,8 @@ class TestWildcardPaths:
 
     def test_wildcard_element_mismatch(self, comparator, mock_cel):
         """Wildcard paths report which element mismatched."""
-        response_a = make_response(body={"items": [{"id": 1}, {"id": 2}]})
-        response_b = make_response(body={"items": [{"id": 1}, {"id": 99}]})
+        response_a = make_response_case(body={"items": [{"id": 1}, {"id": 2}]})
+        response_b = make_response_case(body={"items": [{"id": 1}, {"id": 99}]})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.items[*].id": FieldRule(predefined="exact_match")}
@@ -67,8 +67,8 @@ class TestWildcardPaths:
 
     def test_empty_arrays_match(self, comparator):
         """Empty arrays in both responses match."""
-        response_a = make_response(body={"items": []})
-        response_b = make_response(body={"items": []})
+        response_a = make_response_case(body={"items": []})
+        response_b = make_response_case(body={"items": []})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.items[*].id": FieldRule(predefined="exact_match")}
@@ -86,8 +86,8 @@ class TestJSONPathErrors:
 
     def test_invalid_jsonpath_syntax(self, comparator):
         """Invalid JSONPath syntax is handled gracefully."""
-        response_a = make_response(body={"value": 1})
-        response_b = make_response(body={"value": 1})
+        response_a = make_response_case(body={"value": 1})
+        response_b = make_response_case(body={"value": 1})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$[invalid": FieldRule(predefined="exact_match")}  # Malformed
@@ -105,8 +105,8 @@ class TestJSONPathCaching:
 
     def test_same_path_reused(self, comparator, mock_cel):
         """Same JSONPath is parsed once and reused."""
-        response_a = make_response(body={"id": 1})
-        response_b = make_response(body={"id": 1})
+        response_a = make_response_case(body={"id": 1})
+        response_b = make_response_case(body={"id": 1})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.id": FieldRule(predefined="exact_match")}
@@ -129,7 +129,7 @@ class TestRecursiveDescentWildcard:
 
     def test_recursive_descent_detected_as_wildcard(self, comparator, mock_cel):
         """Recursive descent (..) is treated as wildcard."""
-        response_a = make_response(
+        response_a = make_response_case(
             body={
                 "level1": {
                     "level2": {
@@ -141,7 +141,7 @@ class TestRecursiveDescentWildcard:
                 }
             }
         )
-        response_b = make_response(
+        response_b = make_response_case(
             body={
                 "level1": {
                     "level2": {

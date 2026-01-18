@@ -475,10 +475,10 @@ Every configuration option can be specified in the configuration file. If the sa
 
 # Session-Scoped Test Server Fixtures
 
-Keywords: pytest fixtures session dual_servers integration tests performance
+Keywords: pytest fixtures session fixture_dual_mock_servers integration tests performance
 Date: 20260112
 
-The `dual_servers` pytest fixture is session-scoped, meaning mock servers start once per test session rather than once per test function.
+The `fixture_dual_mock_servers` pytest fixture is session-scoped, meaning mock servers start once per test session rather than once per test function.
 
 **Trade-off:** Test speed (~50% faster) vs test isolation (shared server state).
 

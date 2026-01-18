@@ -24,7 +24,7 @@ from tests.integration.explore_helpers import (
 class TestReplayExecution:
     """Tests for replay command execution."""
 
-    def test_replay_still_mismatch(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_replay_still_mismatch(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test replay detects persistent mismatches.
 
         Flow:
@@ -32,8 +32,8 @@ class TestReplayExecution:
         2. Run replay (servers unchanged) - should report 'still mismatch'
         """
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
         explore_out = tmp_path / "explore_artifacts"
@@ -111,11 +111,11 @@ class TestReplayExecution:
         assert summary["now_match"] >= 0
         assert summary["errors"] == 0
 
-    def test_replay_empty_input_directory(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_replay_empty_input_directory(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test replay handles empty input directory gracefully."""
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
         empty_dir = tmp_path / "empty_input"
@@ -144,11 +144,11 @@ class TestReplayExecution:
         assert result.returncode == 0
         assert "No mismatch bundles found" in result.stdout
 
-    def test_replay_validate_mode(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_replay_validate_mode(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test replay --validate mode."""
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
         explore_out = tmp_path / "explore_artifacts"
@@ -198,11 +198,11 @@ class TestReplayExecution:
         assert "Bundles found:" in result.stdout
         assert "Validation successful" in result.stdout
 
-    def test_replay_writes_new_bundles_for_persistent(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_replay_writes_new_bundles_for_persistent(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test replay writes new mismatch bundles for persistent mismatches."""
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
         explore_out = tmp_path / "explore_artifacts"
@@ -258,11 +258,11 @@ class TestReplayExecution:
                 assert (bundle / "target_a.json").exists()
                 assert (bundle / "target_b.json").exists()
 
-    def test_replay_with_custom_timeout(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_replay_with_custom_timeout(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test replay respects custom --timeout."""
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
         explore_out = tmp_path / "explore_artifacts"
@@ -318,11 +318,11 @@ class TestReplayExecution:
 class TestReplaySummaryFormat:
     """Tests for replay summary output format."""
 
-    def test_replay_summary_contains_required_fields(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_replay_summary_contains_required_fields(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test replay summary JSON contains all required fields."""
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
         explore_out = tmp_path / "explore_artifacts"

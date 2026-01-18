@@ -114,9 +114,49 @@ This is not a "nice to have"—it's as critical as writing correct code.
 - Avoid over-engineering and premature abstraction
 - Don't add features beyond what was requested
 
-### Writing for AI Agents
+### Writing Code for LLM Agents
 
-See DESIGN.md "AI-Optimized Code and Documentation" for the full rationale. In brief: prefer inline logic over indirection, avoid unnecessary abstraction, keep docs token-efficient.
+LLM coding agents experience code more like grep output, not like a human using an IDE. LLMs see what is in their context-window, not the full project. LLMs cannot build mental models over months of working in a codebase. Write and modify code accordingly.
+
+**1. Optimize for Grep, Not for IDE**
+
+Names should be unique enough to locate via text search without false positives. Prefer `get_user_by_email()` over `get()`. Prefer `payment_stripe.py` over `utils.py`. If an agent searching the codebase for "stripe payment" wouldn't find the stripe payment code, rename the file and/or the methods in the file.
+
+**2. One Concept Per File, Named for What It Contains**
+
+Each file should contain one cohesive concept. If you struggle to name a file, it probably contains too many things. Apply the same judgment you would for "separation of concerns," but optimize for discoverability and context-efficiency rather than classical architectural purity.
+
+**3. Inline Over Fragmented**
+
+Prefer code that reads linearly from top to bottom over code that jumps between many small helper methods. The "Clean Code" style of extracting every few lines into named methods creates unnecessary indirection. Extract only when there's clear reuse or a genuine abstraction—not just for "human readability" that would harm an LLM's ability to follow the logic.
+
+**4. Explicit Over Implicit**
+
+Write code as if the reader cannot easily access files except the one they're viewing. Implicit behavior through decorators, metaprogramming, monkey-patching, or "magic" inheritance makes code harder to understand in isolation. When you must use such patterns, add clear comments explaining what they do.
+
+**5. Types as Documentation**
+
+Annotate and use types wherever possible as if they may be the only documentation available. In a codebase without an IDE, types are your primary signal for what functions accept and return.
+
+**6. Errors That Explain Themselves**
+
+Write error messages that state what went wrong, relevant variable context, and what was expected. Your error messages are often your only debugging context.
+
+**7. Comments That State Intent**
+
+Comments should explain why code exists and what it expects, not just what it does. The next agent reading this code will not have your current context window to reference. Write comments like a colleague explaining context you'd need before modifying something. Think of the clarity you'd find in well-documented open source projects like SQLite, but avoid comments that merely restate what is obvious about WHAT the code is or does.
+
+**8. Colocate What Changes Together**
+
+Related code that changes together should live together, even if architectural patterns suggest separating by type (models/, services/, controllers/). Optimize for understanding a feature in one place over maintaining theoretical purity.
+
+**9. Tests as Executable Specifications**
+
+Write tests in the style of executable documentation. An LLM agent who reads only your test file should understand the complete contract of the code under test. Prioritize clarity over DRY in test code.
+
+**Applying Judgment**
+
+These principles exist because LLM context windows are finite and lack persistent memory across sessions. But they are principles, not laws. When they conflict, resolve them by asking: "What would make this code easiest to understand and modify for the next LLM agent seeing only this fragment?"
 
 ## Design Decision Format
 

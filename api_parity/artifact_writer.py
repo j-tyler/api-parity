@@ -8,6 +8,7 @@ See ARCHITECTURE.md "Mismatch Report Bundle" for specifications.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 from dataclasses import dataclass, field
@@ -137,10 +138,13 @@ class ArtifactWriter:
         Returns:
             Path to the bundle directory.
         """
-        # Generate bundle directory name
+        # Bundle naming: {timestamp}__{operation}__{case_id}
+        # - timestamp: enables chronological sorting with `ls`
+        # - operation_id: enables quick visual identification and glob filtering
+        # - case_id: ensures uniqueness when same operation has multiple mismatches
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         operation_id = self._sanitize_filename(case.operation_id)
-        case_id = case.case_id[:8]  # First 8 chars of UUID
+        case_id = case.case_id[:8]  # First 8 chars of UUID for brevity
         bundle_name = f"{timestamp}__{operation_id}__{case_id}"
         bundle_dir = self._mismatches_dir / bundle_name
 
@@ -212,10 +216,12 @@ class ArtifactWriter:
         Returns:
             Path to the bundle directory.
         """
-        # Generate bundle directory name
+        # Bundle naming: {timestamp}__chain__{first_op}__{chain_id}
+        # - "chain" marker distinguishes from stateless bundles
+        # - first_op: helps identify what the chain tests without opening files
+        # - chain_id: ensures uniqueness for chains with same first operation
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         chain_id = chain.chain_id[:8]
-        # Include first operation for context
         first_op = chain.steps[0].request_template.operation_id if chain.steps else "unknown"
         first_op = self._sanitize_filename(first_op)
         bundle_name = f"{timestamp}__chain__{first_op}__{chain_id}"
@@ -399,15 +405,19 @@ class ArtifactWriter:
     def _write_json(self, path: Path, data: Any) -> None:
         """Write data as JSON to a file atomically.
 
+        Uses write-to-temp-then-rename pattern to prevent partial files if the
+        process is interrupted (SIGINT/SIGTERM) mid-write. Readers never see
+        incomplete JSON.
+
         Args:
             path: Target file path.
             data: Data to write.
         """
-        # Write to temp file first, then rename for atomicity
         temp_path = path.with_suffix(".tmp")
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, default=str)
             f.write("\n")
+        # Atomic rename - on POSIX this is guaranteed atomic within same filesystem
         temp_path.rename(path)
 
     def _sanitize_filename(self, name: str) -> str:
@@ -442,8 +452,8 @@ class ArtifactWriter:
         if not self._secrets_config or not self._secrets_config.redact_fields:
             return data
 
-        # Deep copy to avoid modifying original
-        import copy
+        # Deep copy to avoid modifying original - bundles are persisted to disk
+        # and may be loaded later, so we must not mutate the caller's data
         data = copy.deepcopy(data)
 
         for jsonpath in self._secrets_config.redact_fields:
@@ -454,12 +464,18 @@ class ArtifactWriter:
     def _redact_path(self, data: Any, jsonpath: str) -> Any:
         """Redact a specific JSONPath from data.
 
+        Redaction is best-effort: if a path doesn't exist in the data or is
+        malformed, we skip it silently. This allows users to specify broad
+        redaction patterns (e.g., "$.*.password") that may not match every
+        response structure.
+
         Args:
             data: Data structure.
-            jsonpath: JSONPath expression to redact.
+            jsonpath: JSONPath expression to redact (e.g., "$.body.api_key").
 
         Returns:
-            Data with path redacted.
+            Data with path redacted. Returns original data unchanged if path
+            doesn't match or is invalid.
         """
         try:
             from jsonpath_ng import parse as jsonpath_parse
@@ -468,11 +484,11 @@ class ArtifactWriter:
             matches = compiled.find(data)
 
             for match in matches:
-                # Navigate to parent and set value to redacted marker
                 self._set_value(data, str(match.full_path), "[REDACTED]")
 
         except Exception:
-            # Ignore invalid paths
+            # Best-effort redaction: invalid paths or missing jsonpath_ng library
+            # should not break artifact writing. The data just won't be redacted.
             pass
 
         return data
@@ -480,12 +496,20 @@ class ArtifactWriter:
     def _set_value(self, data: Any, path: str, value: Any) -> None:
         """Set a value at a JSONPath-like path.
 
+        This is a simplified path navigator that handles common cases from
+        jsonpath_ng output (e.g., "body.items[0].password"). It does NOT handle
+        wildcards or complex expressions - those are resolved by jsonpath_ng
+        into concrete paths before this method is called.
+
+        Silently does nothing if the path doesn't exist, which is intentional
+        for best-effort redaction.
+
         Args:
-            data: Root data structure.
-            path: Path string (e.g., "body.password").
-            value: Value to set.
+            data: Root data structure (modified in place).
+            path: Concrete path string (e.g., "body.password", "items[0].key").
+            value: Value to set at the path.
         """
-        # Simple path parser for common cases
+        # Convert array notation to dot notation: "items[0].key" -> "items.0.key"
         parts = path.replace("[", ".").replace("]", "").split(".")
         parts = [p for p in parts if p]
 
