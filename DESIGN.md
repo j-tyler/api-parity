@@ -691,3 +691,50 @@ When time permits, implement full schema-driven synthetic generation:
 **Files affected:**
 - `api_parity/case_generator.py` — `_generate_synthetic_headers()`, `_generate_synthetic_body()`
 - Tests in `tests/integration/test_stateful_chains.py` — Update assertions if they check specific formats
+
+---
+
+# Schema-Aware Synthetic Value Generation (Phase 2)
+
+Keywords: synthetic values schema enum chain generation constraint validation
+Date: 20260118
+
+**Phase 2 implemented:** Full schema-aware synthetic value generation now produces values that satisfy OpenAPI schema constraints during chain discovery.
+
+**Problem solved:** Chain discovery fails when link-extracted values must satisfy target parameter constraints (especially enums). For example, an API with `library_id` constrained to `enum: [main_branch, downtown_branch]` would reject UUID placeholders, preventing chain discovery through that endpoint.
+
+**Solution:** The `SchemaValueGenerator` class generates values satisfying schema constraints in priority order:
+
+1. `enum` - return first enum value (highest priority)
+2. `const` - return const value
+3. `format: uuid` - generate UUID
+4. `format: date-time` - generate ISO timestamp
+5. `format: date` - generate ISO date
+6. `format: uri` - generate placeholder URI
+7. `format: email` - generate placeholder email
+8. `type: integer` - return 1
+9. `type: number` - return 1.0
+10. `type: boolean` - return True
+11. `type: string` - generate UUID string
+12. `type: array` - generate single-item array
+13. `type: object` - generate empty dict
+14. Fallback - UUID string
+
+**Key design decisions:**
+
+1. **Enum always wins** - Enum constraint takes absolute priority over all other constraints. An enum field with `format: uuid` uses the enum value, not a generated UUID.
+
+2. **Schema navigation via JSONPointer** - `navigate_to_field()` traverses object properties and array items following JSONPointer paths. Arrays are treated as homogeneous (index doesn't matter for schema lookup).
+
+3. **$ref resolution** - References are resolved during navigation and generation, with cycle detection to prevent infinite recursion on circular schemas.
+
+4. **Graceful fallback** - When no schema is found (operation not in spec, field not in response schema), falls back to UUID generation. This preserves backward compatibility with specs that don't define response schemas.
+
+5. **First enum value used** - For determinism, always uses the first enum value. This is predictable and sufficient for chain discovery (Schemathesis just needs a valid value to resolve the link).
+
+**Files affected:**
+- `api_parity/schema_value_generator.py` — New module with `SchemaValueGenerator` class
+- `api_parity/case_generator.py` — Uses schema-aware generation in `_generate_synthetic_body()`
+- `tests/test_schema_value_generator.py` — Unit tests for all constraint types
+- `tests/integration/test_enum_chain_generation.py` — Integration tests with enum-constrained spec
+- `tests/fixtures/enum_chain_spec.yaml` — Test fixture demonstrating enum constraints in chains
