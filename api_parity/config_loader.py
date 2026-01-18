@@ -19,6 +19,7 @@ import yaml
 from api_parity.models import (
     ComparisonLibrary,
     ComparisonRulesFile,
+    FieldRule,
     OperationRules,
     RuntimeConfig,
     TargetConfig,
@@ -65,7 +66,10 @@ def load_runtime_config(config_path: Path) -> RuntimeConfig:
     try:
         return RuntimeConfig.model_validate(raw_config)
     except Exception as e:
-        raise ConfigError(f"Invalid config structure: {e}") from e
+        raise ConfigError(
+            f"Invalid config structure in {config_path}: {e}\n"
+            f"Expected: targets (dict), comparison_rules (str), optional rate_limit/secrets"
+        ) from e
 
 
 def load_comparison_rules(rules_path: Path) -> ComparisonRulesFile:
@@ -92,7 +96,10 @@ def load_comparison_rules(rules_path: Path) -> ComparisonRulesFile:
     try:
         return ComparisonRulesFile.model_validate(raw_rules)
     except Exception as e:
-        raise ConfigError(f"Invalid rules structure: {e}") from e
+        raise ConfigError(
+            f"Invalid rules structure in {rules_path}: {e}\n"
+            f"Expected: version (str), default_rules (object), optional operation_rules"
+        ) from e
 
 
 def load_comparison_library(library_path: Path | None = None) -> ComparisonLibrary:
@@ -121,7 +128,10 @@ def load_comparison_library(library_path: Path | None = None) -> ComparisonLibra
     try:
         return ComparisonLibrary.model_validate(raw_library)
     except Exception as e:
-        raise ConfigError(f"Invalid library structure: {e}") from e
+        raise ConfigError(
+            f"Invalid library structure in {path}: {e}\n"
+            f"Expected: library_version (str), description (str), predefined (dict)"
+        ) from e
 
 
 def get_operation_rules(
@@ -147,7 +157,9 @@ def get_operation_rules(
     if override is None:
         return default
 
-    # Start with defaults, override specified fields
+    # Override semantics: replace entire sections, don't deep-merge.
+    # This prevents confusing interactions where some body rules come from
+    # defaults and others from overrides. Users define complete sections.
     return OperationRules(
         status_code=override.status_code if override.status_code is not None else default.status_code,
         headers=override.headers if override.headers else default.headers,
@@ -213,6 +225,10 @@ def validate_targets(
 def _substitute_env_vars(data: Any) -> Any:
     """Recursively substitute ${ENV_VAR} patterns in data.
 
+    Walks the entire config tree because secrets may appear anywhere
+    (auth headers, key passwords, etc.). Done before Pydantic validation
+    so the validated config has real values, not ${} placeholders.
+
     Args:
         data: Data structure to process.
 
@@ -255,6 +271,11 @@ def _substitute_string(s: str) -> str:
 # =============================================================================
 # Cross-Validation Functions
 # =============================================================================
+
+# Warnings vs Errors: Warnings are for stale config (e.g., operationId that
+# no longer exists in spec) - the run can proceed but user should know.
+# Errors are for broken config (e.g., unknown predefined name) - the run
+# would fail at comparison time, so we catch it early.
 
 
 class ValidationWarning:
@@ -391,7 +412,7 @@ def _validate_operation_rules(
 
 
 def _validate_field_rule(
-    rule: "FieldRule",
+    rule: FieldRule,
     valid_predefined: set[str],
     library: ComparisonLibrary,
     context: str,

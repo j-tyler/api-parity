@@ -122,7 +122,9 @@ class SchemaValidator:
                 else:
                     self._spec = json.load(f)
         except Exception as e:
-            raise SchemaExtractionError(f"Failed to load OpenAPI spec: {e}") from e
+            raise SchemaExtractionError(
+                f"Failed to load OpenAPI spec from '{spec_path}': {e}"
+            ) from e
 
     def validate_response(
         self,
@@ -158,6 +160,9 @@ class SchemaValidator:
         extra_fields: list[str] = []
 
         try:
+            # Draft4Validator chosen because OpenAPI 3.0 response schemas closely align
+            # with JSON Schema Draft 4. Using a newer draft would reject valid OpenAPI
+            # schemas that use Draft 4 keywords.
             validator = Draft4Validator(response_schema.schema)
             errors = list(validator.iter_errors(body))
 
@@ -171,11 +176,14 @@ class SchemaValidator:
                 violations.append(violation)
 
         except Exception as e:
-            # Schema validation itself failed (e.g., invalid schema)
+            # Schema validation itself failed - usually means the schema is malformed
+            # or uses unsupported JSON Schema features. We capture this as a violation
+            # rather than raising, so the comparison can continue with other fields.
             violations.append(
                 SchemaViolation(
                     path="$",
-                    message=f"Schema validation error: {e}",
+                    message=f"Schema validation failed for operation '{operation_id}' "
+                    f"status {status_code}: {e}",
                     violation_type="validation_error",
                 )
             )
@@ -277,11 +285,13 @@ class SchemaValidator:
         # Get responses for this operation
         responses = operation.get("responses", {})
 
-        # Look for exact status code match first, then "default"
+        # OpenAPI spec lookup order: exact code -> wildcard (2XX/3XX/etc) -> default.
+        # This matches how servers route responses: most specific wins, then class-level
+        # fallback, then catch-all default. Changing order would cause schema mismatches
+        # when specs define both specific codes and wildcards.
         status_str = str(status_code)
         response_def = responses.get(status_str)
         if response_def is None:
-            # Try wildcard patterns (2XX, 3XX, etc.)
             wildcard = f"{status_code // 100}XX"
             response_def = responses.get(wildcard)
         if response_def is None:
@@ -373,6 +383,10 @@ class SchemaValidator:
         Returns:
             Schema with all refs resolved. Cycles are broken by returning
             the unresolved $ref to prevent infinite recursion.
+
+        Cycles occur in OpenAPI specs for recursive data structures like trees:
+        TreeNode has children: array of TreeNode. Without cycle detection,
+        resolving TreeNode's $ref would infinitely recurse.
         """
         if visited is None:
             visited = frozenset()

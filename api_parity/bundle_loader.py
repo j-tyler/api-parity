@@ -74,10 +74,11 @@ def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
 
     def _extract_from_expression(expr: str) -> None:
         """Extract link field from a single expression."""
-        # Check for header expression: $response.header.HeaderName or HeaderName[index]
+        # Header expressions: $response.header.HeaderName or HeaderName[index]
         header_match = LINK_HEADER_PATTERN.match(expr)
         if header_match:
-            # Preserve original case for HeaderRef consistency (matches case_generator.py)
+            # Headers need both lowercase (for case-insensitive HTTP lookup) and
+            # original case (for display in error messages). See HeaderRef dataclass.
             original_name = header_match.group(1)
             header_name = original_name.lower()
             index_str = header_match.group(2)
@@ -89,7 +90,7 @@ def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
             ))
             return
 
-        # Check for body expression: $response.body#/path
+        # Body expressions: $response.body#/json/pointer/path
         if expr.startswith("$response.body#/"):
             json_pointer = expr[len("$response.body#/"):]
             if json_pointer:
@@ -99,14 +100,15 @@ def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
         if step.link_source is None:
             continue
 
-        # Try new format: "parameters" dict with all expressions
+        # link_source has two formats from different versions:
+        # - New: {"parameters": {"param1": "$response.body#/id", ...}} - multiple links
+        # - Old: {"field": "$response.body#/id"} - single link (backward compat)
         parameters = step.link_source.get("parameters")
         if isinstance(parameters, dict):
             for expr in parameters.values():
                 if isinstance(expr, str):
                     _extract_from_expression(expr)
         else:
-            # Fall back to old format: single "field" expression
             field = step.link_source.get("field")
             if isinstance(field, str):
                 _extract_from_expression(field)
@@ -156,7 +158,7 @@ def discover_bundles(directory: Path) -> list[Path]:
 
 
 def _detect_bundle_type_from_data(
-    diff_data: dict | None, bundle_path: Path
+    diff_data: dict[str, Any] | None, bundle_path: Path
 ) -> BundleType:
     """Determine bundle type from already-loaded diff data and file presence.
 

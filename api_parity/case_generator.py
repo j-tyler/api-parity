@@ -184,6 +184,10 @@ def extract_link_fields_from_spec(spec: dict) -> LinkFields:
 def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
     """Extract a value from nested data using a JSONPointer path.
 
+    Follows RFC 6901 JSONPointer semantics with slash-separated path segments.
+    Returns None for any invalid path rather than raising - callers handle
+    missing values gracefully during variable extraction.
+
     Args:
         data: The data structure to extract from (dict or list).
         pointer: JSONPointer path without leading slash (e.g., "id" or "data/items/0/id").
@@ -215,7 +219,11 @@ def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
 
 
 class CaseGeneratorError(Exception):
-    """Raised when case generation fails."""
+    """Raised when case generation fails.
+
+    Covers: spec loading failures, spec parsing errors, and state machine
+    creation errors. The error message includes the spec path and root cause.
+    """
 
 
 class CaseGenerator:
@@ -255,7 +263,9 @@ class CaseGenerator:
                 str(spec_path), config=schemathesis_config
             )
         except Exception as e:
-            raise CaseGeneratorError(f"Failed to load OpenAPI spec: {e}") from e
+            raise CaseGeneratorError(
+                f"Failed to load OpenAPI spec from '{spec_path}': {e}"
+            ) from e
 
         # Load raw spec to extract link field references
         try:
@@ -265,7 +275,9 @@ class CaseGenerator:
                 else:
                     self._raw_spec = json.load(f)
         except Exception as e:
-            raise CaseGeneratorError(f"Failed to parse spec for link extraction: {e}") from e
+            raise CaseGeneratorError(
+                f"Failed to parse spec '{spec_path}' for link extraction: {e}"
+            ) from e
 
         # Extract field names referenced by OpenAPI links
         self._link_fields = extract_link_fields_from_spec(self._raw_spec)
@@ -888,7 +900,10 @@ class CaseGenerator:
         try:
             OriginalStateMachine = self._schema.as_state_machine()
         except Exception as e:
-            raise CaseGeneratorError(f"Failed to create state machine: {e}") from e
+            raise CaseGeneratorError(
+                f"Failed to create state machine from '{self._spec_path}'. "
+                f"Verify the spec has valid operations and links: {e}"
+            ) from e
 
         # Create combined class
         class CombinedMachine(ChainCapturingStateMachine, OriginalStateMachine):
@@ -909,7 +924,10 @@ class CaseGenerator:
         try:
             run_generation()
         except HypothesisException:
-            # Hypothesis raises when state space is exhausted
+            # Normal termination: Hypothesis raises when it has explored all reachable
+            # states in the state machine (e.g., fewer valid chains than max_chains).
+            # This is expected behavior, not an error - we continue with whatever
+            # chains were captured before the state space was exhausted.
             pass
 
         # Filter to chains with multiple steps (single-step chains aren't useful)

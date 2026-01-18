@@ -52,8 +52,13 @@ class RequestCase(BaseModel):
 
     @model_validator(mode="after")
     def check_body_exclusivity(self) -> Self:
+        # Body is stored as either parsed JSON (body) or base64 (body_base64), never both.
+        # This supports JSON APIs (body) and binary payloads like file uploads (body_base64).
         if self.body is not None and self.body_base64 is not None:
-            raise ValueError("body and body_base64 are mutually exclusive")
+            raise ValueError(
+                f"RequestCase body and body_base64 are mutually exclusive, "
+                f"but both were provided (case_id={self.case_id!r})"
+            )
         return self
 
 
@@ -76,8 +81,13 @@ class ResponseCase(BaseModel):
 
     @model_validator(mode="after")
     def check_body_exclusivity(self) -> Self:
+        # Body is stored as either parsed JSON (body) or base64 (body_base64), never both.
+        # This supports JSON APIs (body) and binary payloads like images (body_base64).
         if self.body is not None and self.body_base64 is not None:
-            raise ValueError("body and body_base64 are mutually exclusive")
+            raise ValueError(
+                f"ResponseCase body and body_base64 are mutually exclusive, "
+                f"but both were provided (status_code={self.status_code})"
+            )
         return self
 
 
@@ -178,14 +188,22 @@ class FieldRule(BaseModel):
 
     @model_validator(mode="after")
     def check_rule_logic(self) -> Self:
-        # Cannot specify both predefined and custom expression
+        # A rule uses EITHER a predefined comparison (looked up from comparison_library.json)
+        # OR a custom CEL expression, never both. This keeps rule resolution unambiguous.
         if self.predefined is not None and self.expr is not None:
-            raise ValueError("cannot specify both predefined and expr")
+            raise ValueError(
+                f"FieldRule cannot specify both predefined and expr; "
+                f"got predefined={self.predefined!r} and expr={self.expr!r}"
+            )
 
-        # Forbidden fields cannot have comparison rules (nothing to compare)
+        # Forbidden fields must not exist in either response, so there's nothing to compare.
+        # Allowing a comparison rule would be misleading since it would never execute.
         if self.presence == PresenceMode.FORBIDDEN:
             if self.predefined is not None or self.expr is not None:
-                raise ValueError("cannot specify comparison rule for forbidden field")
+                raise ValueError(
+                    f"FieldRule with presence=forbidden cannot have a comparison rule "
+                    f"(got predefined={self.predefined!r}, expr={self.expr!r})"
+                )
 
         return self
 
@@ -205,12 +223,13 @@ class BodyRules(BaseModel):
 
     @model_validator(mode="after")
     def validate_binary_rule_presence(self) -> Self:
-        # Binary rules only support PARITY presence mode (the default).
-        # Other modes don't make sense: binary_rule applies when both responses
-        # are binary - presence is already established by that point.
+        # binary_rule only executes when BOTH responses are non-JSON (binary).
+        # Presence modes like REQUIRED/OPTIONAL don't apply because the rule already
+        # requires both sides to have binary content. Only PARITY (the default) is valid.
         if self.binary_rule is not None and self.binary_rule.presence != PresenceMode.PARITY:
             raise ValueError(
-                f"binary_rule only supports presence=parity, got {self.binary_rule.presence.value}"
+                f"BodyRules.binary_rule only supports presence=parity because it inherently "
+                f"requires both responses to be binary; got presence={self.binary_rule.presence.value!r}"
             )
         return self
 
@@ -350,8 +369,9 @@ class TargetInfo(BaseModel):
     base_url: str = Field(description="Base URL used")
 
 
-# ISO 8601 pattern: YYYY-MM-DDTHH:MM:SS with optional fractional seconds and timezone
-_ISO8601_PATTERN = re.compile(
+# ISO 8601 timestamp pattern for MismatchMetadata.timestamp validation.
+# Accepts: 2024-01-15T10:30:00, 2024-01-15T10:30:00.123, 2024-01-15T10:30:00Z, 2024-01-15T10:30:00+05:00
+MISMATCH_METADATA_TIMESTAMP_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$"
 )
 
@@ -373,8 +393,12 @@ class MismatchMetadata(BaseModel):
     @field_validator("timestamp")
     @classmethod
     def validate_timestamp(cls, v: str) -> str:
-        if not _ISO8601_PATTERN.match(v):
-            raise ValueError("timestamp must be ISO 8601 format (YYYY-MM-DDTHH:MM:SS)")
+        if not MISMATCH_METADATA_TIMESTAMP_PATTERN.match(v):
+            raise ValueError(
+                f"MismatchMetadata.timestamp must be ISO 8601 format "
+                f"(YYYY-MM-DDTHH:MM:SS with optional fractional seconds and timezone); "
+                f"got {v!r}"
+            )
         return v
 
 
@@ -416,8 +440,14 @@ class TargetConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_cert_key_pair(self) -> Self:
+        # mTLS requires both certificate and private key. Having only one is a config error.
         if (self.cert is None) != (self.key is None):
-            raise ValueError("cert and key must both be provided together for mTLS")
+            provided = "cert" if self.cert is not None else "key"
+            missing = "key" if self.cert is not None else "cert"
+            raise ValueError(
+                f"TargetConfig mTLS requires both cert and key; "
+                f"got {provided}={getattr(self, provided)!r} but {missing} is missing"
+            )
         return self
 
 

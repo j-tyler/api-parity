@@ -107,7 +107,12 @@ class Executor:
     def __enter__(self) -> "Executor":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
         self.close()
 
     def close(self) -> None:
@@ -115,7 +120,7 @@ class Executor:
         self._client_a.close()
         self._client_b.close()
 
-    def _build_client_kwargs(self, target: TargetConfig, timeout: float) -> dict:
+    def _build_client_kwargs(self, target: TargetConfig, timeout: float) -> dict[str, Any]:
         """Build kwargs for httpx.Client including TLS configuration.
 
         Args:
@@ -125,7 +130,7 @@ class Executor:
         Returns:
             Dictionary of kwargs for httpx.Client constructor.
         """
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "base_url": target.base_url,
             "headers": target.headers,
             "timeout": timeout,
@@ -170,7 +175,10 @@ class Executor:
     ) -> tuple[ResponseCase, ResponseCase]:
         """Execute a request against both targets.
 
-        Requests are executed serially: Target A first, then Target B.
+        Requests are executed serially (A then B) rather than parallel to:
+        1. Simplify debugging - timing differences don't mask issues
+        2. Avoid overwhelming targets with concurrent load
+        3. Keep rate limiting predictable (single request stream)
 
         Args:
             request: The request to execute.
@@ -271,8 +279,11 @@ class Executor:
     def _variable_to_string(self, var_value: Any) -> str:
         """Convert a variable value to string for substitution.
 
-        Handles list values (from header extraction) by using the first element.
-        Using str() on a list produces "['value']" which is not what we want.
+        Header values are stored as lists (HTTP allows multiple values per header),
+        but when substituting into a path like /users/{userId}, we need a single
+        string. Using str() on a list produces "['value']" which corrupts the URL.
+        This extracts the first element for lists, matching HTTP client behavior
+        of using the first value when multiple are present.
 
         Args:
             var_value: The variable value to convert.
@@ -281,7 +292,6 @@ class Executor:
             String representation suitable for substitution.
         """
         if isinstance(var_value, list):
-            # Use first element if list is non-empty, otherwise empty string
             return str(var_value[0]) if var_value else ""
         return str(var_value)
 
@@ -425,8 +435,11 @@ class Executor:
                 if value is not None:
                     extracted[field_pointer] = value
 
-            # Second pass: add last-segment shortcuts only if no collision
-            # e.g., "data/item/id" also stores under "id" if no other path ends in "id"
+            # Second pass: add last-segment shortcuts for ergonomic variable references
+            # OpenAPI links often use short names like "userId" in expressions, but our
+            # JSONPointer paths are fully qualified like "data/user/userId". By adding
+            # shortcuts ("userId" -> value), templates can use {userId} instead of
+            # {data/user/userId}. Only added when unambiguous (no collision).
             last_segments: dict[str, list[str]] = {}
             for field_pointer in self._link_fields.body_pointers:
                 last_segment = field_pointer.split("/")[-1]
@@ -476,8 +489,10 @@ class Executor:
     def _wait_for_rate_limit(self) -> None:
         """Wait if necessary to respect rate limit.
 
-        Thread-safe. Uses a simple time-based approach: ensure minimum
-        interval between requests.
+        Uses monotonic clock (not wall clock) to avoid issues with system time
+        changes. Simple time-based approach rather than token bucket because
+        API parity testing is single-threaded per Executor instance and we
+        want predictable, evenly-spaced requests rather than burst capacity.
         """
         if self._min_interval <= 0:
             return
@@ -521,8 +536,10 @@ class Executor:
                 params.append((key, value))
 
         # Build headers (flatten lists, take first value for each)
-        # Sanitize values to ASCII - HTTP headers must be ASCII per RFC 7230.
-        # Schemathesis/Hypothesis may generate non-ASCII characters during fuzzing.
+        # Sanitize values to ASCII because HTTP headers must be ASCII per RFC 7230.
+        # Hypothesis generates arbitrary Unicode during property-based testing, and
+        # Schemathesis doesn't restrict header string generation. Without sanitization,
+        # httpx raises UnicodeEncodeError when encoding headers for the wire.
         headers: dict[str, str] = {}
         for key, values in request.headers.items():
             if values:
@@ -579,10 +596,13 @@ class Executor:
         except httpx.RequestError as e:
             raise RequestError(f"{target_name} request error: {e}") from e
         except UnicodeEncodeError as e:
-            # Fallback for any remaining non-ASCII encoding issues
-            # (header keys, query params, etc. not caught by sanitization)
+            # Fallback for non-ASCII in places we don't sanitize: header keys, query
+            # params, paths. These are protocol violations that should fail loudly
+            # rather than silently corrupt data.
             raise RequestError(
-                f"{target_name} encoding error - non-ASCII characters in request: {e}"
+                f"{target_name} encoding error: non-ASCII characters in request "
+                f"(header key, query param, or path). Character: {e.object[e.start:e.end]!r} "
+                f"at position {e.start}. HTTP requires ASCII for these fields."
             ) from e
 
         return self._convert_response(http_response, elapsed_ms)
@@ -609,7 +629,10 @@ class Executor:
                 headers[key_lower] = []
             headers[key_lower].append(value)
 
-        # Body - try to parse as JSON
+        # Body parsing: JSON bodies are stored as dicts for JSONPath comparison,
+        # text bodies as strings, binary bodies as base64 (for JSON serialization).
+        # We trust content-type to determine parsing strategy because incorrect
+        # content-type is itself a bug worth catching in API parity testing.
         body: Any = None
         body_base64: str | None = None
 

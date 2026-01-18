@@ -2,11 +2,12 @@
 
 from pathlib import Path
 
-# Path to fixtures
-FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
-TEST_API_SPEC = FIXTURES_DIR / "test_api.yaml"
-COMPARISON_RULES = FIXTURES_DIR / "comparison_rules.json"
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+# Directory structure: tests/integration/explore_helpers.py
+# Paths are relative to this file's location in the test tree.
+FIXTURES_DIR: Path = Path(__file__).parent.parent / "fixtures"
+TEST_API_SPEC: Path = FIXTURES_DIR / "test_api.yaml"
+COMPARISON_RULES: Path = FIXTURES_DIR / "comparison_rules.json"
+PROJECT_ROOT: Path = Path(__file__).parent.parent.parent
 
 
 def create_runtime_config(port_a: int, port_b: int, tmp_path: Path) -> Path:

@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from api_parity.models import ComparisonResult, ComparisonRules, TargetInfo
 
 
+# Default timeout balances typical API response times (~100ms-2s) with allowing
+# slow operations. 30s catches hangs without prematurely failing legitimate requests.
 DEFAULT_TIMEOUT = 30.0
 
 
@@ -81,7 +83,11 @@ class ProgressReporter:
             self._total = total
 
     def _run(self) -> None:
-        """Background thread that prints progress every 10 seconds."""
+        """Background thread that prints progress every 10 seconds.
+
+        10s interval chosen to provide useful feedback without cluttering output.
+        Shorter intervals (1-5s) create noise; longer intervals (30s+) feel unresponsive.
+        """
         while not self._stop_event.wait(timeout=10.0):
             self._print_progress()
 
@@ -895,12 +901,13 @@ def _extract_declared_links(
 
 
 def _extract_link_graph(
-    schema: Any, exclude: list[str]
+    schema: Any,  # schemathesis.OpenAPISchema, but not worth adding import for internal func
+    exclude: list[str],
 ) -> tuple[dict[str, tuple[str, str]], list[tuple[str, str, str]]]:
     """Extract operations and links from OpenAPI spec.
 
     Args:
-        schema: Loaded schemathesis schema.
+        schema: Loaded schemathesis schema (from schemathesis.openapi.from_path).
         exclude: List of operationIds to exclude.
 
     Returns:
@@ -1047,12 +1054,13 @@ def run_explore(args: ExploreArgs) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    # Load comparison rules
+    # Load comparison rules (path is relative to config file, not CWD)
     try:
         rules_path = resolve_comparison_rules_path(args.config, runtime_config.comparison_rules)
         comparison_rules = load_comparison_rules(rules_path)
     except ConfigError as e:
         print(f"Error loading comparison rules: {e}", file=sys.stderr)
+        print(f"  Check that 'comparison_rules' path in {args.config} is correct", file=sys.stderr)
         return 1
 
     # Load comparison library
@@ -1385,12 +1393,16 @@ def _run_stateful_explore(
         print(f"[Chain {stats.total_chains}] {chain_desc}")
 
         try:
-            # Track comparison results as we execute
-            step_diffs = []
-            step_ops = []
+            # Track comparison results as we execute.
+            # We use a callback (on_step) instead of post-execution comparison because:
+            # 1. Chains should stop at first mismatch to avoid wasting requests
+            # 2. Later steps may depend on earlier responses (variable extraction)
+            # 3. Executor owns response lifecycle; callback lets us compare before cleanup
+            step_diffs: list[ComparisonResult] = []
+            step_ops: list[str] = []
             mismatch_found = False
 
-            def on_step(response_a, response_b):
+            def on_step(response_a, response_b) -> bool:
                 """Compare responses after each step; return False to stop on mismatch."""
                 nonlocal mismatch_found
                 step_idx = len(step_diffs)
@@ -1511,12 +1523,13 @@ def run_replay(args: ReplayArgs) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    # Load comparison rules
+    # Load comparison rules (path is relative to config file, not CWD)
     try:
         rules_path = resolve_comparison_rules_path(args.config, runtime_config.comparison_rules)
         comparison_rules = load_comparison_rules(rules_path)
     except ConfigError as e:
         print(f"Error loading comparison rules: {e}", file=sys.stderr)
+        print(f"  Check that 'comparison_rules' path in {args.config} is correct", file=sys.stderr)
         return 1
 
     # Load comparison library
@@ -1564,11 +1577,14 @@ def run_replay(args: ReplayArgs) -> int:
         print(f"No mismatch bundles found in {args.input_dir}")
         return 0
 
-    # Pre-load all bundles to extract link_fields for chain replay
+    # Pre-load all bundles to extract link_fields for chain replay.
+    # We need link_fields before creating the Executor because the Executor uses them
+    # to extract variables from responses for subsequent chain steps.
     loaded_bundles: list[LoadedBundle] = []
     link_fields = LinkFields()
     load_errors: list[tuple[Path, str]] = []
-    # Track seen headers to avoid duplicates
+    # Track seen headers to avoid duplicates - headers are referenced by (name, index)
+    # and multiple bundles may use the same header reference.
     seen_headers: set[tuple[str, int | None]] = set()
 
     for bundle_path in bundles:
@@ -1843,11 +1859,12 @@ def _replay_chain_bundle(
     print(f"[Chain {stats.total_bundles}] {chain_desc}")
 
     try:
-        # Track comparison results during execution
-        step_diffs = []
+        # Track comparison results during execution.
+        # Same callback pattern as _run_stateful_explore - see comments there.
+        step_diffs: list[ComparisonResult] = []
         mismatch_found = False
 
-        def on_step(response_a, response_b):
+        def on_step(response_a, response_b) -> bool:
             nonlocal mismatch_found
             step_idx = len(step_diffs)
             op_id = chain.steps[step_idx].request_template.operation_id
@@ -1906,14 +1923,17 @@ def _replay_chain_bundle(
 
 
 def _is_same_mismatch(original_diff: dict, new_result: "ComparisonResult") -> bool:
-    """Determine if two mismatches are essentially the same.
+    """Determine if two mismatches are essentially the same failure pattern.
 
-    Compares:
-    - mismatch_type (status_code, headers, body)
-    - For body mismatches: same JSONPath fields failing
-    - For header mismatches: same header names failing
+    Why pattern matching instead of exact value comparison:
+    - Values change between runs (timestamps, IDs, etc.)
+    - We care about "still failing at the same place" not "exact same failure"
+    - DIFFERENT MISMATCH after rule changes is expected and useful to track
 
-    Doesn't require exact same values—just same failure pattern.
+    Comparison strategy by mismatch_type:
+    - status_code: Type match is sufficient (specific codes may vary legitimately)
+    - headers: Same header names must fail (values ignored)
+    - body: Same JSONPath fields must fail (values ignored)
     """
     # Get original mismatch type
     original_type = original_diff.get("mismatch_type")

@@ -38,13 +38,19 @@ type Response struct {
 }
 
 // evaluationTimeout is the maximum time allowed for a single CEL evaluation.
+// 5 seconds is generous for CEL expressions—most evaluate in <1ms. A long timeout
+// catches pathological expressions (deeply nested recursion, huge arrays) without
+// blocking the Python caller indefinitely.
 const evaluationTimeout = 5 * time.Second
 
 func main() {
 	writer := bufio.NewWriter(os.Stdout)
 	reader := bufio.NewScanner(os.Stdin)
 
-	// Increase scanner buffer for large JSON payloads
+	// Increase scanner buffer for large JSON payloads.
+	// API responses can be large (lists of objects, base64 blobs), and the entire
+	// response body is included in the "data" field. 10 MB accommodates most APIs;
+	// larger responses would cause memory issues in comparison anyway.
 	const maxTokenSize = 10 * 1024 * 1024 // 10 MB
 	reader.Buffer(make([]byte, 64*1024), maxTokenSize)
 
@@ -81,6 +87,9 @@ func main() {
 	}
 }
 
+// writeJSON marshals v to JSON and writes it as a single line to w.
+// Flush is called after each write—without it, messages sit in userspace buffers
+// and the Python caller blocks waiting for a response that never arrives.
 func writeJSON(w *bufio.Writer, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -95,6 +104,9 @@ func writeJSON(w *bufio.Writer, v any) error {
 	return w.Flush()
 }
 
+// evaluate wraps evaluateSync with a timeout. CEL evaluation runs in a goroutine;
+// if it exceeds evaluationTimeout, we return an error without waiting for the
+// goroutine (which may eventually complete or be garbage collected).
 func evaluate(req Request) Response {
 	ctx, cancel := context.WithTimeout(context.Background(), evaluationTimeout)
 	defer cancel()
@@ -107,49 +119,49 @@ func evaluate(req Request) Response {
 
 	select {
 	case <-ctx.Done():
-		return Response{ID: req.ID, OK: false, Error: "evaluation timeout exceeded"}
+		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("evaluation timeout exceeded (%v)", evaluationTimeout)}
 	case resp := <-resultCh:
 		return resp
 	}
 }
 
+// evaluateSync compiles and runs a CEL expression with the given data.
+// Returns Response with ok=true and result if successful, or ok=false with error message.
 func evaluateSync(req Request) Response {
-	// Build CEL environment with variables from data
+	// Build CEL environment with all data keys as dynamic-typed variables.
+	// We use DynType (not inferred types) because JSON values can be any type,
+	// and CEL's runtime type coercion handles comparisons correctly.
 	opts := []cel.EnvOption{
 		cel.DefaultUTCTimeZone(true),
 	}
 
-	// Declare variables based on data keys
 	for key := range req.Data {
 		opts = append(opts, cel.Variable(key, cel.DynType))
 	}
 
 	env, err := cel.NewEnv(opts...)
 	if err != nil {
-		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("env creation failed: %v", err)}
+		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("CEL environment creation failed: %v", err)}
 	}
 
-	// Compile expression
 	ast, issues := env.Compile(req.Expr)
 	if issues != nil && issues.Err() != nil {
-		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("compile error: %v", issues.Err())}
+		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("CEL compile error in expression %q: %v", req.Expr, issues.Err())}
 	}
 
-	// Create program
 	prg, err := env.Program(ast)
 	if err != nil {
-		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("program creation failed: %v", err)}
+		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("CEL program creation failed: %v", err)}
 	}
 
-	// Evaluate
 	out, _, err := prg.Eval(req.Data)
 	if err != nil {
-		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("evaluation error: %v", err)}
+		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("CEL evaluation error: %v", err)}
 	}
 
-	// Convert result to bool
+	// CEL expressions in api-parity must return boolean (true = values match).
 	if out.Type() != types.BoolType {
-		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("result is not boolean: got %v", out.Type())}
+		return Response{ID: req.ID, OK: false, Error: fmt.Sprintf("CEL expression must return boolean, got %v", out.Type())}
 	}
 
 	result, ok := out.Value().(bool)

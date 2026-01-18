@@ -91,6 +91,8 @@ class SchemaValueGenerator:
             return f"user-{uuid.uuid4().hex[:8]}@example.com"
 
         # Priority 8-13: type-based generation
+        # Numeric defaults are 1/1.0 rather than 0 to avoid triggering division-by-zero
+        # edge cases and to satisfy minimum:1 constraints common in pagination/limits.
         schema_type = schema.get("type")
         if schema_type == "integer":
             return 1
@@ -161,15 +163,15 @@ class SchemaValueGenerator:
                 # Property not found
                 return None
 
-            # Handle array at this level (items/... pattern)
+            # Handle array at this level without explicit index in pointer.
+            # Example: pointer "items/name" where "items" field is an array of objects.
+            # We skip into the items schema and look for "name" property there.
+            # This differs from "items/0/name" which uses the digit branch above.
             if schema_type == "array":
                 items_schema = current.get("items")
                 if items_schema is None:
                     return None
-                # Navigate into items schema
-                current = items_schema
-                # Now look for the property in items
-                current = self._resolve_ref(current)
+                current = self._resolve_ref(items_schema)
                 properties = current.get("properties", {})
                 if part in properties:
                     current = properties[part]
@@ -241,7 +243,9 @@ class SchemaValueGenerator:
             if not isinstance(path_item, dict):
                 continue
             for method_or_key, operation in path_item.items():
-                # Skip non-operation keys like 'parameters', '$ref'
+                # Path items contain HTTP operations (get/post/...) plus metadata keys.
+                # isinstance(dict) filters metadata (parameters=list, summary=string).
+                # startswith("$") filters $ref strings that survived the dict check.
                 if not isinstance(operation, dict) or method_or_key.startswith("$"):
                     continue
                 if operation.get("operationId") == operation_id:
