@@ -258,6 +258,86 @@ class ArtifactWriter:
 
         return bundle_dir
 
+    def write_chains_log(
+        self,
+        chains: list[ChainCase],
+        outcomes: list[str],
+        max_chains: int | None,
+        max_steps: int,
+    ) -> Path:
+        """Write all executed chains to chains.txt for debugging.
+
+        Format matches `graph-chains --generated` output for easy comparison.
+        Each chain includes its execution outcome (match/mismatch/error).
+
+        Args:
+            chains: List of chains that were executed.
+            outcomes: Outcome for each chain ("match", "mismatch", or "error").
+            max_chains: Max chains setting used.
+            max_steps: Max steps setting used.
+
+        Returns:
+            Path to the chains.txt file.
+        """
+        lines: list[str] = []
+
+        # Header matching graph-chains --generated format
+        lines.append(f"Executed chains (max_chains={max_chains}, max_steps={max_steps})")
+        lines.append("")
+        lines.append(f"Executed Chains ({len(chains)} chains)")
+        lines.append("=" * 60)
+
+        # Track links used for coverage summary
+        used_links: set[tuple[str, str, str]] = set()  # (source_op, status_code, target_op)
+
+        for i, (chain, outcome) in enumerate(zip(chains, outcomes), 1):
+            ops = [step.request_template.operation_id for step in chain.steps]
+            lines.append("")
+            lines.append(f"[Chain {i}] " + " -> ".join(ops))
+            lines.append(f"  Steps: {len(chain.steps)}")
+            lines.append(f"  Outcome: {outcome.upper()}")
+
+            for step in chain.steps:
+                step_num = step.step_index + 1
+                op_id = step.request_template.operation_id
+                method = step.request_template.method
+                path = step.request_template.path_template
+
+                lines.append(f"  {step_num}. {op_id}: {method} {path}")
+
+                # Show link info for steps after the first
+                if step.step_index > 0:
+                    if step.link_source is not None:
+                        link_name = step.link_source.get("link_name", "unknown")
+                        status_code = step.link_source.get("status_code", "?")
+                        source_op = step.link_source.get("source_operation", "?")
+                        lines.append(f"      via link: {link_name} ({status_code})")
+                        used_links.add((source_op, str(status_code), op_id))
+                    else:
+                        lines.append("      via unknown link (not in spec)")
+
+        # Summary
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("Execution Summary")
+        lines.append("=" * 60)
+        match_count = outcomes.count("match")
+        mismatch_count = outcomes.count("mismatch")
+        error_count = outcomes.count("error")
+        lines.append(f"Total chains: {len(chains)}")
+        lines.append(f"Matches: {match_count}")
+        lines.append(f"Mismatches: {mismatch_count}")
+        lines.append(f"Errors: {error_count}")
+        lines.append(f"Links traversed: {len(used_links)}")
+
+        # Write to file
+        output_path = self._output_dir / "chains.txt"
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+            f.write("\n")
+
+        return output_path
+
     def write_summary(self, stats: RunStats, seed: int | None = None) -> None:
         """Write run summary to disk.
 

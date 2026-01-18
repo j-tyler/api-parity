@@ -231,6 +231,7 @@ class ExploreArgs:
     stateful: bool
     max_chains: int | None
     max_steps: int
+    log_chains: bool
 
 
 @dataclass
@@ -414,6 +415,13 @@ def build_parser() -> argparse.ArgumentParser:
         dest="max_steps",
         help="Maximum steps per chain in stateful mode (default: 6)",
     )
+    explore_parser.add_argument(
+        "--log-chains",
+        action="store_true",
+        default=False,
+        dest="log_chains",
+        help="Write all executed chains to chains.txt for debugging (stateful mode only)",
+    )
 
     # Replay subcommand
     replay_parser = subparsers.add_parser(
@@ -528,6 +536,7 @@ def parse_explore_args(namespace: argparse.Namespace) -> ExploreArgs:
         stateful=namespace.stateful,
         max_chains=namespace.max_chains,
         max_steps=namespace.max_steps,
+        log_chains=namespace.log_chains,
     )
 
 
@@ -1057,6 +1066,8 @@ def run_explore(args: ExploreArgs) -> int:
     # Warn if stateful flags used without --stateful
     if not args.stateful and args.max_chains is not None:
         print("Warning: --max-chains is ignored without --stateful", file=sys.stderr)
+    if not args.stateful and args.log_chains:
+        print("Warning: --log-chains is ignored without --stateful", file=sys.stderr)
 
     # Print run configuration
     mode = "stateful" if args.stateful else "stateless"
@@ -1147,6 +1158,7 @@ def run_explore(args: ExploreArgs) -> int:
                     seed=args.seed,
                     get_operation_rules=get_operation_rules,
                     progress_reporter=progress_reporter,
+                    log_chains=args.log_chains,
                 )
             else:
                 # Stateless testing
@@ -1274,6 +1286,7 @@ def _run_stateful_explore(
     seed: int | None,
     get_operation_rules: Callable[[ComparisonRules, str], Any],
     progress_reporter: ProgressReporter | None = None,
+    log_chains: bool = False,
 ) -> None:
     """Execute stateful chain testing."""
     from api_parity.executor import RequestError
@@ -1291,6 +1304,10 @@ def _run_stateful_explore(
     # Update progress reporter with total now that we know it
     if progress_reporter is not None:
         progress_reporter.set_total(len(chains))
+
+    # Track chains and outcomes for --log-chains
+    executed_chains: list = []
+    chain_outcomes: list[str] = []
 
     for chain in chains:
         stats.total_chains += 1
@@ -1329,11 +1346,15 @@ def _run_stateful_explore(
             if not mismatch_found:
                 stats.chain_matches += 1
                 print("  MATCH (all steps)")
+                executed_chains.append(chain)
+                chain_outcomes.append("match")
             else:
                 stats.chain_mismatches += 1
                 mismatch_step = len(step_diffs) - 1
                 mismatch_op = step_ops[mismatch_step]
                 print(f"  MISMATCH at step {mismatch_step} ({mismatch_op}): {step_diffs[mismatch_step].summary}")
+                executed_chains.append(chain)
+                chain_outcomes.append("mismatch")
 
                 # Write chain mismatch bundle
                 bundle_path = writer.write_chain_mismatch(
@@ -1351,10 +1372,22 @@ def _run_stateful_explore(
         except RequestError as e:
             stats.chain_errors += 1
             print(f"  ERROR: {e}")
+            executed_chains.append(chain)
+            chain_outcomes.append("error")
 
         # Update progress reporter
         if progress_reporter is not None:
             progress_reporter.increment()
+
+    # Write chains log if requested
+    if log_chains and executed_chains:
+        chains_path = writer.write_chains_log(
+            chains=executed_chains,
+            outcomes=chain_outcomes,
+            max_chains=max_chains,
+            max_steps=max_steps,
+        )
+        print(f"\nChains log written to: {chains_path}")
 
 
 def run_replay(args: ReplayArgs) -> int:

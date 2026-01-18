@@ -38,6 +38,7 @@ _InferenceConfig = type(StatefulPhaseConfig().inference)
 from schemathesis.specs.openapi.stateful import OpenAPIStateMachine
 
 from api_parity.models import ChainCase, ChainStep, RequestCase
+from api_parity.schema_value_generator import SchemaValueGenerator
 
 
 # Pattern to extract field references from OpenAPI link expressions
@@ -268,6 +269,9 @@ class CaseGenerator:
 
         # Extract field names referenced by OpenAPI links
         self._link_fields = extract_link_fields_from_spec(self._raw_spec)
+
+        # Initialize schema-aware value generator for synthetic responses
+        self._schema_generator = SchemaValueGenerator(self._raw_spec)
 
     def get_link_fields(self) -> LinkFields:
         """Get the field references extracted from OpenAPI link expressions.
@@ -659,7 +663,10 @@ class CaseGenerator:
                 allows Schemathesis to resolve OpenAPI link expressions and discover
                 possible chain paths. Real HTTP execution happens later in the Executor.
                 """
-                synthetic_body = self._generate_synthetic_body()
+                # Extract operation info for schema-aware generation
+                op_id = case.operation.definition.raw.get("operationId", "unknown")
+                status_code = 201 if case.method == "POST" else 200
+                synthetic_body = self._generate_synthetic_body(op_id, status_code)
                 synthetic_headers = self._generate_synthetic_headers()
 
                 # Create placeholder request object (required by Schemathesis)
@@ -679,26 +686,41 @@ class CaseGenerator:
                     http_version="1.1",
                 )
 
-            def _generate_synthetic_body(self) -> dict:
+            def _generate_synthetic_body(
+                self, operation_id: str, status_code: int
+            ) -> dict:
                 """Generate synthetic response body for link resolution.
 
                 Creates placeholder values ONLY for fields referenced by OpenAPI links
                 so Schemathesis can resolve link expressions during chain discovery.
                 Real response data comes from actual HTTP execution in the Executor.
 
-                We don't add any hardcoded field names - only fields actually referenced
-                by link expressions in the spec. The actual format of each field is
-                defined by the OpenAPI spec; we just need a non-empty placeholder value
-                that Schemathesis can extract. See DESIGN.md "Schema-Driven Synthetic
-                Value Generation" for rationale.
+                Uses schema-aware generation to produce values that satisfy constraints
+                (e.g., enums) defined in the OpenAPI spec. This enables chain discovery
+                through operations with constrained parameters.
+
+                See DESIGN.md "Schema-Driven Synthetic Value Generation" for rationale.
                 """
                 body: dict = {}
 
+                # Get response schema for this operation
+                response_schema = generator_self._schema_generator.get_response_schema(
+                    operation_id, status_code
+                )
+
                 # Add all body fields referenced by links in the spec
-                # Using uuid.uuid4() as a generic non-empty placeholder - the actual
-                # format is defined by the OpenAPI spec, not by this code
                 for field_pointer in generator_self._link_fields.body_pointers:
-                    self._set_by_jsonpointer(body, field_pointer, str(uuid.uuid4()))
+                    # Try to get field schema for schema-aware generation
+                    field_schema = None
+                    if response_schema is not None:
+                        field_schema = generator_self._schema_generator.navigate_to_field(
+                            response_schema, field_pointer
+                        )
+
+                    # Generate value satisfying schema constraints (enum, format, type)
+                    # Falls back to UUID if no schema found
+                    value = generator_self._schema_generator.generate(field_schema)
+                    self._set_by_jsonpointer(body, field_pointer, value)
 
                 return body
 

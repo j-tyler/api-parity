@@ -124,6 +124,7 @@ CLI arguments override config file values for that run.
 | `--stateful` | Enable stateful chain testing via OpenAPI links |
 | `--max-chains INT` | Maximum chains to generate in stateful mode (default: 20) |
 | `--max-steps INT` | Maximum steps per chain (default: 6) |
+| `--log-chains` | Write executed chains to chains.txt for debugging (stateful mode only) |
 
 ### Replay Command
 
