@@ -767,3 +767,25 @@ When the synthetic response used 200, `_find_link_between()` couldn't find links
 
 **Files affected:**
 - `api_parity/case_generator.py` — Added `_find_status_code_with_links()` method in `ChainCapturingStateMachine`
+
+---
+
+# Link Attribution Searches Full Chain History
+
+Keywords: _find_link_between, chain history, link attribution, prev_steps
+Date: 20260118
+
+Schemathesis can use extracted variables from ANY previous step when resolving links, not just the immediately previous step. The original implementation only checked the single previous operation for a matching link, causing valid links from earlier steps to be reported as "via unknown link (not in spec)" in `graph-chains --generated` output.
+
+**Example:** In a chain `createOrder -> getOrderStatus -> updateOrder`, if `createOrder` has a link to `updateOrder` using `$response.body#/order_id`, and `getOrderStatus` does NOT link to `updateOrder`, the old code would fail to find the link because it only checked `getOrderStatus` (the immediately previous step).
+
+**Solution:** Changed `_find_link_between()` to accept the full list of previous `(operation_id, status_code)` tuples and search them all, most recent first. This correctly attributes links regardless of how many steps intervene between source and target.
+
+**Key behaviors:**
+1. Maintains `prev_steps` list of all previous operations and their status codes
+2. Searches in reverse order (most recent first) since links are more likely from recent operations
+3. Returns on first matching link found
+4. Falls back to `None` if no explicit link exists from any previous step
+
+**Files affected:**
+- `api_parity/case_generator.py` — Refactored `_find_link_between()` to accept chain history

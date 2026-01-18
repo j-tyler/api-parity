@@ -793,3 +793,316 @@ class TestLinkSourceAccuracy:
             assert "GetCreatedItem" in captured.out, (
                 "Link name should appear when explicit link is used"
             )
+
+
+class TestLinkAttributionHistory:
+    """Tests for link attribution across full chain history.
+
+    Verifies that _find_link_between() searches all previous steps,
+    not just the immediately previous operation. This fixes the bug
+    where "via unknown link (not in spec)" appeared for valid transitions
+    when the link source was an earlier step in the chain.
+    """
+
+    def test_link_attribution_searches_all_previous_steps(self, tmp_path):
+        """Link attribution finds links from any previous step, not just the last.
+
+        Creates a 3-step chain where step 2 gets its parameter from step 0
+        (not step 1). The link from step 0 to step 2 should be correctly
+        attributed even though step 1 is in between.
+        """
+        import yaml
+
+        from api_parity.case_generator import CaseGenerator
+
+        # Create a spec where:
+        # - createOrder returns order_id and links to both getOrderStatus and updateOrder
+        # - getOrderStatus returns status_id and does NOT link to updateOrder
+        # - updateOrder uses order_id from createOrder (step 0), not status_id from getOrderStatus (step 1)
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test API", "version": "1.0"},
+            "paths": {
+                "/orders": {
+                    "post": {
+                        "operationId": "createOrder",
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"type": "object"}
+                                }
+                            }
+                        },
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"order_id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "GetOrderStatus": {
+                                        "operationId": "getOrderStatus",
+                                        "parameters": {"order_id": "$response.body#/order_id"},
+                                    },
+                                    "UpdateOrder": {
+                                        "operationId": "updateOrder",
+                                        "parameters": {"order_id": "$response.body#/order_id"},
+                                    },
+                                },
+                            }
+                        },
+                    }
+                },
+                "/orders/{order_id}/status": {
+                    "get": {
+                        "operationId": "getOrderStatus",
+                        "parameters": [
+                            {
+                                "name": "order_id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"status_id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                # NOTE: No link to updateOrder here - the chain must
+                                # use the link from createOrder (step 0)
+                            }
+                        },
+                    }
+                },
+                "/orders/{order_id}": {
+                    "put": {
+                        "operationId": "updateOrder",
+                        "parameters": [
+                            {
+                                "name": "order_id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"type": "object"}
+                                }
+                            }
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Updated",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"type": "object"}
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "test_spec.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        generator = CaseGenerator(spec_file)
+
+        # Generate chains with enough steps to get create -> getStatus -> update pattern
+        chains = generator.generate_chains(max_chains=10, max_steps=3, seed=42)
+
+        # Find a chain with the pattern: createOrder -> getOrderStatus -> updateOrder
+        target_chain = None
+        for chain in chains:
+            if len(chain.steps) >= 3:
+                op_ids = [s.request_template.operation_id for s in chain.steps]
+                if op_ids[:3] == ["createOrder", "getOrderStatus", "updateOrder"]:
+                    target_chain = chain
+                    break
+
+        # Skip if Hypothesis didn't generate the exact pattern we need
+        if target_chain is None:
+            pytest.skip("Target chain pattern not generated by Hypothesis with this seed")
+
+        step_2 = target_chain.steps[2]  # updateOrder
+        link_source = step_2.link_source
+
+        # The link should be attributed to createOrder (step 0), not getOrderStatus (step 1)
+        assert link_source is not None, (
+            "updateOrder should have link_source (from createOrder)"
+        )
+        assert link_source.get("source_operation") == "createOrder", (
+            f"updateOrder link should come from createOrder, not "
+            f"{link_source.get('source_operation')}"
+        )
+        assert link_source.get("link_name") == "UpdateOrder", (
+            f"Link name should be UpdateOrder, got {link_source.get('link_name')}"
+        )
+
+    def test_most_recent_link_takes_precedence(self, tmp_path):
+        """When multiple steps have links to target, most recent is preferred.
+
+        If both step 0 and step 1 have links to step 2, the link from step 1
+        should be used since it's more recent.
+        """
+        import yaml
+
+        from api_parity.case_generator import CaseGenerator
+
+        # Create a spec where both createResource and updateResource link to getResource
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test API", "version": "1.0"},
+            "paths": {
+                "/resources": {
+                    "post": {
+                        "operationId": "createResource",
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"type": "object"}
+                                }
+                            }
+                        },
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "GetCreatedResource": {
+                                        "operationId": "getResource",
+                                        "parameters": {"id": "$response.body#/id"},
+                                    },
+                                    "UpdateResource": {
+                                        "operationId": "updateResource",
+                                        "parameters": {"id": "$response.body#/id"},
+                                    },
+                                },
+                            }
+                        },
+                    }
+                },
+                "/resources/{id}": {
+                    "get": {
+                        "operationId": "getResource",
+                        "parameters": [
+                            {
+                                "name": "id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"type": "object"}
+                                    }
+                                },
+                            }
+                        },
+                    },
+                    "put": {
+                        "operationId": "updateResource",
+                        "parameters": [
+                            {
+                                "name": "id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"type": "object"}
+                                }
+                            }
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Updated",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "GetUpdatedResource": {
+                                        "operationId": "getResource",
+                                        "parameters": {"id": "$response.body#/id"},
+                                    },
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+        }
+
+        spec_file = tmp_path / "test_spec.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        generator = CaseGenerator(spec_file)
+
+        # Generate chains
+        chains = generator.generate_chains(max_chains=10, max_steps=3, seed=42)
+
+        # Find a chain with pattern: createResource -> updateResource -> getResource
+        target_chain = None
+        for chain in chains:
+            if len(chain.steps) >= 3:
+                op_ids = [s.request_template.operation_id for s in chain.steps]
+                if op_ids[:3] == ["createResource", "updateResource", "getResource"]:
+                    target_chain = chain
+                    break
+
+        # Skip if Hypothesis didn't generate the exact pattern we need
+        if target_chain is None:
+            pytest.skip("Target chain pattern not generated by Hypothesis with this seed")
+
+        step_2 = target_chain.steps[2]  # getResource
+        link_source = step_2.link_source
+
+        # Both createResource and updateResource link to getResource,
+        # but updateResource (step 1) is more recent so its link should be used
+        assert link_source is not None, (
+            "getResource should have link_source"
+        )
+        assert link_source.get("source_operation") == "updateResource", (
+            f"getResource link should come from updateResource (most recent), not "
+            f"{link_source.get('source_operation')}"
+        )
+        assert link_source.get("link_name") == "GetUpdatedResource", (
+            f"Link name should be GetUpdatedResource, got {link_source.get('link_name')}"
+        )
