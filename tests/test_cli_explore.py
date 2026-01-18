@@ -237,6 +237,7 @@ class TestExploreArgs:
             stateful=False,
             max_chains=None,
             max_steps=6,
+            log_chains=False,
         )
         args = parse_explore_args(namespace)
         assert isinstance(args, ExploreArgs)
@@ -248,6 +249,7 @@ class TestExploreArgs:
         assert args.stateful is False
         assert args.max_chains is None
         assert args.max_steps == 6
+        assert args.log_chains is False
 
     def test_parse_explore_args_stateful_mode(self):
         """Test parse_explore_args handles stateful mode flags."""
@@ -268,11 +270,13 @@ class TestExploreArgs:
             stateful=True,
             max_chains=50,
             max_steps=10,
+            log_chains=True,
         )
         args = parse_explore_args(namespace)
         assert args.stateful is True
         assert args.max_chains == 50
         assert args.max_steps == 10
+        assert args.log_chains is True
 
 
 class TestValidateMode:
