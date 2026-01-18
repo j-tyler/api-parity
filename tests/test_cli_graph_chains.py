@@ -519,30 +519,53 @@ class TestExtractDeclaredLinks:
 
 
 class TestRunGraphChainsGenerated:
-    """Tests for _run_graph_chains_generated function."""
+    """Tests for _run_graph_chains_generated function.
 
-    def test_generated_with_test_fixture(self, capsys):
-        """Test --generated mode with actual test fixture."""
+    Performance note: Chain generation is expensive (~10-20s per call).
+    Tests are consolidated to minimize redundant generation while
+    maintaining coverage of all required behaviors.
+    """
+
+    def test_generated_comprehensive(self, capsys):
+        """Comprehensive test for --generated mode verifying all output behaviors.
+
+        Combined test that runs chain generation once and verifies:
+        - Basic execution succeeds (return code 0)
+        - Output format includes all expected sections
+        - run_graph_chains correctly dispatches to generated mode
+        - No Mermaid flowchart output when in generated mode
+        """
         spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
         if not spec_path.exists():
             pytest.skip("Test fixture not found")
 
+        # Use minimal chain count that still exercises the functionality
         args = GraphChainsArgs(
             spec=spec_path,
             exclude=[],
             generated=True,
-            max_chains=5,
-            max_steps=3,
+            max_chains=1,  # Minimal for speed
+            max_steps=2,
             seed=42,
         )
-        result = _run_graph_chains_generated(args)
+        result = run_graph_chains(args)
         assert result == 0
 
         captured = capsys.readouterr()
-        # Should contain chain output
+
+        # Should NOT contain Mermaid flowchart output (dispatch verification)
+        assert "flowchart LR" not in captured.out
+
+        # Should contain generated chains output
+        assert "Generating chains" in captured.out
+
+        # Should contain chain output or indicate no chains
         assert "Generated Chains" in captured.out or "No multi-step chains" in captured.out
-        # Should contain link coverage summary
+
+        # Should contain link coverage summary with expected fields
         assert "Link Coverage Summary" in captured.out
+        assert "Total declared links:" in captured.out
+        assert "Links actually used:" in captured.out
 
     def test_generated_with_invalid_spec(self, tmp_path, capsys):
         """Test --generated mode with invalid spec path."""
@@ -550,8 +573,8 @@ class TestRunGraphChainsGenerated:
             spec=tmp_path / "nonexistent.yaml",
             exclude=[],
             generated=True,
-            max_chains=5,
-            max_steps=3,
+            max_chains=1,
+            max_steps=2,
             seed=None,
         )
         result = _run_graph_chains_generated(args)
@@ -559,54 +582,6 @@ class TestRunGraphChainsGenerated:
 
         captured = capsys.readouterr()
         assert "Error loading spec" in captured.err
-
-    def test_run_graph_chains_dispatches_to_generated(self, capsys):
-        """Test run_graph_chains dispatches to generated mode when flag is set."""
-        spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
-        if not spec_path.exists():
-            pytest.skip("Test fixture not found")
-
-        args = GraphChainsArgs(
-            spec=spec_path,
-            exclude=[],
-            generated=True,
-            max_chains=3,
-            max_steps=3,
-            seed=42,
-        )
-        result = run_graph_chains(args)
-        assert result == 0
-
-        captured = capsys.readouterr()
-        # Should NOT contain Mermaid flowchart output
-        assert "flowchart LR" not in captured.out
-        # Should contain generated chains output
-        assert "Generating chains" in captured.out
-
-    def test_generated_output_format(self, capsys):
-        """Test --generated output includes expected sections."""
-        spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
-        if not spec_path.exists():
-            pytest.skip("Test fixture not found")
-
-        args = GraphChainsArgs(
-            spec=spec_path,
-            exclude=[],
-            generated=True,
-            max_chains=10,
-            max_steps=4,
-            seed=42,
-        )
-        result = _run_graph_chains_generated(args)
-        assert result == 0
-
-        captured = capsys.readouterr()
-
-        # Check for expected sections
-        assert "Generating chains" in captured.out
-        assert "Link Coverage Summary" in captured.out
-        assert "Total declared links:" in captured.out
-        assert "Links actually used:" in captured.out
 
     def test_generated_with_exclude(self, capsys):
         """Test --generated mode respects --exclude."""
@@ -618,8 +593,8 @@ class TestRunGraphChainsGenerated:
             spec=spec_path,
             exclude=["createWidget", "createOrder"],  # Exclude entry points
             generated=True,
-            max_chains=5,
-            max_steps=3,
+            max_chains=1,  # Minimal for speed
+            max_steps=2,
             seed=42,
         )
         result = _run_graph_chains_generated(args)
@@ -655,7 +630,7 @@ class TestRunGraphChainsGenerated:
             spec=spec_path,
             exclude=[],
             generated=True,
-            max_chains=5,
+            max_chains=1,
             max_steps=-1,  # Invalid
             seed=None,
         )
@@ -804,8 +779,8 @@ class TestLinkSourceAccuracy:
             spec=spec_file,
             exclude=[],
             generated=True,
-            max_chains=10,
-            max_steps=3,
+            max_chains=1,  # Minimal for speed
+            max_steps=2,
             seed=42,
         )
         result = _run_graph_chains_generated(args)

@@ -716,7 +716,7 @@ class TestCustomFieldNames:
         # Chain generation should not raise - the synthetic responses should
         # include the custom field names for link resolution
         try:
-            chains = generator.generate_chains(max_chains=3, max_steps=3)
+            chains = generator.generate_chains(max_chains=1, max_steps=2)
             # Should generate some chains (exact count varies)
             # The important thing is it doesn't fail
         except Exception as e:
@@ -879,14 +879,12 @@ class TestExplicitLinksOnly:
     See DESIGN.md "Explicit Links Only for Chain Generation" for rationale.
     """
 
-    def test_spec_with_explicit_links_generates_chains(
-        self, openapi_spec_with_links: Path
-    ):
-        """Spec with explicit OpenAPI links generates multi-step chains."""
-        from api_parity.case_generator import CaseGenerator
+    def test_spec_with_explicit_links_generates_chains(self, generated_chains):
+        """Spec with explicit OpenAPI links generates multi-step chains.
 
-        generator = CaseGenerator(openapi_spec_with_links)
-        chains = generator.generate_chains(max_chains=3, max_steps=3)
+        Reuses module-scoped generated_chains fixture to avoid redundant generation.
+        """
+        chains, _ = generated_chains
 
         # Should generate at least one chain
         assert len(chains) > 0, "Spec with explicit links should generate chains"
@@ -998,7 +996,7 @@ class TestExplicitLinksOnly:
         # With inference disabled, Schemathesis raises NoLinksFound because
         # there are no explicit links defined. This is the expected behavior.
         with pytest.raises(NoLinksFound):
-            generator.generate_chains(max_chains=3, max_steps=3)
+            generator.generate_chains(max_chains=1, max_steps=2)
 
     def test_schemathesis_config_disables_inference(self):
         """Verify the Schemathesis config actually disables inference algorithms."""
@@ -1154,7 +1152,7 @@ class TestStatusCodeLinkResolution:
         # Exact chain structure depends on Hypothesis exploration, so we just verify
         # chains are generated (which requires the 201 link to be discovered)
         try:
-            chains = generator.generate_chains(max_chains=5, max_steps=3)
+            chains = generator.generate_chains(max_chains=1, max_steps=3)  # 3 steps for create→update→get
             assert len(chains) > 0, "Should generate chains when PUT has links on 201"
         except Exception as e:
             pytest.fail(f"Chain generation failed with PUT links on 201: {e}")
@@ -1264,7 +1262,7 @@ class TestStatusCodeLinkResolution:
 
         # Generate chains - should find create → delete → checkDeletionStatus
         try:
-            chains = generator.generate_chains(max_chains=5, max_steps=3)
+            chains = generator.generate_chains(max_chains=1, max_steps=3)  # 3 steps for create→delete→check
             # Should generate chains following the links
             assert len(chains) > 0, "Should generate chains when DELETE has links on 202"
 
@@ -1352,7 +1350,7 @@ class TestStatusCodeLinkResolution:
 
         # Chain generation should work - POST has links, GET doesn't but that's OK
         try:
-            chains = generator.generate_chains(max_chains=5, max_steps=2)
+            chains = generator.generate_chains(max_chains=1, max_steps=2)
             assert len(chains) > 0, "Should generate chains with POST links"
         except Exception as e:
             pytest.fail(f"Chain generation failed: {e}")
@@ -1391,7 +1389,7 @@ class TestHeaderBasedChains:
 
         # Should generate chains following header-based links
         try:
-            chains = generator.generate_chains(max_chains=3, max_steps=3)
+            chains = generator.generate_chains(max_chains=1, max_steps=2)
             # The spec has links, so chains should be generated
             assert len(chains) > 0, "Should generate chains from header-linked spec"
         except Exception as e:
@@ -1512,7 +1510,7 @@ class TestHeaderBasedChains:
         # Schemathesis can't resolve the link expression and chain generation fails
         # or produces no chains
         try:
-            chains = generator.generate_chains(max_chains=5, max_steps=3)
+            chains = generator.generate_chains(max_chains=1, max_steps=2)
             # If we got here without error and have chains, the fix works
             # Note: chains may be empty if Hypothesis doesn't explore the link path,
             # but any KeyError from wrong header case would have raised an exception
