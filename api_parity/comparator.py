@@ -692,8 +692,10 @@ class Comparator:
                 )
             ]
 
-        # Detect multi-match paths by checking actual match counts
+        # Detect multi-match paths by actual match count, not by inspecting the path syntax.
         # This handles all wildcards: [*], .., [?()], [0:5], [0,1,2], etc.
+        # We compare by index pairing (matches_a[i] vs matches_b[i]), which requires equal counts.
+        # If counts differ, we report count mismatch rather than trying element-wise comparison.
         is_multi_match = len(matches_a) > 1 or len(matches_b) > 1
 
         if not is_multi_match:
@@ -798,6 +800,12 @@ class Comparator:
 
         Returns:
             PresenceResult with check outcome.
+
+        Presence modes:
+            PARITY: Both present or both absent. Value comparison only if both present.
+            REQUIRED: Both must be present. Fails if either missing.
+            FORBIDDEN: Both must be absent. Fails if either present.
+            OPTIONAL: Always passes. Value comparison only if both present.
         """
         a_present = value_a is not NOT_FOUND
         b_present = value_b is not NOT_FOUND
@@ -962,7 +970,7 @@ class Comparator:
         self,
         headers: dict[str, list[str]],
         name: str,
-    ) -> Any:
+    ) -> str | _NotFound:
         """Get a header value (case-insensitive).
 
         Multi-value headers return only the first value per design.
@@ -974,7 +982,8 @@ class Comparator:
         Returns:
             First header value, or NOT_FOUND if not present.
         """
-        # Headers are stored with lowercase keys
+        # Headers should already be lowercase (per ResponseCase normalization), but we
+        # compare case-insensitively as a defensive measure against upstream changes.
         name_lower = name.lower()
         for key, values in headers.items():
             if key.lower() == name_lower and values:

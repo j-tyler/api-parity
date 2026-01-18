@@ -14,7 +14,7 @@ from tests.integration.explore_helpers import (
 class TestExploreExecution:
     """Tests for actual explore execution (requires mock servers and CEL evaluator)."""
 
-    def test_explore_comprehensive_execution(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_explore_comprehensive_execution(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test comprehensive explore execution including options and output.
 
         Combined test verifying:
@@ -24,8 +24,8 @@ class TestExploreExecution:
         - CEL expressions are evaluated without errors
         """
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
         out_dir = tmp_path / "artifacts"
@@ -87,11 +87,11 @@ class TestExploreExecution:
                 assert diff["match"] is False
                 assert "mismatch_type" in diff
 
-    def test_explore_with_exclude(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_explore_with_exclude(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test that --exclude prevents operations from being tested."""
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
         out_dir = tmp_path / "artifacts"
@@ -119,11 +119,11 @@ class TestExploreExecution:
         # healthCheck should not appear in output
         assert "healthCheck:" not in result.stdout
 
-    def test_explore_seed_reproducibility(self, dual_servers, tmp_path, cel_evaluator_exists):
+    def test_explore_seed_reproducibility(self, fixture_dual_mock_servers, tmp_path, fixture_cel_evaluator_path):
         """Test that the same seed produces the same cases."""
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
 

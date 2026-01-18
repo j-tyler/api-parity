@@ -47,7 +47,7 @@ class CELEvaluator:
     # Default path to cel-evaluator binary (relative to this file's directory)
     DEFAULT_BINARY_PATH = Path(__file__).parent.parent / "cel-evaluator"
 
-    # Maximum restart attempts before giving up
+    # Maximum restart attempts before giving up (prevents infinite restart loops)
     MAX_RESTARTS = 3
 
     # Timeout for subprocess startup (seconds)
@@ -86,7 +86,7 @@ class CELEvaluator:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1,  # Line buffered
+            bufsize=1,  # Line buffered for immediate JSON line flushing
         )
 
         # Wait for ready signal with timeout
@@ -125,7 +125,7 @@ class CELEvaluator:
         self._start_subprocess()
 
     def _cleanup_process(self) -> None:
-        """Clean up the subprocess if it exists."""
+        """Clean up the subprocess (best-effort, all exceptions suppressed)."""
         if self._process:
             try:
                 self._process.stdin.close()
@@ -164,7 +164,9 @@ class CELEvaluator:
             CELSubprocessError: If the subprocess crashes and cannot be restarted.
         """
         if self._process is None:
-            raise CELSubprocessError("CEL evaluator not running")
+            raise CELSubprocessError(
+                "CEL evaluator not running (was close() called, or did startup fail?)"
+            )
 
         request_id = str(uuid.uuid4())
         request = {"id": request_id, "expr": expression, "data": data}
@@ -183,18 +185,15 @@ class CELEvaluator:
                     f"CEL evaluation timeout ({self.EVALUATION_TIMEOUT}s)"
                 )
 
-            # Read response
+            # Read response (EOF = subprocess died, restart and retry)
             response_line = self._process.stdout.readline()
             if not response_line:
-                # EOF - subprocess died
                 self._restart_subprocess()
-                # Retry the request after restart
                 return self.evaluate(expression, data)
 
             response = json.loads(response_line)
 
         except BrokenPipeError:
-            # Subprocess died while writing
             self._restart_subprocess()
             return self.evaluate(expression, data)
         except json.JSONDecodeError as e:

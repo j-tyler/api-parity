@@ -1,7 +1,7 @@
 """Unit tests for Comparator result structure, formatting, and edge cases."""
 
 from api_parity.models import BodyRules, FieldRule, MismatchType, OperationRules
-from tests.conftest import make_response
+from tests.conftest import make_response_case
 
 # Import shared fixtures
 pytest_plugins = ["tests.comparator_fixtures"]
@@ -12,8 +12,8 @@ class TestResultStructure:
 
     def test_match_result_structure(self, comparator):
         """Matching result has correct structure."""
-        response_a = make_response(status_code=200)
-        response_b = make_response(status_code=200)
+        response_a = make_response_case(status_code=200)
+        response_b = make_response_case(status_code=200)
         rules = OperationRules()
 
         result = comparator.compare(response_a, response_b, rules)
@@ -27,8 +27,8 @@ class TestResultStructure:
 
     def test_mismatch_result_structure(self, comparator):
         """Mismatching result has correct structure."""
-        response_a = make_response(status_code=200)
-        response_b = make_response(status_code=500)
+        response_a = make_response_case(status_code=200)
+        response_b = make_response_case(status_code=500)
         rules = OperationRules()
 
         result = comparator.compare(response_a, response_b, rules)
@@ -41,8 +41,8 @@ class TestResultStructure:
 
     def test_field_difference_values(self, comparator, mock_cel):
         """FieldDifference contains actual values."""
-        response_a = make_response(body={"id": 123})
-        response_b = make_response(body={"id": 456})
+        response_a = make_response_case(body={"id": 123})
+        response_b = make_response_case(body={"id": 456})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.id": FieldRule(predefined="exact_match")}
@@ -64,8 +64,8 @@ class TestSummaryFormatting:
 
     def test_single_header_difference_summary(self, comparator, mock_cel):
         """Single header difference has specific summary."""
-        response_a = make_response(headers={"x-test": ["a"]})
-        response_b = make_response(headers={"x-test": ["b"]})
+        response_a = make_response_case(headers={"x-test": ["a"]})
+        response_b = make_response_case(headers={"x-test": ["b"]})
         rules = OperationRules(
             headers={"x-test": FieldRule(predefined="exact_match")},
         )
@@ -78,8 +78,8 @@ class TestSummaryFormatting:
 
     def test_multiple_header_differences_summary(self, comparator, mock_cel):
         """Multiple header differences have count summary."""
-        response_a = make_response(headers={"x-one": ["a"], "x-two": ["b"]})
-        response_b = make_response(headers={"x-one": ["c"], "x-two": ["d"]})
+        response_a = make_response_case(headers={"x-one": ["a"], "x-two": ["b"]})
+        response_b = make_response_case(headers={"x-one": ["c"], "x-two": ["d"]})
         rules = OperationRules(
             headers={
                 "x-one": FieldRule(predefined="exact_match"),
@@ -94,8 +94,8 @@ class TestSummaryFormatting:
 
     def test_single_body_difference_summary(self, comparator, mock_cel):
         """Single body difference has path in summary."""
-        response_a = make_response(body={"id": 1})
-        response_b = make_response(body={"id": 2})
+        response_a = make_response_case(body={"id": 1})
+        response_b = make_response_case(body={"id": 2})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.id": FieldRule(predefined="exact_match")}
@@ -110,8 +110,8 @@ class TestSummaryFormatting:
 
     def test_multiple_body_differences_summary(self, comparator, mock_cel):
         """Multiple body differences have count summary."""
-        response_a = make_response(body={"id": 1, "name": "a"})
-        response_b = make_response(body={"id": 2, "name": "b"})
+        response_a = make_response_case(body={"id": 1, "name": "a"})
+        response_b = make_response_case(body={"id": 2, "name": "b"})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={
@@ -132,8 +132,8 @@ class TestEdgeCases:
 
     def test_empty_body_objects(self, comparator):
         """Empty body objects match."""
-        response_a = make_response(body={})
-        response_b = make_response(body={})
+        response_a = make_response_case(body={})
+        response_b = make_response_case(body={})
         rules = OperationRules()
 
         result = comparator.compare(response_a, response_b, rules)
@@ -142,8 +142,8 @@ class TestEdgeCases:
 
     def test_deeply_nested_path(self, comparator, mock_cel):
         """Deeply nested paths work."""
-        response_a = make_response(body={"a": {"b": {"c": {"d": {"e": 1}}}}})
-        response_b = make_response(body={"a": {"b": {"c": {"d": {"e": 1}}}}})
+        response_a = make_response_case(body={"a": {"b": {"c": {"d": {"e": 1}}}}})
+        response_b = make_response_case(body={"a": {"b": {"c": {"d": {"e": 1}}}}})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.a.b.c.d.e": FieldRule(predefined="exact_match")}
@@ -157,8 +157,8 @@ class TestEdgeCases:
 
     def test_unicode_values(self, comparator, mock_cel):
         """Unicode values are handled correctly."""
-        response_a = make_response(body={"name": "日本語"})
-        response_b = make_response(body={"name": "日本語"})
+        response_a = make_response_case(body={"name": "日本語"})
+        response_b = make_response_case(body={"name": "日本語"})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.name": FieldRule(predefined="exact_match")}
@@ -173,8 +173,8 @@ class TestEdgeCases:
 
     def test_boolean_values(self, comparator, mock_cel):
         """Boolean values are handled correctly."""
-        response_a = make_response(body={"active": True})
-        response_b = make_response(body={"active": False})
+        response_a = make_response_case(body={"active": True})
+        response_b = make_response_case(body={"active": False})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.active": FieldRule(predefined="exact_match")}
@@ -189,8 +189,8 @@ class TestEdgeCases:
 
     def test_array_as_field_value(self, comparator, mock_cel):
         """Array values can be compared."""
-        response_a = make_response(body={"tags": ["a", "b", "c"]})
-        response_b = make_response(body={"tags": ["a", "b", "c"]})
+        response_a = make_response_case(body={"tags": ["a", "b", "c"]})
+        response_b = make_response_case(body={"tags": ["a", "b", "c"]})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.tags": FieldRule(predefined="exact_match")}
@@ -205,8 +205,8 @@ class TestEdgeCases:
 
     def test_object_as_field_value(self, comparator, mock_cel):
         """Nested object values can be compared."""
-        response_a = make_response(body={"user": {"id": 1, "name": "Alice"}})
-        response_b = make_response(body={"user": {"id": 1, "name": "Alice"}})
+        response_a = make_response_case(body={"user": {"id": 1, "name": "Alice"}})
+        response_b = make_response_case(body={"user": {"id": 1, "name": "Alice"}})
         rules = OperationRules(
             body=BodyRules(
                 field_rules={"$.user": FieldRule(predefined="exact_match")}
@@ -224,8 +224,8 @@ class TestEmptyInputs:
 
     def test_empty_headers_dict(self, comparator):
         """Empty headers dicts match."""
-        response_a = make_response(headers={})
-        response_b = make_response(headers={})
+        response_a = make_response_case(headers={})
+        response_b = make_response_case(headers={})
         rules = OperationRules()
 
         result = comparator.compare(response_a, response_b, rules)
@@ -234,8 +234,8 @@ class TestEmptyInputs:
 
     def test_empty_body_rules(self, comparator):
         """Empty body rules means body passes."""
-        response_a = make_response(body={"any": "content"})
-        response_b = make_response(body={"different": "stuff"})
+        response_a = make_response_case(body={"any": "content"})
+        response_b = make_response_case(body={"different": "stuff"})
         rules = OperationRules(
             body=BodyRules(field_rules={}),
         )
@@ -246,8 +246,8 @@ class TestEmptyInputs:
 
     def test_body_rules_none(self, comparator):
         """None body rules means body passes."""
-        response_a = make_response(body={"any": "content"})
-        response_b = make_response(body={"different": "stuff"})
+        response_a = make_response_case(body={"any": "content"})
+        response_b = make_response_case(body={"different": "stuff"})
         rules = OperationRules(body=None)
 
         result = comparator.compare(response_a, response_b, rules)

@@ -136,6 +136,7 @@ class SpecLinter:
             if not isinstance(path_item, dict):
                 continue
             for method, operation in path_item.items():
+                # Skip non-dict entries and OpenAPI extension fields (e.g., $ref, x-custom)
                 if not isinstance(operation, dict) or method.startswith("$"):
                     continue
                 op_id = operation.get("operationId")
@@ -338,20 +339,20 @@ class SpecLinter:
                             if not isinstance(param_expr, str):
                                 continue
 
-                            # Check expression type
-                            if LINK_BODY_PATTERN.match(param_expr):
+                            # Categorize by expression type (body, header, request, or literal)
+                            body_match = LINK_BODY_PATTERN.match(param_expr)
+                            if body_match:
                                 body_count += 1
-                                # Extract field path
-                                match = LINK_BODY_PATTERN.match(param_expr)
-                                if match:
-                                    body_fields.add(match.group(1))
-                            elif LINK_HEADER_PATTERN.match(param_expr):
+                                body_fields.add(body_match.group(1))
+                                continue
+
+                            header_match = LINK_HEADER_PATTERN.match(param_expr)
+                            if header_match:
                                 header_count += 1
-                                # Extract header name
-                                match = LINK_HEADER_PATTERN.match(param_expr)
-                                if match:
-                                    header_names.add(match.group(1).lower())
-                            elif param_expr.startswith("$request."):
+                                header_names.add(header_match.group(1).lower())
+                                continue
+
+                            if param_expr.startswith("$request."):
                                 request_count += 1
                             else:
                                 literal_count += 1
@@ -404,7 +405,7 @@ class SpecLinter:
                     if not links:
                         continue
 
-                    # Check if status code is non-200
+                    # OpenAPI status codes can be int (200) or str ("200", "2XX", "default")
                     code_str = str(status_code)
                     if code_str != "200":
                         for link_name, link_def in links.items():
@@ -468,7 +469,7 @@ class SpecLinter:
                 for status_code, response_def in responses.items():
                     if not isinstance(response_def, dict):
                         continue
-                    # Check if this is a 2xx response
+                    # OpenAPI status codes can be int (200) or str ("200", "2XX", "default")
                     code_str = str(status_code)
                     is_2xx = (
                         code_str.startswith("2") or
@@ -517,11 +518,15 @@ class SpecLinter:
         if self._raw_content is None:
             return
 
-        # Pattern to find links sections with potential duplicates
-        # This is a heuristic - we look for repeated link names under 'links:'
+        # WHY raw text parsing instead of using self._spec:
+        # YAML/JSON parsers silently keep only the last value for duplicate keys.
+        # If someone accidentally defines the same link twice, the parser returns
+        # a valid dict with one entry - the bug is invisible. By scanning raw text,
+        # we can detect duplicate key names before the parser hides them.
         in_links_section = False
         links_indent = 0
-        link_child_indent: int | None = None  # Detected dynamically from first child
+        # Detect child indent from first link key (can't assume 2-space indentation)
+        link_child_indent: int | None = None
         link_names_in_section: dict[int, list[tuple[str, int]]] = {}  # section_line -> [(name, line_num)]
         section_start_line = 0
 

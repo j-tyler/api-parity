@@ -107,7 +107,12 @@ class Executor:
     def __enter__(self) -> "Executor":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
         self.close()
 
     def close(self) -> None:
@@ -115,7 +120,7 @@ class Executor:
         self._client_a.close()
         self._client_b.close()
 
-    def _build_client_kwargs(self, target: TargetConfig, timeout: float) -> dict:
+    def _build_client_kwargs(self, target: TargetConfig, timeout: float) -> dict[str, Any]:
         """Build kwargs for httpx.Client including TLS configuration.
 
         Args:
@@ -125,7 +130,7 @@ class Executor:
         Returns:
             Dictionary of kwargs for httpx.Client constructor.
         """
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "base_url": target.base_url,
             "headers": target.headers,
             "timeout": timeout,
@@ -168,9 +173,10 @@ class Executor:
         self,
         request: RequestCase,
     ) -> tuple[ResponseCase, ResponseCase]:
-        """Execute a request against both targets.
+        """Execute a request against both targets (serially, A then B).
 
-        Requests are executed serially: Target A first, then Target B.
+        Serial execution simplifies debugging (timing differences don't mask issues)
+        and keeps rate limiting predictable.
 
         Args:
             request: The request to execute.
@@ -269,19 +275,11 @@ class Executor:
         )
 
     def _variable_to_string(self, var_value: Any) -> str:
-        """Convert a variable value to string for substitution.
+        """Convert a variable value to string for path/body substitution.
 
-        Handles list values (from header extraction) by using the first element.
-        Using str() on a list produces "['value']" which is not what we want.
-
-        Args:
-            var_value: The variable value to convert.
-
-        Returns:
-            String representation suitable for substitution.
+        Lists (e.g., header values) use first element to avoid "['value']" in URLs.
         """
         if isinstance(var_value, list):
-            # Use first element if list is non-empty, otherwise empty string
             return str(var_value[0]) if var_value else ""
         return str(var_value)
 
@@ -401,19 +399,8 @@ class Executor:
     def _extract_variables(self, response: ResponseCase) -> dict[str, Any]:
         """Extract variables from a response for chain substitution.
 
-        Extracts fields referenced by OpenAPI link expressions. Uses the
-        link_fields parsed from the spec at initialization.
-
-        Body fields are stored under their JSONPointer path. Headers use
-        "header/{name}" for all values (as list) or "header/{name}/{index}"
-        for specific indexed access. This matches body array semantics where
-        "items" returns the array and "items/0" returns the first element.
-
-        Args:
-            response: Response to extract from.
-
-        Returns:
-            Dictionary of extracted variable names to values.
+        Body fields stored at JSONPointer paths. Headers at "header/{name}" (list)
+        or "header/{name}/{index}" (single value).
         """
         extracted: dict[str, Any] = {}
 
@@ -425,8 +412,8 @@ class Executor:
                 if value is not None:
                     extracted[field_pointer] = value
 
-            # Second pass: add last-segment shortcuts only if no collision
-            # e.g., "data/item/id" also stores under "id" if no other path ends in "id"
+            # Add shortcut aliases: "userId" -> value (from "data/user/userId")
+            # Only when unambiguous (single pointer with that last segment)
             last_segments: dict[str, list[str]] = {}
             for field_pointer in self._link_fields.body_pointers:
                 last_segment = field_pointer.split("/")[-1]
@@ -435,17 +422,11 @@ class Executor:
 
             for last_segment, pointers in last_segments.items():
                 if len(pointers) == 1:
-                    # No collision - safe to add shortcut
                     pointer = pointers[0]
                     if pointer in extracted:
                         extracted[last_segment] = extracted[pointer]
-                # If len(pointers) > 1, there's a collision - skip shortcut to avoid
-                # silent data loss. Users must use full path.
 
-        # Extract header values with array semantics
-        # Headers are stored at "header/{name}" (all values as list) and optionally
-        # "header/{name}/{index}" for specific indexed access.
-        # This mirrors body array access: "items" vs "items/0"
+        # Extract header values: "header/{name}" (list) and "header/{name}/{index}" (single)
         headers_to_extract: set[str] = set()
         indexed_headers: dict[str, set[int]] = {}
 
@@ -474,11 +455,7 @@ class Executor:
         return self._operation_timeouts.get(operation_id, self._default_timeout)
 
     def _wait_for_rate_limit(self) -> None:
-        """Wait if necessary to respect rate limit.
-
-        Thread-safe. Uses a simple time-based approach: ensure minimum
-        interval between requests.
-        """
+        """Wait if necessary to respect rate limit."""
         if self._min_interval <= 0:
             return
 
@@ -520,9 +497,7 @@ class Executor:
             for value in values:
                 params.append((key, value))
 
-        # Build headers (flatten lists, take first value for each)
-        # Sanitize values to ASCII - HTTP headers must be ASCII per RFC 7230.
-        # Schemathesis/Hypothesis may generate non-ASCII characters during fuzzing.
+        # Build headers (flatten lists, sanitize non-ASCII per RFC 7230)
         headers: dict[str, str] = {}
         for key, values in request.headers.items():
             if values:
@@ -579,10 +554,13 @@ class Executor:
         except httpx.RequestError as e:
             raise RequestError(f"{target_name} request error: {e}") from e
         except UnicodeEncodeError as e:
-            # Fallback for any remaining non-ASCII encoding issues
-            # (header keys, query params, etc. not caught by sanitization)
+            # Fallback for non-ASCII in places we don't sanitize: header keys, query
+            # params, paths. These are protocol violations that should fail loudly
+            # rather than silently corrupt data.
             raise RequestError(
-                f"{target_name} encoding error - non-ASCII characters in request: {e}"
+                f"{target_name} encoding error: non-ASCII characters in request "
+                f"(header key, query param, or path). Character: {e.object[e.start:e.end]!r} "
+                f"at position {e.start}. HTTP requires ASCII for these fields."
             ) from e
 
         return self._convert_response(http_response, elapsed_ms)
@@ -609,7 +587,7 @@ class Executor:
                 headers[key_lower] = []
             headers[key_lower].append(value)
 
-        # Body - try to parse as JSON
+        # Parse body based on content-type: JSON -> parsed (dict/list/etc), text -> str, binary -> base64
         body: Any = None
         body_base64: str | None = None
 

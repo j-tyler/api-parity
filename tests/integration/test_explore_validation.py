@@ -13,7 +13,7 @@ from tests.integration.explore_helpers import (
 class TestExploreValidateMode:
     """Tests for --validate mode (no execution, just config validation)."""
 
-    def test_validate_mode_comprehensive(self, dual_servers, tmp_path):
+    def test_validate_mode_comprehensive(self, fixture_dual_mock_servers, tmp_path):
         """Test --validate mode functionality comprehensively.
 
         Combined test verifying:
@@ -22,8 +22,8 @@ class TestExploreValidateMode:
         - --exclude flag is respected
         """
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
         out_dir = tmp_path / "artifacts"
@@ -75,7 +75,7 @@ class TestExploreValidateMode:
 class TestExploreConfigErrors:
     """Tests for configuration error handling."""
 
-    def test_config_error_handling(self, dual_servers, tmp_path):
+    def test_config_error_handling(self, fixture_dual_mock_servers, tmp_path):
         """Test error handling for various configuration problems.
 
         Combined test verifying:
@@ -84,8 +84,8 @@ class TestExploreConfigErrors:
         - Missing spec file is rejected
         """
         config_path = create_runtime_config(
-            dual_servers["a"].port,
-            dual_servers["b"].port,
+            fixture_dual_mock_servers["a"].port,
+            fixture_dual_mock_servers["b"].port,
             tmp_path,
         )
 

@@ -212,11 +212,11 @@ class TestFieldRule:
         assert rule.presence == PresenceMode.FORBIDDEN
 
     def test_forbidden_with_predefined_rejected(self):
-        with pytest.raises(ValueError, match="forbidden field"):
+        with pytest.raises(ValueError, match="presence=forbidden cannot have a comparison rule"):
             FieldRule(presence=PresenceMode.FORBIDDEN, predefined="exact_match")
 
     def test_forbidden_with_expr_rejected(self):
-        with pytest.raises(ValueError, match="forbidden field"):
+        with pytest.raises(ValueError, match="presence=forbidden cannot have a comparison rule"):
             FieldRule(presence=PresenceMode.FORBIDDEN, expr="a == b")
 
     def test_seconds_accepts_float(self):
@@ -540,7 +540,7 @@ class TestTargetConfig:
 
     def test_cert_without_key_rejected(self):
         """Test that cert without key raises validation error."""
-        with pytest.raises(ValueError, match="cert and key must both be provided together"):
+        with pytest.raises(ValueError, match="mTLS requires both cert and key.*key is missing"):
             TargetConfig(
                 base_url="https://secure.example.com",
                 cert="/path/to/client.crt",
@@ -548,7 +548,7 @@ class TestTargetConfig:
 
     def test_key_without_cert_rejected(self):
         """Test that key without cert raises validation error."""
-        with pytest.raises(ValueError, match="cert and key must both be provided together"):
+        with pytest.raises(ValueError, match="mTLS requires both cert and key.*cert is missing"):
             TargetConfig(
                 base_url="https://secure.example.com",
                 key="/path/to/client.key",

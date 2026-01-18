@@ -12,16 +12,28 @@ from api_parity.models import ComparisonLibrary, PredefinedComparison
 
 
 @pytest.fixture
-def mock_cel():
-    """Create a mock CEL evaluator."""
+def mock_cel() -> MagicMock:
+    """Create a mock CEL evaluator that returns True for all expressions.
+
+    The mock returns True by default so tests can focus on Comparator logic
+    (rule selection, path matching, mismatch reporting) without CEL evaluation.
+    Override mock_cel.evaluate.return_value in individual tests to simulate
+    CEL failures or specific return values.
+    """
     cel = MagicMock()
     cel.evaluate = MagicMock(return_value=True)
     return cel
 
 
 @pytest.fixture
-def comparison_library():
-    """Create a minimal comparison library for testing."""
+def comparison_library() -> ComparisonLibrary:
+    """Create a minimal comparison library for testing.
+
+    Includes a representative subset of comparison types: exact match, ignore,
+    numeric tolerance, regex, string prefix, and binary comparisons. This covers
+    the main patterns (parameterless, single-param, type-specific) without
+    duplicating the full production library.
+    """
     return ComparisonLibrary(
         library_version="1",
         description="Test library",
@@ -76,6 +88,11 @@ def comparison_library():
 
 
 @pytest.fixture
-def comparator(mock_cel, comparison_library):
-    """Create a Comparator with mocked CEL evaluator."""
+def comparator(mock_cel: MagicMock, comparison_library: ComparisonLibrary) -> Comparator:
+    """Create a Comparator with mocked CEL evaluator.
+
+    Uses mock_cel (returns True by default) so tests verify Comparator behavior
+    without real CEL evaluation. For tests that need actual CEL evaluation,
+    use integration tests in tests/integration/test_comparator_cel.py instead.
+    """
     return Comparator(mock_cel, comparison_library)
