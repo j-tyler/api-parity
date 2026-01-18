@@ -380,6 +380,10 @@ Generate test cases from an OpenAPI spec and compare responses between two targe
 | `--exclude OPERATION_ID` | No | Exclude an operation by operationId (can be repeated) |
 | `--timeout SECONDS` | No | Default timeout for each API call (default: 30s) |
 | `--operation-timeout OPERATION_ID:SECONDS` | No | Set timeout for a specific operation (can be repeated) |
+| `--stateful` | No | Enable stateful chain testing using OpenAPI links |
+| `--max-chains INT` | No | Maximum chains to generate in stateful mode (default: 20) |
+| `--max-steps INT` | No | Maximum steps per chain in stateful mode (default: 6) |
+| `--log-chains` | No | Write executed chains to chains.txt for debugging (stateful mode only) |
 
 ### `api-parity replay`
 

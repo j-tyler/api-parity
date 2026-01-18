@@ -287,6 +287,8 @@ The `generate_chains()` method uses Schemathesis's state machine to discover mul
 
 These are used for synthetic response generation during chain discovery (both synthetic body fields and synthetic headers). This enables chain generation with header-based links (e.g., `Location` header), not just body field references. Multi-value headers (like `Set-Cookie`) support array indexing for accessing specific values.
 
+**Schema-aware generation:** The `SchemaValueGenerator` (`api_parity/schema_value_generator.py`) produces synthetic values satisfying OpenAPI schema constraints. When a link-extracted value must match an enum, format, or type constraint on the target parameter, the generator produces a compliant value instead of a generic UUID. See DESIGN.md "Schema-Aware Synthetic Value Generation (Phase 2)" for details.
+
 ---
 
 ## Executor [SPECIFIED]

@@ -1,0 +1,156 @@
+openapi: "3.0.3"
+info:
+  title: Library System API
+  version: "1.0.0"
+  description: |
+    Test API demonstrating chain generation with enum constraints.
+    The library_id parameter is an enum that must be satisfied by
+    synthetic values during chain discovery.
+
+servers:
+  - url: http://localhost:9999
+
+paths:
+  /libraries:
+    get:
+      operationId: listLibraries
+      summary: List all libraries
+      responses:
+        "200":
+          description: List of libraries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LibraryList"
+          links:
+            GetBooksAtLibrary:
+              operationId: getBooks
+              description: Get books at the first library
+              parameters:
+                library_id: "$response.body#/items/0/library_id"
+
+  /libraries/{library_id}/books:
+    get:
+      operationId: getBooks
+      summary: Get books at a library
+      parameters:
+        - name: library_id
+          in: path
+          required: true
+          description: Library identifier (must be a valid library ID)
+          schema:
+            $ref: "#/components/schemas/LibraryId"
+      responses:
+        "200":
+          description: List of books
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookList"
+          links:
+            GetBookDetails:
+              operationId: getBookDetails
+              description: Get details for the first book
+              parameters:
+                library_id: "$response.body#/library_id"
+                book_id: "$response.body#/items/0/book_id"
+        "404":
+          description: Library not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /libraries/{library_id}/books/{book_id}:
+    get:
+      operationId: getBookDetails
+      summary: Get book details
+      parameters:
+        - name: library_id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/LibraryId"
+        - name: book_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Book details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        "404":
+          description: Book not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    LibraryId:
+      type: string
+      description: Valid library identifier
+      enum:
+        - main_branch
+        - downtown_branch
+        - westside_branch
+
+    Library:
+      type: object
+      required: [library_id, name, address]
+      properties:
+        library_id:
+          $ref: "#/components/schemas/LibraryId"
+        name:
+          type: string
+        address:
+          type: string
+
+    LibraryList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Library"
+
+    Book:
+      type: object
+      required: [book_id, title, author]
+      properties:
+        book_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        author:
+          type: string
+        isbn:
+          type: string
+
+    BookList:
+      type: object
+      required: [library_id, items]
+      properties:
+        library_id:
+          $ref: "#/components/schemas/LibraryId"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Book"
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
