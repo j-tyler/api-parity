@@ -92,6 +92,30 @@ Discovery command to show all operationIds from an OpenAPI spec along with their
 api-parity list-operations --spec openapi.yaml
 ```
 
+### Mode D: Lint Spec
+
+Analyzes an OpenAPI spec for api-parity-specific issues. Reports errors (will cause failures), warnings (may limit functionality), and info (observations about spec structure).
+
+```
+api-parity lint-spec --spec openapi.yaml [--output text|json]
+```
+
+**Checks performed:**
+- **Link connectivity**: Identifies isolated operations, chain terminators, entry points, and invalid link targets
+- **Explicit links warning**: Warns if spec has no explicit OpenAPI links (api-parity disables link inference)
+- **Link expression coverage**: Categorizes expressions (`$response.body#/...`, `$response.header.*`, `$request.*`, literals)
+- **Non-200 status links**: Reports links on 201, 202, wildcards, etc.
+- **Response schema coverage**: Reports operations missing 2xx response schemas (affects schema validation)
+- **Duplicate link names**: Detects YAML duplicate keys that get silently overwritten
+
+**Exit codes:**
+- `0`: No errors (may have warnings or info)
+- `1`: Errors found or spec couldn't be loaded
+
+**Output formats:**
+- `text` (default): Human-readable summary
+- `json`: Machine-readable structure for programmatic use
+
 ### Exit Codes
 
 All modes use standard UNIX exit codes:
