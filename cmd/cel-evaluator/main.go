@@ -37,21 +37,15 @@ type Response struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// evaluationTimeout is the maximum time allowed for a single CEL evaluation.
-// 5 seconds is generous for CEL expressions—most evaluate in <1ms. A long timeout
-// catches pathological expressions (deeply nested recursion, huge arrays) without
-// blocking the Python caller indefinitely.
+// evaluationTimeout catches pathological expressions without blocking Python indefinitely
 const evaluationTimeout = 5 * time.Second
 
 func main() {
 	writer := bufio.NewWriter(os.Stdout)
 	reader := bufio.NewScanner(os.Stdin)
 
-	// Increase scanner buffer for large JSON payloads.
-	// API responses can be large (lists of objects, base64 blobs), and the entire
-	// response body is included in the "data" field. 10 MB accommodates most APIs;
-	// larger responses would cause memory issues in comparison anyway.
-	const maxTokenSize = 10 * 1024 * 1024 // 10 MB
+	// 10 MB buffer for large API response payloads in "data" field
+	const maxTokenSize = 10 * 1024 * 1024
 	reader.Buffer(make([]byte, 64*1024), maxTokenSize)
 
 	// Send ready signal
@@ -87,9 +81,7 @@ func main() {
 	}
 }
 
-// writeJSON marshals v to JSON and writes it as a single line to w.
-// Flush is called after each write—without it, messages sit in userspace buffers
-// and the Python caller blocks waiting for a response that never arrives.
+// writeJSON marshals v to JSON and writes it as a single line to w (with flush).
 func writeJSON(w *bufio.Writer, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -104,9 +96,7 @@ func writeJSON(w *bufio.Writer, v any) error {
 	return w.Flush()
 }
 
-// evaluate wraps evaluateSync with a timeout. CEL evaluation runs in a goroutine;
-// if it exceeds evaluationTimeout, we return an error without waiting for the
-// goroutine (which may eventually complete or be garbage collected).
+// evaluate wraps evaluateSync with a timeout.
 func evaluate(req Request) Response {
 	ctx, cancel := context.WithTimeout(context.Background(), evaluationTimeout)
 	defer cancel()
@@ -126,11 +116,8 @@ func evaluate(req Request) Response {
 }
 
 // evaluateSync compiles and runs a CEL expression with the given data.
-// Returns Response with ok=true and result if successful, or ok=false with error message.
 func evaluateSync(req Request) Response {
-	// Build CEL environment with all data keys as dynamic-typed variables.
-	// We use DynType (not inferred types) because JSON values can be any type,
-	// and CEL's runtime type coercion handles comparisons correctly.
+	// DynType for all variables since JSON values can be any type
 	opts := []cel.EnvOption{
 		cel.DefaultUTCTimeZone(true),
 	}

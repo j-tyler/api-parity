@@ -66,11 +66,8 @@ class PortReservation:
 
     def __init__(self) -> None:
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # SO_REUSEADDR allows the port to be reused immediately after close().
-        # Without this, the port enters TIME_WAIT state and can't be rebound.
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        # Port 0 = OS assigns an available ephemeral port
-        self._socket.bind(("127.0.0.1", 0))
+        self._socket.bind(("127.0.0.1", 0))  # Port 0 = OS assigns ephemeral port
         self._port = self._socket.getsockname()[1]
         self._released = False
 
@@ -107,11 +104,7 @@ def find_free_port() -> int:
 
 
 def wait_for_server_ready(host: str, port: int, timeout: float = 10.0) -> bool:
-    """Block until server accepts TCP connections, or timeout expires.
-
-    Returns True if server is ready, False if timeout was reached.
-    Polls every 100ms to balance responsiveness vs CPU usage.
-    """
+    """Block until server accepts TCP connections, or timeout expires."""
     start = time.time()
     while time.time() - start < timeout:
         try:
@@ -155,10 +148,7 @@ class MockServer:
 
         Raises:
             RuntimeError: If server fails to start within 10 seconds.
-                          Error message includes stderr output for debugging.
         """
-        # Release reservation just before subprocess starts to minimize race window.
-        # The server binds immediately on startup, so this is effectively atomic.
         if self._reservation:
             self._reservation.release()
 
@@ -265,11 +255,7 @@ def fixture_cel_evaluator_path() -> Path:
     return cel_path
 
 
-# -----------------------------------------------------------------------------
-# Backward-compatible aliases (used by existing tests)
-# These delegate to the canonical fixture_ prefixed versions above.
-# New tests should use the fixture_ prefixed names for grep-ability.
-# -----------------------------------------------------------------------------
+# Backward-compatible fixture aliases
 
 
 @pytest.fixture(scope="session")

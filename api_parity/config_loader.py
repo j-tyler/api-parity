@@ -157,9 +157,7 @@ def get_operation_rules(
     if override is None:
         return default
 
-    # Override semantics: replace entire sections, don't deep-merge.
-    # This prevents confusing interactions where some body rules come from
-    # defaults and others from overrides. Users define complete sections.
+    # Override semantics: replace entire sections, don't deep-merge
     return OperationRules(
         status_code=override.status_code if override.status_code is not None else default.status_code,
         headers=override.headers if override.headers else default.headers,
@@ -223,18 +221,7 @@ def validate_targets(
 
 
 def _substitute_env_vars(data: Any) -> Any:
-    """Recursively substitute ${ENV_VAR} patterns in data.
-
-    Walks the entire config tree because secrets may appear anywhere
-    (auth headers, key passwords, etc.). Done before Pydantic validation
-    so the validated config has real values, not ${} placeholders.
-
-    Args:
-        data: Data structure to process.
-
-    Returns:
-        Data with environment variables substituted.
-    """
+    """Recursively substitute ${ENV_VAR} patterns in data."""
     if isinstance(data, str):
         return _substitute_string(data)
     elif isinstance(data, dict):
@@ -271,12 +258,6 @@ def _substitute_string(s: str) -> str:
 # =============================================================================
 # Cross-Validation Functions
 # =============================================================================
-
-# Warnings vs Errors: Warnings are for stale config (e.g., operationId that
-# no longer exists in spec) - the run can proceed but user should know.
-# Errors are for broken config (e.g., unknown predefined name) - the run
-# would fail at comparison time, so we catch it early.
-
 
 class ValidationWarning:
     """A non-fatal validation warning."""

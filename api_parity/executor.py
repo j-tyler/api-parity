@@ -173,12 +173,7 @@ class Executor:
         self,
         request: RequestCase,
     ) -> tuple[ResponseCase, ResponseCase]:
-        """Execute a request against both targets.
-
-        Requests are executed serially (A then B) rather than parallel to:
-        1. Simplify debugging - timing differences don't mask issues
-        2. Avoid overwhelming targets with concurrent load
-        3. Keep rate limiting predictable (single request stream)
+        """Execute a request against both targets (serially, A then B).
 
         Args:
             request: The request to execute.
@@ -277,19 +272,9 @@ class Executor:
         )
 
     def _variable_to_string(self, var_value: Any) -> str:
-        """Convert a variable value to string for substitution.
+        """Convert a variable value to string for path/body substitution.
 
-        Header values are stored as lists (HTTP allows multiple values per header),
-        but when substituting into a path like /users/{userId}, we need a single
-        string. Using str() on a list produces "['value']" which corrupts the URL.
-        This extracts the first element for lists, matching HTTP client behavior
-        of using the first value when multiple are present.
-
-        Args:
-            var_value: The variable value to convert.
-
-        Returns:
-            String representation suitable for substitution.
+        Lists (e.g., header values) use first element to avoid "['value']" in URLs.
         """
         if isinstance(var_value, list):
             return str(var_value[0]) if var_value else ""
@@ -411,19 +396,8 @@ class Executor:
     def _extract_variables(self, response: ResponseCase) -> dict[str, Any]:
         """Extract variables from a response for chain substitution.
 
-        Extracts fields referenced by OpenAPI link expressions. Uses the
-        link_fields parsed from the spec at initialization.
-
-        Body fields are stored under their JSONPointer path. Headers use
-        "header/{name}" for all values (as list) or "header/{name}/{index}"
-        for specific indexed access. This matches body array semantics where
-        "items" returns the array and "items/0" returns the first element.
-
-        Args:
-            response: Response to extract from.
-
-        Returns:
-            Dictionary of extracted variable names to values.
+        Body fields stored at JSONPointer paths. Headers at "header/{name}" (list)
+        or "header/{name}/{index}" (single value).
         """
         extracted: dict[str, Any] = {}
 
@@ -435,11 +409,8 @@ class Executor:
                 if value is not None:
                     extracted[field_pointer] = value
 
-            # Second pass: add last-segment shortcuts for ergonomic variable references
-            # OpenAPI links often use short names like "userId" in expressions, but our
-            # JSONPointer paths are fully qualified like "data/user/userId". By adding
-            # shortcuts ("userId" -> value), templates can use {userId} instead of
-            # {data/user/userId}. Only added when unambiguous (no collision).
+            # Add shortcut aliases: "userId" -> value (from "data/user/userId")
+            # Only when unambiguous (single pointer with that last segment)
             last_segments: dict[str, list[str]] = {}
             for field_pointer in self._link_fields.body_pointers:
                 last_segment = field_pointer.split("/")[-1]
@@ -448,17 +419,11 @@ class Executor:
 
             for last_segment, pointers in last_segments.items():
                 if len(pointers) == 1:
-                    # No collision - safe to add shortcut
                     pointer = pointers[0]
                     if pointer in extracted:
                         extracted[last_segment] = extracted[pointer]
-                # If len(pointers) > 1, there's a collision - skip shortcut to avoid
-                # silent data loss. Users must use full path.
 
-        # Extract header values with array semantics
-        # Headers are stored at "header/{name}" (all values as list) and optionally
-        # "header/{name}/{index}" for specific indexed access.
-        # This mirrors body array access: "items" vs "items/0"
+        # Extract header values: "header/{name}" (list) and "header/{name}/{index}" (single)
         headers_to_extract: set[str] = set()
         indexed_headers: dict[str, set[int]] = {}
 
@@ -487,13 +452,7 @@ class Executor:
         return self._operation_timeouts.get(operation_id, self._default_timeout)
 
     def _wait_for_rate_limit(self) -> None:
-        """Wait if necessary to respect rate limit.
-
-        Uses monotonic clock (not wall clock) to avoid issues with system time
-        changes. Simple time-based approach rather than token bucket because
-        API parity testing is single-threaded per Executor instance and we
-        want predictable, evenly-spaced requests rather than burst capacity.
-        """
+        """Wait if necessary to respect rate limit."""
         if self._min_interval <= 0:
             return
 
@@ -535,11 +494,7 @@ class Executor:
             for value in values:
                 params.append((key, value))
 
-        # Build headers (flatten lists, take first value for each)
-        # Sanitize values to ASCII because HTTP headers must be ASCII per RFC 7230.
-        # Hypothesis generates arbitrary Unicode during property-based testing, and
-        # Schemathesis doesn't restrict header string generation. Without sanitization,
-        # httpx raises UnicodeEncodeError when encoding headers for the wire.
+        # Build headers (flatten lists, sanitize non-ASCII per RFC 7230)
         headers: dict[str, str] = {}
         for key, values in request.headers.items():
             if values:
@@ -629,10 +584,7 @@ class Executor:
                 headers[key_lower] = []
             headers[key_lower].append(value)
 
-        # Body parsing: JSON bodies are stored as dicts for JSONPath comparison,
-        # text bodies as strings, binary bodies as base64 (for JSON serialization).
-        # We trust content-type to determine parsing strategy because incorrect
-        # content-type is itself a bug worth catching in API parity testing.
+        # Parse body based on content-type: JSON -> dict, text -> str, binary -> base64
         body: Any = None
         body_base64: str | None = None
 

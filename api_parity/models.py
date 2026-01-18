@@ -52,8 +52,6 @@ class RequestCase(BaseModel):
 
     @model_validator(mode="after")
     def check_body_exclusivity(self) -> Self:
-        # Body is stored as either parsed JSON (body) or base64 (body_base64), never both.
-        # This supports JSON APIs (body) and binary payloads like file uploads (body_base64).
         if self.body is not None and self.body_base64 is not None:
             raise ValueError(
                 f"RequestCase body and body_base64 are mutually exclusive, "
@@ -81,8 +79,6 @@ class ResponseCase(BaseModel):
 
     @model_validator(mode="after")
     def check_body_exclusivity(self) -> Self:
-        # Body is stored as either parsed JSON (body) or base64 (body_base64), never both.
-        # This supports JSON APIs (body) and binary payloads like images (body_base64).
         if self.body is not None and self.body_base64 is not None:
             raise ValueError(
                 f"ResponseCase body and body_base64 are mutually exclusive, "
@@ -188,16 +184,13 @@ class FieldRule(BaseModel):
 
     @model_validator(mode="after")
     def check_rule_logic(self) -> Self:
-        # A rule uses EITHER a predefined comparison (looked up from comparison_library.json)
-        # OR a custom CEL expression, never both. This keeps rule resolution unambiguous.
         if self.predefined is not None and self.expr is not None:
             raise ValueError(
                 f"FieldRule cannot specify both predefined and expr; "
                 f"got predefined={self.predefined!r} and expr={self.expr!r}"
             )
 
-        # Forbidden fields must not exist in either response, so there's nothing to compare.
-        # Allowing a comparison rule would be misleading since it would never execute.
+        # Forbidden fields have nothing to compare - disallow comparison rules
         if self.presence == PresenceMode.FORBIDDEN:
             if self.predefined is not None or self.expr is not None:
                 raise ValueError(
@@ -223,9 +216,7 @@ class BodyRules(BaseModel):
 
     @model_validator(mode="after")
     def validate_binary_rule_presence(self) -> Self:
-        # binary_rule only executes when BOTH responses are non-JSON (binary).
-        # Presence modes like REQUIRED/OPTIONAL don't apply because the rule already
-        # requires both sides to have binary content. Only PARITY (the default) is valid.
+        # binary_rule inherently requires both responses to be binary, so only parity makes sense
         if self.binary_rule is not None and self.binary_rule.presence != PresenceMode.PARITY:
             raise ValueError(
                 f"BodyRules.binary_rule only supports presence=parity because it inherently "
@@ -369,8 +360,7 @@ class TargetInfo(BaseModel):
     base_url: str = Field(description="Base URL used")
 
 
-# ISO 8601 timestamp pattern for MismatchMetadata.timestamp validation.
-# Accepts: 2024-01-15T10:30:00, 2024-01-15T10:30:00.123, 2024-01-15T10:30:00Z, 2024-01-15T10:30:00+05:00
+# ISO 8601 timestamp: YYYY-MM-DDTHH:MM:SS with optional fractional seconds and timezone
 MISMATCH_METADATA_TIMESTAMP_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$"
 )
@@ -440,7 +430,6 @@ class TargetConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_cert_key_pair(self) -> Self:
-        # mTLS requires both certificate and private key. Having only one is a config error.
         if (self.cert is None) != (self.key is None):
             provided = "cert" if self.cert is not None else "key"
             missing = "key" if self.cert is not None else "cert"

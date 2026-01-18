@@ -22,8 +22,6 @@ if TYPE_CHECKING:
     from api_parity.models import ComparisonResult, ComparisonRules, TargetInfo
 
 
-# Default timeout balances typical API response times (~100ms-2s) with allowing
-# slow operations. 30s catches hangs without prematurely failing legitimate requests.
 DEFAULT_TIMEOUT = 30.0
 
 
@@ -83,11 +81,7 @@ class ProgressReporter:
             self._total = total
 
     def _run(self) -> None:
-        """Background thread that prints progress every 10 seconds.
-
-        10s interval chosen to provide useful feedback without cluttering output.
-        Shorter intervals (1-5s) create noise; longer intervals (30s+) feel unresponsive.
-        """
+        """Background thread that prints progress every 10 seconds."""
         while not self._stop_event.wait(timeout=10.0):
             self._print_progress()
 

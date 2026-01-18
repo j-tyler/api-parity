@@ -47,8 +47,7 @@ class CELEvaluator:
     # Default path to cel-evaluator binary (relative to this file's directory)
     DEFAULT_BINARY_PATH = Path(__file__).parent.parent / "cel-evaluator"
 
-    # Maximum restart attempts before giving up (lifetime limit, never resets).
-    # This prevents infinite restart loops if the binary is broken.
+    # Maximum restart attempts before giving up (prevents infinite restart loops)
     MAX_RESTARTS = 3
 
     # Timeout for subprocess startup (seconds)
@@ -87,9 +86,7 @@ class CELEvaluator:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            # Line buffered: ensures each JSON line is flushed immediately.
-            # Without this, messages sit in userspace buffer until buffer fills.
-            bufsize=1,
+            bufsize=1,  # Line buffered for immediate JSON line flushing
         )
 
         # Wait for ready signal with timeout
@@ -128,12 +125,7 @@ class CELEvaluator:
         self._start_subprocess()
 
     def _cleanup_process(self) -> None:
-        """Clean up the subprocess if it exists.
-
-        All exceptions are suppressed because cleanup must be best-effort:
-        the process may already be dead, pipes may be broken, or the OS
-        may refuse to kill it. We close everything we can and move on.
-        """
+        """Clean up the subprocess (best-effort, all exceptions suppressed)."""
         if self._process:
             try:
                 self._process.stdin.close()
@@ -193,19 +185,15 @@ class CELEvaluator:
                     f"CEL evaluation timeout ({self.EVALUATION_TIMEOUT}s)"
                 )
 
-            # Read response
+            # Read response (EOF = subprocess died, restart and retry)
             response_line = self._process.stdout.readline()
             if not response_line:
-                # EOF means subprocess died. Restart and retry.
-                # Recursion is bounded by MAX_RESTARTS: _restart_subprocess raises
-                # CELSubprocessError after MAX_RESTARTS attempts.
                 self._restart_subprocess()
                 return self.evaluate(expression, data)
 
             response = json.loads(response_line)
 
         except BrokenPipeError:
-            # Subprocess died while writing. Same bounded retry logic as EOF case.
             self._restart_subprocess()
             return self.evaluate(expression, data)
         except json.JSONDecodeError as e:
