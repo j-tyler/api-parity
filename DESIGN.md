@@ -620,6 +620,74 @@ OpenAPI link expressions can reference values from response headers (`$response.
 
 4. **HeaderRef dataclass:** Header references are stored as `HeaderRef` objects with `name` (lowercase for HTTP extraction), `original_name` (spec case for synthetic header generation), and optional `index`. Both name fields are required—`original_name` enables Schemathesis to resolve links during chain discovery.
 
-5. **Synthetic headers in chain discovery:** During chain generation, `_synthetic_response()` generates synthetic header values for all referenced headers. For multi-value header access, generates enough synthetic values to satisfy the maximum requested index. `Location` headers get URL-like values; other headers get UUID strings.
+5. **Synthetic headers in chain discovery:** During chain generation, `_synthetic_response()` generates synthetic header values for all referenced headers. For multi-value header access, generates enough synthetic values to satisfy the maximum requested index. All headers use generic placeholder values—no format assumptions are made (see "Schema-Driven Synthetic Value Generation" below).
 
 6. **Expression storage in link_source:** The `_find_link_between()` function stores the original expression (`$response.body#/path` or `$response.header.HeaderName[index]`) in `link_source.field`. This enables replay to correctly identify extraction source and array index, even without the OpenAPI spec.
+
+---
+
+# Schema-Driven Synthetic Value Generation
+
+Keywords: synthetic values format schema openapi headers body chain generation
+Date: 20260118
+
+Synthetic response generation during chain discovery must NOT assume any format for values. The OpenAPI spec is the sole authority on formats. The previous implementation made several assumptions that broke non-standard APIs:
+
+1. **Location header assumed URL format** — Special-cased to generate `http://placeholder/resource/{uuid}`, but some APIs use non-URL formats (e.g., `/AAYAAhZP...` path-only values)
+2. **All body fields assumed UUID format** — Generated `str(uuid.uuid4())` for all link-referenced fields regardless of actual type
+3. **Hardcoded common field names** — Added `name`, `price`, `status`, `total`, `created_at`, `items` regardless of actual response schema
+
+**Problem:** These assumptions work for "standard" REST APIs but fail for APIs that use different conventions. An API that uses `Location: /AAYAAhZP...` (path-only) instead of `Location: https://api.example.com/resources/uuid` would fail schema validation.
+
+**Principle: Assume no format.** api-parity does not assume any format for any value. The OpenAPI spec defines formats; we just need placeholder values that Schemathesis can extract during chain discovery.
+
+Note: The synthetic response uses `content-type: application/json` internally. This is NOT an assumption about the API's content type—it's a Schemathesis requirement for parsing the synthetic body dict. Actual API content types come from real HTTP responses during execution.
+
+**Solution: Derive all formats from the OpenAPI spec.**
+
+The OpenAPI spec already contains format information:
+- Response schemas define field names, types, and formats (`format: uuid`, `format: uri`, `format: date-time`)
+- Response headers section specifies header names and their schemas
+- `pattern` fields provide regex patterns for validation
+
+**Implementation approach (phased):**
+
+**Phase 1 (Immediate): Remove special-casing**
+- Remove the `Location` header special-case in `_generate_synthetic_headers()`
+- Remove hardcoded field names (`name`, `price`, `status`, etc.) from `_generate_synthetic_body()`
+- Use a generic non-empty placeholder (`uuid.uuid4()`) for all synthetic values
+- We don't claim this is the "correct format" - it's just a placeholder that Schemathesis can extract
+- The actual format is defined by the OpenAPI spec, not by this code
+
+**Phase 2 (Future): Schema-aware generation**
+When time permits, implement full schema-driven synthetic generation:
+1. Extract response schema for the operation being synthesized
+2. For each link-referenced body field, look up its schema and generate appropriate value:
+   - `format: uuid` → Generate UUID
+   - `format: uri` → Generate valid URI
+   - `format: date-time` → Generate ISO timestamp
+   - `type: integer` → Generate integer
+   - `type: string` + `pattern` → Generate matching string (if possible)
+   - Default → Generic placeholder
+3. For each link-referenced header, look up its schema in response headers section
+
+**Phase 2 dependencies:**
+- Requires passing spec schema access to synthetic generation
+- May need to parse response schemas from paths → responses → content → schema
+- SchemaValidator already has this logic; could refactor for reuse
+
+**Trade-offs:**
+
+1. **Phase 1 trade-off:** Generic placeholders may not match some schema patterns (e.g., numeric IDs, specific patterns). This is acceptable because:
+   - Synthetic values are placeholders for chain discovery, not real data
+   - Schemathesis only needs to find the field and extract its value
+   - Actual values come from real HTTP execution in the Executor
+   - The format is defined by the spec, not assumed by our code
+
+2. **Phase 2 complexity:** Full schema-aware generation adds complexity but provides:
+   - Better compatibility with strict schema validation during chain discovery
+   - More realistic synthetic data for edge cases
+
+**Files affected:**
+- `api_parity/case_generator.py` — `_generate_synthetic_headers()`, `_generate_synthetic_body()`
+- Tests in `tests/integration/test_stateful_chains.py` — Update assertions if they check specific formats

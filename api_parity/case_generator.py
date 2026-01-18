@@ -682,26 +682,23 @@ class CaseGenerator:
             def _generate_synthetic_body(self) -> dict:
                 """Generate synthetic response body for link resolution.
 
-                Creates placeholder values for all fields referenced by OpenAPI links
+                Creates placeholder values ONLY for fields referenced by OpenAPI links
                 so Schemathesis can resolve link expressions during chain discovery.
                 Real response data comes from actual HTTP execution in the Executor.
+
+                We don't add any hardcoded field names - only fields actually referenced
+                by link expressions in the spec. The actual format of each field is
+                defined by the OpenAPI spec; we just need a non-empty placeholder value
+                that Schemathesis can extract. See DESIGN.md "Schema-Driven Synthetic
+                Value Generation" for rationale.
                 """
                 body: dict = {}
 
                 # Add all body fields referenced by links in the spec
+                # Using uuid.uuid4() as a generic non-empty placeholder - the actual
+                # format is defined by the OpenAPI spec, not by this code
                 for field_pointer in generator_self._link_fields.body_pointers:
                     self._set_by_jsonpointer(body, field_pointer, str(uuid.uuid4()))
-
-                # Add common non-ID fields for general compatibility
-                body.setdefault("name", "Placeholder")
-                body.setdefault("price", 9.99)
-                body.setdefault("status", "pending")
-                body.setdefault("total", 3)
-                body.setdefault("created_at", "2024-01-01T00:00:00Z")
-
-                # Ensure nested items have IDs if items array exists
-                if "items" not in body:
-                    body["items"] = [{"id": str(uuid.uuid4())} for _ in range(3)]
 
                 return body
 
@@ -740,15 +737,14 @@ class CaseGenerator:
 
                 # Add synthetic values for all headers referenced by links
                 # Use original_name as dict key so Schemathesis can find it
+                # We use uuid.uuid4() as a generic non-empty placeholder - the actual
+                # format is defined by the OpenAPI spec, not by this code. We don't
+                # assume any particular format (like URL for Location).
+                # See DESIGN.md "Schema-Driven Synthetic Value Generation".
                 for lowercase, (original_name, count) in header_info.items():
                     values = []
                     for i in range(count):
-                        if lowercase == "location":
-                            # Location header should be a URL-like value
-                            values.append(f"http://placeholder/resource/{uuid.uuid4()}")
-                        else:
-                            # Other headers get UUID values
-                            values.append(str(uuid.uuid4()))
+                        values.append(str(uuid.uuid4()))
                     headers[original_name] = values
 
                 return headers
