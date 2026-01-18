@@ -597,3 +597,29 @@ Binary (non-JSON) response bodies are compared using the same CEL infrastructure
 **Default behavior:** If `binary_rule` is not specified, binary bodies are not compared (match by default). This preserves backward compatibility—existing configs won't suddenly fail on binary endpoints. Users must explicitly configure `binary_rule` to enforce binary parity.
 
 **Alternative considered:** Python-level byte comparison (decode base64, compare bytes). This would enable hash-based and byte-prefix comparisons but requires a separate code path outside CEL. The CEL approach was chosen for simplicity and consistency.
+
+---
+
+# Header-Based OpenAPI Link Support
+
+Keywords: header link Location response chain stateful extraction array index
+Date: 20260117
+
+OpenAPI link expressions can reference values from response headers (`$response.header.Location`) in addition to body fields (`$response.body#/id`). The original implementation only supported body expressions, silently ignoring header links. This prevented chain generation through common patterns like `POST /resources` returning a `Location` header with the created resource URL.
+
+**Design decisions:**
+
+1. **Extracted key format:** Header values use `header/{name}` keys for all values as a list, and `header/{name}/{index}` for specific indexed access. This parallels body array semantics where `items` returns the array and `items/0` returns the first element.
+
+2. **Case normalization:** Per HTTP spec (RFC 7230), header names are case-insensitive. Header names are normalized to lowercase when storing and matching. Both `$response.header.Location` and `$response.header.location` resolve to `header/location`.
+
+3. **Multi-value headers with array semantics:** HTTP headers can have multiple values. Headers support the same array access semantics as body fields:
+   - `$response.header.Set-Cookie` → extracts all values as list, stored at `header/set-cookie`
+   - `$response.header.Set-Cookie[0]` → extracts first value, stored at `header/set-cookie/0`
+   - `$response.header.Set-Cookie[1]` → extracts second value, stored at `header/set-cookie/1`
+
+4. **HeaderRef dataclass:** Header references are stored as `HeaderRef` objects containing the lowercase header name and optional array index. The `LinkFields.headers` is a list of `HeaderRef` objects, allowing multiple references to the same header with different indices.
+
+5. **Synthetic headers in chain discovery:** During chain generation, `_synthetic_response()` generates synthetic header values for all referenced headers. For multi-value header access, generates enough synthetic values to satisfy the maximum requested index. `Location` headers get URL-like values; other headers get UUID strings.
+
+6. **Expression storage in link_source:** The `_find_link_between()` function stores the original expression (`$response.body#/path` or `$response.header.HeaderName[index]`) in `link_source.field`. This enables replay to correctly identify extraction source and array index, even without the OpenAPI spec.
