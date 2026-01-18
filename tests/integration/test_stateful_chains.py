@@ -698,13 +698,13 @@ class TestCustomFieldNames:
 
         link_fields = generator.get_link_fields()
 
-        # Custom field names should be extracted
-        assert "resource_uuid" in link_fields
-        assert "entity_identifier" in link_fields
-        assert "data/nested_id" in link_fields
+        # Custom field names should be extracted (now in body_pointers)
+        assert "resource_uuid" in link_fields.body_pointers
+        assert "entity_identifier" in link_fields.body_pointers
+        assert "data/nested_id" in link_fields.body_pointers
 
         # Standard 'id' should NOT be in this spec (it uses custom names)
-        assert "id" not in link_fields
+        assert "id" not in link_fields.body_pointers
 
     def test_chain_generation_with_custom_fields(self, tmp_path: Path):
         """Chain generation works with specs using custom field names."""
@@ -724,16 +724,16 @@ class TestCustomFieldNames:
 
     def test_executor_extracts_custom_fields(self):
         """Executor extracts custom field names from responses."""
-        from api_parity.case_generator import extract_by_jsonpointer
+        from api_parity.case_generator import LinkFields
         from api_parity.executor import Executor
         from api_parity.models import ResponseCase, TargetConfig
 
-        # Create executor with custom link fields
+        # Create executor with custom link fields using LinkFields dataclass
         target = TargetConfig(base_url="http://localhost:9999")
-        executor = Executor(
-            target, target,
-            link_fields={"resource_uuid", "entity_identifier", "data/nested_id"}
+        link_fields = LinkFields(
+            body_pointers={"resource_uuid", "entity_identifier", "data/nested_id"}
         )
+        executor = Executor(target, target, link_fields=link_fields)
 
         # Test extraction from a response with custom fields
         response = ResponseCase(
@@ -761,6 +761,85 @@ class TestCustomFieldNames:
 
         # Standard fields NOT in link_fields should NOT be extracted
         assert "name" not in extracted
+
+        executor.close()
+
+    def test_executor_extracts_header_values(self):
+        """Executor extracts header values with array semantics."""
+        from api_parity.case_generator import HeaderRef, LinkFields
+        from api_parity.executor import Executor
+        from api_parity.models import ResponseCase, TargetConfig
+
+        # Create executor with header link fields
+        target = TargetConfig(base_url="http://localhost:9999")
+        link_fields = LinkFields(
+            headers=[
+                HeaderRef(name="location", index=None),  # Extract all values as list
+                HeaderRef(name="set-cookie", index=0),   # Extract first cookie
+                HeaderRef(name="set-cookie", index=1),   # Extract second cookie
+            ]
+        )
+        executor = Executor(target, target, link_fields=link_fields)
+
+        # Test extraction from a response with headers
+        response = ResponseCase(
+            status_code=201,
+            headers={
+                "location": ["http://example.com/resource/123"],
+                "set-cookie": ["session=abc", "tracking=xyz"],
+                "content-type": ["application/json"],  # Not in link_fields
+            },
+            body={"id": "123"},
+            elapsed_ms=50.0,
+        )
+
+        extracted = executor._extract_variables(response)
+
+        # Location header as list
+        assert extracted["header/location"] == ["http://example.com/resource/123"]
+
+        # Set-Cookie header as list and indexed
+        assert extracted["header/set-cookie"] == ["session=abc", "tracking=xyz"]
+        assert extracted["header/set-cookie/0"] == "session=abc"
+        assert extracted["header/set-cookie/1"] == "tracking=xyz"
+
+        # Headers not in link_fields should NOT be extracted
+        assert "header/content-type" not in extracted
+
+        executor.close()
+
+    def test_executor_substitutes_list_values_correctly(self):
+        """Executor substitutes list variable values using first element."""
+        from api_parity.case_generator import HeaderRef, LinkFields
+        from api_parity.executor import Executor
+        from api_parity.models import RequestCase, TargetConfig
+
+        target = TargetConfig(base_url="http://localhost:9999")
+        executor = Executor(target, target)
+
+        # Create a template with placeholders
+        template = RequestCase(
+            case_id="test-123",
+            operation_id="getResource",
+            method="GET",
+            path_template="/resources/{id}",
+            path_parameters={"id": "{header/location}"},
+            rendered_path="/resources/{header/location}",
+        )
+
+        # Variables include a list value (from header extraction)
+        variables = {
+            "header/location": ["http://example.com/resource/abc"],  # List!
+            "header/location/0": "http://example.com/resource/abc",  # Indexed
+        }
+
+        # Apply variables
+        result = executor._apply_variables(template, variables)
+
+        # Should use first element of list, not str(list)
+        assert "['http://example.com/resource/abc']" not in result.path_parameters["id"]
+        # The actual substituted value
+        assert result.path_parameters["id"] == "http://example.com/resource/abc"
 
         executor.close()
 
@@ -932,3 +1011,98 @@ class TestExplicitLinksOnly:
         assert phases.stateful.inference is not None
         assert phases.stateful.inference.algorithms == []
         assert phases.stateful.inference.is_enabled is False
+
+
+# =============================================================================
+# Header-Based Chain Tests
+# =============================================================================
+
+
+class TestHeaderBasedChains:
+    """Tests for chain generation and execution using header-based links.
+
+    Verifies that chains can follow OpenAPI links using header expressions
+    like $response.header.Location and $response.header.X-Resource-Id.
+    """
+
+    def test_header_link_fields_extracted_from_spec(self):
+        """Header link expressions are extracted from OpenAPI spec."""
+        from api_parity.case_generator import CaseGenerator
+
+        spec_path = Path(__file__).parent.parent / "fixtures" / "test_api_header_links.yaml"
+        generator = CaseGenerator(spec_path)
+
+        link_fields = generator.get_link_fields()
+
+        # Header expressions should be extracted
+        header_names = {h.name for h in link_fields.headers}
+        assert "location" in header_names
+        assert "x-resource-id" in header_names
+
+        # Body expression should also be extracted
+        assert "id" in link_fields.body_pointers
+
+    def test_chain_generation_with_header_links(self):
+        """Chain generation works with header-based links."""
+        from api_parity.case_generator import CaseGenerator
+
+        spec_path = Path(__file__).parent.parent / "fixtures" / "test_api_header_links.yaml"
+        generator = CaseGenerator(spec_path)
+
+        # Should generate chains following header-based links
+        try:
+            chains = generator.generate_chains(max_chains=3, max_steps=3)
+            # The spec has links, so chains should be generated
+            assert len(chains) > 0, "Should generate chains from header-linked spec"
+        except Exception as e:
+            pytest.fail(f"Chain generation with header links failed: {e}")
+
+    def test_synthetic_headers_generated_for_chain_discovery(self):
+        """Synthetic headers are generated during chain discovery."""
+        from api_parity.case_generator import CaseGenerator
+
+        spec_path = Path(__file__).parent.parent / "fixtures" / "test_api_header_links.yaml"
+        generator = CaseGenerator(spec_path)
+
+        # The synthetic response should include headers for chain discovery
+        link_fields = generator.get_link_fields()
+
+        # Verify headers are present for generation
+        header_names = {h.name for h in link_fields.headers}
+        assert len(header_names) > 0, "Should extract header names for synthetic generation"
+
+    def test_executor_header_extraction_in_chain(self):
+        """Executor extracts header values during chain execution."""
+        from api_parity.case_generator import CaseGenerator, HeaderRef, LinkFields
+        from api_parity.executor import Executor
+        from api_parity.models import ResponseCase, TargetConfig
+
+        spec_path = Path(__file__).parent.parent / "fixtures" / "test_api_header_links.yaml"
+        generator = CaseGenerator(spec_path)
+        link_fields = generator.get_link_fields()
+
+        # Create executor with extracted link_fields
+        target = TargetConfig(base_url="http://localhost:9999")
+        executor = Executor(target, target, link_fields=link_fields)
+
+        # Simulate a response with headers matching the spec
+        response = ResponseCase(
+            status_code=201,
+            headers={
+                "location": ["http://localhost:9999/resources/abc-123"],
+                "x-resource-id": ["abc-123"],
+            },
+            body={"id": "abc-123", "name": "test", "status": "active"},
+            elapsed_ms=50.0,
+        )
+
+        extracted = executor._extract_variables(response)
+
+        # Headers should be extracted
+        assert "header/location" in extracted
+        assert "header/x-resource-id" in extracted
+
+        # Body should also be extracted
+        assert "id" in extracted
+
+        executor.close()

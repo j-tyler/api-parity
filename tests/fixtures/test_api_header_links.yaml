@@ -1,0 +1,200 @@
+openapi: "3.0.3"
+info:
+  title: Header Links Test API
+  version: "1.0.0"
+  description: |
+    Test API with header-based OpenAPI links.
+    Uses $response.header.Location and other header expressions
+    to test header link extraction and chain generation.
+
+servers:
+  - url: http://localhost:9999
+
+paths:
+  /resources:
+    post:
+      operationId: createResource
+      summary: Create a new resource
+      description: |
+        Creates a resource and returns its location in the Location header.
+        The Location header is used by OpenAPI links.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourceCreate"
+      responses:
+        "201":
+          description: Resource created
+          headers:
+            Location:
+              description: URL of the created resource
+              schema:
+                type: string
+                format: uri
+            X-Resource-Id:
+              description: ID of the created resource
+              schema:
+                type: string
+                format: uuid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+          links:
+            GetResourceByLocation:
+              operationId: getResourceByUrl
+              description: Link using Location header
+              parameters:
+                resource_url: "$response.header.Location"
+            GetResourceById:
+              operationId: getResource
+              description: Link using X-Resource-Id header
+              parameters:
+                resource_id: "$response.header.X-Resource-Id"
+            GetResourceByBodyId:
+              operationId: getResource
+              description: Link using body id (mixed with headers)
+              parameters:
+                resource_id: "$response.body#/id"
+
+  /resources/{resource_id}:
+    get:
+      operationId: getResource
+      summary: Get resource by ID
+      parameters:
+        - name: resource_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Resource details
+          headers:
+            X-Resource-Id:
+              description: ID of the resource
+              schema:
+                type: string
+                format: uuid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+          links:
+            UpdateResource:
+              operationId: updateResource
+              parameters:
+                resource_id: "$response.header.X-Resource-Id"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    put:
+      operationId: updateResource
+      summary: Update a resource
+      parameters:
+        - name: resource_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourceUpdate"
+      responses:
+        "200":
+          description: Resource updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /resources/by-url:
+    get:
+      operationId: getResourceByUrl
+      summary: Get resource by URL
+      description: Endpoint that accepts URL as query parameter
+      parameters:
+        - name: resource_url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+      responses:
+        "200":
+          description: Resource details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    Resource:
+      type: object
+      required: [id, name, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Resource ID (also in X-Resource-Id header)
+        name:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive]
+        created_at:
+          type: string
+          format: date-time
+
+    ResourceCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive]
+          default: active
+
+    ResourceUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive]
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string

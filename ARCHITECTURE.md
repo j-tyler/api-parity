@@ -253,6 +253,7 @@ The Case Generator (`api_parity/case_generator.py`) wraps Schemathesis to yield 
 class CaseGenerator:
     def __init__(self, spec_path: Path, exclude_operations: list[str] | None = None): ...
     def get_operations(self) -> list[dict[str, Any]]: ...
+    def get_link_fields(self) -> LinkFields: ...
     def generate(self, max_cases: int | None = None, seed: int | None = None) -> Iterator[RequestCase]: ...
     def generate_chains(self, max_chains: int | None = None, max_steps: int = 6, seed: int | None = None) -> list[ChainCase]: ...
 ```
@@ -280,7 +281,11 @@ The `seed` parameter enables reproducible generation via Hypothesis `derandomize
 
 The `generate_chains()` method uses Schemathesis's state machine to discover multi-step sequences from OpenAPI links. Chains are captured without making HTTP calls—the Executor handles actual execution.
 
-**Dynamic field extraction:** Link field names are dynamically parsed from the OpenAPI spec at initialization. The CaseGenerator extracts all field paths referenced by link expressions (e.g., `$response.body#/resource_uuid`) and uses them for synthetic response generation during chain discovery. This enables chain generation with any field names, not just common ones like `id`.
+**Dynamic field extraction:** Link field references are dynamically parsed from the OpenAPI spec at initialization via `extract_link_fields_from_spec()`. The CaseGenerator extracts:
+- Body expressions (`$response.body#/path`) → stored in `LinkFields.body_pointers`
+- Header expressions (`$response.header.HeaderName` or `$response.header.HeaderName[index]`) → stored in `LinkFields.headers` as `HeaderRef` objects (lowercase name, optional index)
+
+These are used for synthetic response generation during chain discovery (both synthetic body fields and synthetic headers). This enables chain generation with header-based links (e.g., `Location` header), not just body field references. Multi-value headers (like `Set-Cookie`) support array indexing for accessing specific values.
 
 ---
 
@@ -298,7 +303,7 @@ class Executor:
         target_b: TargetConfig,
         default_timeout: float = 30.0,
         operation_timeouts: dict[str, float] | None = None,
-        link_fields: set[str] | None = None,
+        link_fields: LinkFields | None = None,
         requests_per_second: float | None = None,
     ): ...
 
@@ -331,7 +336,14 @@ Connection errors, timeouts, and other request failures raise `RequestError`. Th
 
 The `execute_chain()` method executes multi-step chains against both targets. Each target maintains its own extracted variables—if Target A's POST returns `id: "abc"` and Target B's returns `id: "xyz"`, subsequent steps use the respective IDs. The optional `on_step` callback allows stopping at first mismatch (returns `False` to stop, `True` to continue).
 
-**Dynamic field extraction:** The Executor receives a `link_fields` parameter (parsed from the OpenAPI spec by CaseGenerator) specifying which fields to extract from responses. This enables chain execution with any field names referenced by OpenAPI links, including nested paths like `data/nested_id`.
+**Dynamic field extraction:** The Executor receives a `link_fields` parameter (parsed from the OpenAPI spec by CaseGenerator) specifying which fields to extract from responses. The `LinkFields` dataclass contains:
+- `body_pointers`: JSONPointer paths for body fields (e.g., `id`, `data/nested_id`)
+- `headers`: List of `HeaderRef` objects specifying header names (lowercase) and optional array indices
+
+Extracted values are stored with distinct key formats:
+- Body fields use their pointer path (e.g., `id`)
+- Headers without index: `header/{name}` stores all values as a list (e.g., `header/location` = `["http://..."]`)
+- Headers with index: `header/{name}/{index}` stores the specific value (e.g., `header/set-cookie/0` = `"cookie=value"`)
 
 ### Rate Limiting
 
@@ -589,7 +601,7 @@ bundle = load_bundle(bundle_path: Path) -> LoadedBundle
 bundle_type = detect_bundle_type(bundle_path: Path) -> BundleType
 
 # Extract link_fields from chain case for Executor (replay needs this)
-link_fields = extract_link_fields_from_chain(chain: ChainCase) -> set[str]
+link_fields = extract_link_fields_from_chain(chain: ChainCase) -> LinkFields
 ```
 
 ### LoadedBundle Structure
@@ -607,7 +619,9 @@ class LoadedBundle:
 
 ### Chain Replay Support
 
-For chain replay, the Executor needs `link_fields` to extract variables from responses. Since replay doesn't have the OpenAPI spec, `extract_link_fields_from_chain()` analyzes the chain's `link_source` fields to determine which response fields need extraction. It converts JSONPath expressions (`$.id`, `$.data.items[0].id`) to JSONPointer format (`id`, `data/items/0/id`).
+For chain replay, the Executor needs `link_fields` to extract variables from responses. Since replay doesn't have the OpenAPI spec, `extract_link_fields_from_chain()` analyzes the chain's `link_source.field` to determine which response fields need extraction. It handles two expression formats:
+- `$response.body#/path` → body pointer (e.g., `id`, `data/items/0/id`)
+- `$response.header.HeaderName` or `$response.header.HeaderName[index]` → `HeaderRef` with lowercase name and optional array index
 
 ### Error Handling
 

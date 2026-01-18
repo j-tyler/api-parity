@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import httpx
 
-from api_parity.case_generator import extract_by_jsonpointer
+from api_parity.case_generator import LinkFields, extract_by_jsonpointer
 from api_parity.models import (
     ChainCase,
     ChainExecution,
@@ -73,7 +73,7 @@ class Executor:
         target_b: TargetConfig,
         default_timeout: float = 30.0,
         operation_timeouts: dict[str, float] | None = None,
-        link_fields: set[str] | None = None,
+        link_fields: LinkFields | None = None,
         requests_per_second: float | None = None,
     ) -> None:
         """Initialize the executor.
@@ -83,9 +83,8 @@ class Executor:
             target_b: Configuration for target B.
             default_timeout: Default timeout in seconds for requests.
             operation_timeouts: Per-operation timeout overrides.
-            link_fields: Set of JSONPointer paths to extract from responses
-                         for chain variable substitution. Parsed from OpenAPI
-                         link expressions (e.g., "id", "data/item/id").
+            link_fields: LinkFields object containing body_pointers and headers
+                         for variable extraction during chain execution.
             requests_per_second: Maximum requests per second (rate limit).
                                  If None, no rate limiting is applied.
         """
@@ -93,7 +92,7 @@ class Executor:
         self._target_b = target_b
         self._default_timeout = default_timeout
         self._operation_timeouts = operation_timeouts or {}
-        self._link_fields = link_fields or set()
+        self._link_fields = link_fields or LinkFields()
 
         # Rate limiting state
         self._requests_per_second = requests_per_second
@@ -269,6 +268,23 @@ class Executor:
             ChainExecution(steps=steps_b),
         )
 
+    def _variable_to_string(self, var_value: Any) -> str:
+        """Convert a variable value to string for substitution.
+
+        Handles list values (from header extraction) by using the first element.
+        Using str() on a list produces "['value']" which is not what we want.
+
+        Args:
+            var_value: The variable value to convert.
+
+        Returns:
+            String representation suitable for substitution.
+        """
+        if isinstance(var_value, list):
+            # Use first element if list is non-empty, otherwise empty string
+            return str(var_value[0]) if var_value else ""
+        return str(var_value)
+
     def _apply_variables(
         self,
         template: RequestCase,
@@ -294,10 +310,10 @@ class Executor:
             if isinstance(value, str):
                 for var_name, var_value in variables.items():
                     if f"{{{var_name}}}" in value:
-                        value = value.replace(f"{{{var_name}}}", str(var_value))
+                        value = value.replace(f"{{{var_name}}}", self._variable_to_string(var_value))
                     # Also check for direct match (Schemathesis may have already resolved)
                     if value == var_name:
-                        value = str(var_value)
+                        value = self._variable_to_string(var_value)
                 request_dict["path_parameters"][key] = value
 
         # Re-render the path with updated parameters
@@ -312,7 +328,7 @@ class Executor:
             for value in values:
                 for var_name, var_value in variables.items():
                     if f"{{{var_name}}}" in value:
-                        value = value.replace(f"{{{var_name}}}", str(var_value))
+                        value = value.replace(f"{{{var_name}}}", self._variable_to_string(var_value))
                 new_values.append(value)
             request_dict["query"][key] = new_values
 
@@ -343,7 +359,7 @@ class Executor:
             if isinstance(value, str):
                 for var_name, var_value in variables.items():
                     if f"{{{var_name}}}" in value:
-                        value = value.replace(f"{{{var_name}}}", str(var_value))
+                        value = value.replace(f"{{{var_name}}}", self._variable_to_string(var_value))
                 result[key] = value
             elif isinstance(value, dict):
                 result[key] = self._substitute_in_dict(value, variables)
@@ -372,7 +388,7 @@ class Executor:
             if isinstance(item, str):
                 for var_name, var_value in variables.items():
                     if f"{{{var_name}}}" in item:
-                        item = item.replace(f"{{{var_name}}}", str(var_value))
+                        item = item.replace(f"{{{var_name}}}", self._variable_to_string(var_value))
                 result.append(item)
             elif isinstance(item, dict):
                 result.append(self._substitute_in_dict(item, variables))
@@ -386,11 +402,12 @@ class Executor:
         """Extract variables from a response for chain substitution.
 
         Extracts fields referenced by OpenAPI link expressions. Uses the
-        link_fields set parsed from the spec at initialization.
+        link_fields parsed from the spec at initialization.
 
-        Variables are stored under their full JSONPointer path. Additionally,
-        if the last segment is unique (no collision with other paths), it's
-        also stored under just the last segment for simpler references.
+        Body fields are stored under their JSONPointer path. Headers use
+        "header/{name}" for all values (as list) or "header/{name}/{index}"
+        for specific indexed access. This matches body array semantics where
+        "items" returns the array and "items/0" returns the first element.
 
         Args:
             response: Response to extract from.
@@ -400,31 +417,55 @@ class Executor:
         """
         extracted: dict[str, Any] = {}
 
-        if not isinstance(response.body, dict):
-            return extracted
+        # Extract body fields (if response has a dict body)
+        if isinstance(response.body, dict):
+            # First pass: extract all values under full pointer paths
+            for field_pointer in self._link_fields.body_pointers:
+                value = extract_by_jsonpointer(response.body, field_pointer)
+                if value is not None:
+                    extracted[field_pointer] = value
 
-        # First pass: extract all values under full pointer paths
-        for field_pointer in self._link_fields:
-            value = extract_by_jsonpointer(response.body, field_pointer)
-            if value is not None:
-                extracted[field_pointer] = value
+            # Second pass: add last-segment shortcuts only if no collision
+            # e.g., "data/item/id" also stores under "id" if no other path ends in "id"
+            last_segments: dict[str, list[str]] = {}
+            for field_pointer in self._link_fields.body_pointers:
+                last_segment = field_pointer.split("/")[-1]
+                if last_segment != field_pointer:  # Only for nested paths
+                    last_segments.setdefault(last_segment, []).append(field_pointer)
 
-        # Second pass: add last-segment shortcuts only if no collision
-        # e.g., "data/item/id" also stores under "id" if no other path ends in "id"
-        last_segments: dict[str, list[str]] = {}
-        for field_pointer in self._link_fields:
-            last_segment = field_pointer.split("/")[-1]
-            if last_segment != field_pointer:  # Only for nested paths
-                last_segments.setdefault(last_segment, []).append(field_pointer)
+            for last_segment, pointers in last_segments.items():
+                if len(pointers) == 1:
+                    # No collision - safe to add shortcut
+                    pointer = pointers[0]
+                    if pointer in extracted:
+                        extracted[last_segment] = extracted[pointer]
+                # If len(pointers) > 1, there's a collision - skip shortcut to avoid
+                # silent data loss. Users must use full path.
 
-        for last_segment, pointers in last_segments.items():
-            if len(pointers) == 1:
-                # No collision - safe to add shortcut
-                pointer = pointers[0]
-                if pointer in extracted:
-                    extracted[last_segment] = extracted[pointer]
-            # If len(pointers) > 1, there's a collision - skip shortcut to avoid
-            # silent data loss. Users must use full path.
+        # Extract header values with array semantics
+        # Headers are stored at "header/{name}" (all values as list) and optionally
+        # "header/{name}/{index}" for specific indexed access.
+        # This mirrors body array access: "items" vs "items/0"
+        headers_to_extract: set[str] = set()
+        indexed_headers: dict[str, set[int]] = {}
+
+        for header_ref in self._link_fields.headers:
+            headers_to_extract.add(header_ref.name)
+            if header_ref.index is not None:
+                indexed_headers.setdefault(header_ref.name, set()).add(header_ref.index)
+
+        for header_name in headers_to_extract:
+            # ResponseCase headers are already lowercase keys with list values
+            header_values = response.headers.get(header_name, [])
+            if header_values:
+                # Store all values as list at header/{name}
+                extracted[f"header/{header_name}"] = header_values
+
+                # Store specific indexed values at header/{name}/{index}
+                if header_name in indexed_headers:
+                    for index in indexed_headers[header_name]:
+                        if index < len(header_values):
+                            extracted[f"header/{header_name}/{index}"] = header_values[index]
 
         return extracted
 

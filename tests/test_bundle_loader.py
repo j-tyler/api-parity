@@ -14,7 +14,18 @@ from api_parity.bundle_loader import (
     extract_link_fields_from_chain,
     load_bundle,
 )
+from api_parity.case_generator import HeaderRef, LinkFields
 from api_parity.models import ChainCase
+
+
+def get_header_names(link_fields: LinkFields) -> set[str]:
+    """Extract unique header names from LinkFields.headers list."""
+    return {h.name for h in link_fields.headers}
+
+
+def get_header_refs(link_fields: LinkFields, name: str) -> list[HeaderRef]:
+    """Get all HeaderRef objects for a given header name."""
+    return [h for h in link_fields.headers if h.name == name]
 
 
 # =============================================================================
@@ -81,7 +92,7 @@ def sample_chain_case():
                     "body_base64": None,
                     "media_type": None,
                 },
-                "link_source": {"step": 0, "field": "$.id"},
+                "link_source": {"step": 0, "field": "$response.body#/id"},
             },
         ],
     }
@@ -452,8 +463,8 @@ class TestBundleType:
 
 
 class TestExtractLinkFieldsFromChain:
-    def test_extracts_simple_field(self):
-        """Test extraction of simple JSONPath field."""
+    def test_extracts_simple_body_field(self):
+        """Test extraction of simple body field expression."""
         chain_data = {
             "chain_id": "test",
             "steps": [
@@ -475,16 +486,17 @@ class TestExtractLinkFieldsFromChain:
                         "rendered_path": "/items/{id}", "query": {}, "headers": {},
                         "cookies": {}, "body": None, "body_base64": None, "media_type": None
                     },
-                    "link_source": {"step": 0, "field": "$.id"}
+                    "link_source": {"step": 0, "field": "$response.body#/id"}
                 }
             ]
         }
         chain = ChainCase.model_validate(chain_data)
-        fields = extract_link_fields_from_chain(chain)
-        assert fields == {"id"}
+        link_fields = extract_link_fields_from_chain(chain)
+        assert link_fields.body_pointers == {"id"}
+        assert link_fields.headers == []
 
     def test_extracts_nested_field(self):
-        """Test extraction of nested JSONPath field."""
+        """Test extraction of nested body field expression."""
         chain_data = {
             "chain_id": "test",
             "steps": [
@@ -506,13 +518,13 @@ class TestExtractLinkFieldsFromChain:
                         "rendered_path": "/items/{id}", "query": {}, "headers": {},
                         "cookies": {}, "body": None, "body_base64": None, "media_type": None
                     },
-                    "link_source": {"step": 0, "field": "$.data.item.id"}
+                    "link_source": {"step": 0, "field": "$response.body#/data/item/id"}
                 }
             ]
         }
         chain = ChainCase.model_validate(chain_data)
-        fields = extract_link_fields_from_chain(chain)
-        assert fields == {"data/item/id"}
+        link_fields = extract_link_fields_from_chain(chain)
+        assert link_fields.body_pointers == {"data/item/id"}
 
     def test_extracts_array_index(self):
         """Test extraction of field with array index."""
@@ -537,13 +549,13 @@ class TestExtractLinkFieldsFromChain:
                         "rendered_path": "/items/{id}", "query": {}, "headers": {},
                         "cookies": {}, "body": None, "body_base64": None, "media_type": None
                     },
-                    "link_source": {"step": 0, "field": "$.items[0].id"}
+                    "link_source": {"step": 0, "field": "$response.body#/items/0/id"}
                 }
             ]
         }
         chain = ChainCase.model_validate(chain_data)
-        fields = extract_link_fields_from_chain(chain)
-        assert fields == {"items/0/id"}
+        link_fields = extract_link_fields_from_chain(chain)
+        assert link_fields.body_pointers == {"items/0/id"}
 
     def test_extracts_multiple_fields(self):
         """Test extraction of multiple different fields."""
@@ -568,7 +580,7 @@ class TestExtractLinkFieldsFromChain:
                         "rendered_path": "/items/{id}", "query": {}, "headers": {},
                         "cookies": {}, "body": None, "body_base64": None, "media_type": None
                     },
-                    "link_source": {"step": 0, "field": "$.id"}
+                    "link_source": {"step": 0, "field": "$response.body#/id"}
                 },
                 {
                     "step_index": 2,
@@ -578,13 +590,13 @@ class TestExtractLinkFieldsFromChain:
                         "rendered_path": "/items/{id}", "query": {}, "headers": {},
                         "cookies": {}, "body": None, "body_base64": None, "media_type": None
                     },
-                    "link_source": {"step": 0, "field": "$.version"}
+                    "link_source": {"step": 0, "field": "$response.body#/version"}
                 }
             ]
         }
         chain = ChainCase.model_validate(chain_data)
-        fields = extract_link_fields_from_chain(chain)
-        assert fields == {"id", "version"}
+        link_fields = extract_link_fields_from_chain(chain)
+        assert link_fields.body_pointers == {"id", "version"}
 
     def test_empty_chain(self):
         """Test with chain with no link_source fields."""
@@ -604,11 +616,12 @@ class TestExtractLinkFieldsFromChain:
             ]
         }
         chain = ChainCase.model_validate(chain_data)
-        fields = extract_link_fields_from_chain(chain)
-        assert fields == set()
+        link_fields = extract_link_fields_from_chain(chain)
+        assert link_fields.body_pointers == set()
+        assert link_fields.headers == []
 
-    def test_ignores_invalid_jsonpath(self):
-        """Test that invalid JSONPath formats are ignored."""
+    def test_ignores_unknown_formats(self):
+        """Test that unknown expression formats are ignored."""
         chain_data = {
             "chain_id": "test",
             "steps": [
@@ -630,11 +643,125 @@ class TestExtractLinkFieldsFromChain:
                         "rendered_path": "/items/{id}", "query": {}, "headers": {},
                         "cookies": {}, "body": None, "body_base64": None, "media_type": None
                     },
-                    # Invalid: doesn't start with $.
+                    # Unknown format - not a recognized expression
                     "link_source": {"step": 0, "field": "id"}
                 }
             ]
         }
         chain = ChainCase.model_validate(chain_data)
-        fields = extract_link_fields_from_chain(chain)
-        assert fields == set()
+        link_fields = extract_link_fields_from_chain(chain)
+        assert link_fields.body_pointers == set()
+        assert link_fields.headers == []
+
+    def test_extracts_header_expression(self):
+        """Test extraction of header expressions."""
+        chain_data = {
+            "chain_id": "test",
+            "steps": [
+                {
+                    "step_index": 0,
+                    "request_template": {
+                        "case_id": "s0", "operation_id": "create", "method": "POST",
+                        "path_template": "/items", "path_parameters": {},
+                        "rendered_path": "/items", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": None
+                },
+                {
+                    "step_index": 1,
+                    "request_template": {
+                        "case_id": "s1", "operation_id": "get", "method": "GET",
+                        "path_template": "/items/{id}", "path_parameters": {},
+                        "rendered_path": "/items/{id}", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": {"step": 0, "field": "$response.header.Location"}
+                }
+            ]
+        }
+        chain = ChainCase.model_validate(chain_data)
+        link_fields = extract_link_fields_from_chain(chain)
+        assert link_fields.body_pointers == set()
+        assert get_header_names(link_fields) == {"location"}
+        # Verify no index specified
+        refs = get_header_refs(link_fields, "location")
+        assert len(refs) == 1
+        assert refs[0].index is None
+
+    def test_extracts_header_with_array_index(self):
+        """Test extraction of header expressions with array index."""
+        chain_data = {
+            "chain_id": "test",
+            "steps": [
+                {
+                    "step_index": 0,
+                    "request_template": {
+                        "case_id": "s0", "operation_id": "create", "method": "POST",
+                        "path_template": "/items", "path_parameters": {},
+                        "rendered_path": "/items", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": None
+                },
+                {
+                    "step_index": 1,
+                    "request_template": {
+                        "case_id": "s1", "operation_id": "getCookie", "method": "GET",
+                        "path_template": "/items/cookie", "path_parameters": {},
+                        "rendered_path": "/items/cookie", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": {"step": 0, "field": "$response.header.Set-Cookie[0]"}
+                }
+            ]
+        }
+        chain = ChainCase.model_validate(chain_data)
+        link_fields = extract_link_fields_from_chain(chain)
+        assert link_fields.body_pointers == set()
+        assert get_header_names(link_fields) == {"set-cookie"}
+        refs = get_header_refs(link_fields, "set-cookie")
+        assert len(refs) == 1
+        assert refs[0].index == 0
+
+    def test_extracts_mixed_body_and_header(self):
+        """Test extraction of mixed body and header expressions."""
+        chain_data = {
+            "chain_id": "test",
+            "steps": [
+                {
+                    "step_index": 0,
+                    "request_template": {
+                        "case_id": "s0", "operation_id": "create", "method": "POST",
+                        "path_template": "/items", "path_parameters": {},
+                        "rendered_path": "/items", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": None
+                },
+                {
+                    "step_index": 1,
+                    "request_template": {
+                        "case_id": "s1", "operation_id": "getByUrl", "method": "GET",
+                        "path_template": "/items/by-url", "path_parameters": {},
+                        "rendered_path": "/items/by-url", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": {"step": 0, "field": "$response.header.Location"}
+                },
+                {
+                    "step_index": 2,
+                    "request_template": {
+                        "case_id": "s2", "operation_id": "update", "method": "PUT",
+                        "path_template": "/items/{id}", "path_parameters": {},
+                        "rendered_path": "/items/{id}", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": {"step": 0, "field": "$response.body#/id"}
+                }
+            ]
+        }
+        chain = ChainCase.model_validate(chain_data)
+        link_fields = extract_link_fields_from_chain(chain)
+        assert link_fields.body_pointers == {"id"}
+        assert get_header_names(link_fields) == {"location"}

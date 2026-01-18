@@ -1,7 +1,8 @@
 """Tests for dynamic link field extraction from OpenAPI specs.
 
-Verifies that link expressions like $response.body#/resource_uuid are
-correctly parsed and used for chain generation and execution.
+Verifies that link expressions like $response.body#/resource_uuid and
+$response.header.Location are correctly parsed and used for chain
+generation and execution.
 """
 
 import pytest
@@ -10,9 +11,21 @@ from typing import Any
 
 from api_parity.case_generator import (
     CaseGenerator,
+    HeaderRef,
+    LinkFields,
     extract_link_fields_from_spec,
     extract_by_jsonpointer,
 )
+
+
+def get_header_names(link_fields: LinkFields) -> set[str]:
+    """Extract unique header names from LinkFields.headers list."""
+    return {h.name for h in link_fields.headers}
+
+
+def get_header_refs(link_fields: LinkFields, name: str) -> list[HeaderRef]:
+    """Get all HeaderRef objects for a given header name."""
+    return [h for h in link_fields.headers if h.name == name]
 
 
 def set_by_jsonpointer(data: dict, pointer: str, value: Any) -> None:
@@ -77,8 +90,9 @@ class TestExtractLinkFieldsFromSpec:
                 }
             }
         }
-        fields = extract_link_fields_from_spec(spec)
-        assert fields == {"id"}
+        link_fields = extract_link_fields_from_spec(spec)
+        assert link_fields.body_pointers == {"id"}
+        assert link_fields.headers == []
 
     def test_extracts_custom_field_name(self):
         """Non-standard field names like resource_uuid are extracted."""
@@ -102,8 +116,8 @@ class TestExtractLinkFieldsFromSpec:
                 }
             }
         }
-        fields = extract_link_fields_from_spec(spec)
-        assert fields == {"resource_uuid"}
+        link_fields = extract_link_fields_from_spec(spec)
+        assert link_fields.body_pointers == {"resource_uuid"}
 
     def test_extracts_nested_path(self):
         """Nested paths like data/nested_id are extracted."""
@@ -127,8 +141,8 @@ class TestExtractLinkFieldsFromSpec:
                 }
             }
         }
-        fields = extract_link_fields_from_spec(spec)
-        assert fields == {"data/nested_id"}
+        link_fields = extract_link_fields_from_spec(spec)
+        assert link_fields.body_pointers == {"data/nested_id"}
 
     def test_extracts_multiple_fields(self):
         """Multiple different fields across links are all extracted."""
@@ -174,8 +188,8 @@ class TestExtractLinkFieldsFromSpec:
                 }
             }
         }
-        fields = extract_link_fields_from_spec(spec)
-        assert fields == {"resource_uuid", "owner_identifier", "entity_key"}
+        link_fields = extract_link_fields_from_spec(spec)
+        assert link_fields.body_pointers == {"resource_uuid", "owner_identifier", "entity_key"}
 
     def test_deduplicates_same_field(self):
         """Same field referenced multiple times is only included once."""
@@ -211,11 +225,11 @@ class TestExtractLinkFieldsFromSpec:
                 }
             }
         }
-        fields = extract_link_fields_from_spec(spec)
-        assert fields == {"id"}
+        link_fields = extract_link_fields_from_spec(spec)
+        assert link_fields.body_pointers == {"id"}
 
-    def test_ignores_non_body_expressions(self):
-        """Header expressions like $response.header.X-Id are ignored."""
+    def test_extracts_header_expressions(self):
+        """Header expressions like $response.header.X-Id are extracted."""
         spec = {
             "paths": {
                 "/items": {
@@ -236,11 +250,16 @@ class TestExtractLinkFieldsFromSpec:
                 }
             }
         }
-        fields = extract_link_fields_from_spec(spec)
-        assert fields == set()
+        link_fields = extract_link_fields_from_spec(spec)
+        assert link_fields.body_pointers == set()
+        assert get_header_names(link_fields) == {"x-item-id"}  # Lowercase normalized
+        # Verify no index specified
+        refs = get_header_refs(link_fields, "x-item-id")
+        assert len(refs) == 1
+        assert refs[0].index is None
 
-    def test_empty_spec_returns_empty_set(self):
-        """Spec with no links returns empty set."""
+    def test_empty_spec_returns_empty_link_fields(self):
+        """Spec with no links returns empty LinkFields."""
         spec = {
             "paths": {
                 "/items": {
@@ -254,14 +273,135 @@ class TestExtractLinkFieldsFromSpec:
                 }
             }
         }
-        fields = extract_link_fields_from_spec(spec)
-        assert fields == set()
+        link_fields = extract_link_fields_from_spec(spec)
+        assert link_fields.body_pointers == set()
+        assert link_fields.headers == []
 
     def test_handles_missing_paths(self):
-        """Spec without paths key returns empty set."""
+        """Spec without paths key returns empty LinkFields."""
         spec = {"info": {"title": "Test"}}
-        fields = extract_link_fields_from_spec(spec)
-        assert fields == set()
+        link_fields = extract_link_fields_from_spec(spec)
+        assert link_fields.body_pointers == set()
+        assert link_fields.headers == []
+
+    def test_extracts_location_header(self):
+        """Location header expressions are extracted and normalized."""
+        spec = {
+            "paths": {
+                "/items": {
+                    "post": {
+                        "responses": {
+                            "201": {
+                                "links": {
+                                    "GetItem": {
+                                        "operationId": "getItem",
+                                        "parameters": {
+                                            "item_url": "$response.header.Location"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        link_fields = extract_link_fields_from_spec(spec)
+        assert get_header_names(link_fields) == {"location"}
+
+    def test_extracts_mixed_body_and_header(self):
+        """Mixed body and header expressions are both extracted."""
+        spec = {
+            "paths": {
+                "/items": {
+                    "post": {
+                        "responses": {
+                            "201": {
+                                "links": {
+                                    "GetItem": {
+                                        "operationId": "getItem",
+                                        "parameters": {
+                                            "item_id": "$response.body#/id",
+                                            "item_url": "$response.header.Location"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        link_fields = extract_link_fields_from_spec(spec)
+        assert link_fields.body_pointers == {"id"}
+        assert get_header_names(link_fields) == {"location"}
+
+    def test_header_case_insensitivity(self):
+        """Header names with different cases are normalized to lowercase."""
+        spec = {
+            "paths": {
+                "/items": {
+                    "post": {
+                        "responses": {
+                            "201": {
+                                "links": {
+                                    "GetByLocation": {
+                                        "operationId": "get1",
+                                        "parameters": {
+                                            "url": "$response.header.LOCATION"
+                                        }
+                                    },
+                                    "GetByCustom": {
+                                        "operationId": "get2",
+                                        "parameters": {
+                                            "custom": "$response.header.X-Custom-Header"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        link_fields = extract_link_fields_from_spec(spec)
+        assert get_header_names(link_fields) == {"location", "x-custom-header"}
+
+    def test_extracts_header_with_array_index(self):
+        """Header expressions with array index are extracted with index."""
+        spec = {
+            "paths": {
+                "/items": {
+                    "post": {
+                        "responses": {
+                            "201": {
+                                "links": {
+                                    "GetFirst": {
+                                        "operationId": "getFirst",
+                                        "parameters": {
+                                            "cookie": "$response.header.Set-Cookie[0]"
+                                        }
+                                    },
+                                    "GetSecond": {
+                                        "operationId": "getSecond",
+                                        "parameters": {
+                                            "cookie": "$response.header.Set-Cookie[1]"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        link_fields = extract_link_fields_from_spec(spec)
+        assert get_header_names(link_fields) == {"set-cookie"}
+        # Two HeaderRefs for Set-Cookie with indices 0 and 1
+        refs = get_header_refs(link_fields, "set-cookie")
+        assert len(refs) == 2
+        indices = {r.index for r in refs}
+        assert indices == {0, 1}
 
 
 class TestExtractByJsonpointer:
@@ -316,34 +456,42 @@ class TestCaseGeneratorLinkFields:
         """Standard test API has 'id' in links."""
         spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
         generator = CaseGenerator(spec_path)
-        fields = generator.get_link_fields()
+        link_fields = generator.get_link_fields()
         # test_api.yaml uses $response.body#/id in links
-        assert "id" in fields
+        assert "id" in link_fields.body_pointers
 
     def test_extracts_custom_fields(self):
         """Custom fields API extracts resource_uuid and entity_identifier."""
         spec_path = Path(__file__).parent / "fixtures" / "test_api_custom_fields.yaml"
         generator = CaseGenerator(spec_path)
-        fields = generator.get_link_fields()
-        assert "resource_uuid" in fields
-        assert "entity_identifier" in fields
-        assert "data/nested_id" in fields
+        link_fields = generator.get_link_fields()
+        assert "resource_uuid" in link_fields.body_pointers
+        assert "entity_identifier" in link_fields.body_pointers
+        assert "data/nested_id" in link_fields.body_pointers
 
     def test_extracts_array_index_paths(self):
         """Array index paths like items/0/item_id are extracted."""
         spec_path = Path(__file__).parent / "fixtures" / "test_api_custom_fields.yaml"
         generator = CaseGenerator(spec_path)
-        fields = generator.get_link_fields()
+        link_fields = generator.get_link_fields()
         # The custom fields spec has a link with $response.body#/items/0/item_id
-        assert "items/0/item_id" in fields
+        assert "items/0/item_id" in link_fields.body_pointers
 
     def test_link_fields_available_before_generation(self):
         """Link fields are available immediately after construction."""
         spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
         generator = CaseGenerator(spec_path)
         # Should not need to call generate() first
-        fields = generator.get_link_fields()
-        assert isinstance(fields, set)
+        link_fields = generator.get_link_fields()
+        assert isinstance(link_fields, LinkFields)
+
+    def test_extracts_header_links_from_fixture(self):
+        """Header link API extracts header names."""
+        spec_path = Path(__file__).parent / "fixtures" / "test_api_header_links.yaml"
+        generator = CaseGenerator(spec_path)
+        link_fields = generator.get_link_fields()
+        # test_api_header_links.yaml uses $response.header.Location
+        assert "location" in get_header_names(link_fields)
 
 
 class TestSetByJsonpointer:

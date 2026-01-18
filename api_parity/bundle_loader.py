@@ -14,6 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from api_parity.case_generator import HeaderRef, LinkFields, LINK_HEADER_PATTERN
 from api_parity.models import (
     ChainCase,
     MismatchMetadata,
@@ -55,7 +56,7 @@ class LoadedBundle:
     metadata: MismatchMetadata
 
 
-def extract_link_fields_from_chain(chain: ChainCase) -> set[str]:
+def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
     """Extract link_fields from a ChainCase for variable extraction.
 
     During replay, we don't have the OpenAPI spec to extract link_fields.
@@ -66,58 +67,45 @@ def extract_link_fields_from_chain(chain: ChainCase) -> set[str]:
         chain: The ChainCase to extract link_fields from.
 
     Returns:
-        Set of JSONPointer paths (e.g., "id", "data/item/id") needed for
+        LinkFields with body_pointers and headers needed for
         variable extraction during chain execution.
     """
-    fields: set[str] = set()
+    link_fields = LinkFields()
+
+    def _extract_from_expression(expr: str) -> None:
+        """Extract link field from a single expression."""
+        # Check for header expression: $response.header.HeaderName or HeaderName[index]
+        header_match = LINK_HEADER_PATTERN.match(expr)
+        if header_match:
+            header_name = header_match.group(1).lower()
+            index_str = header_match.group(2)
+            index = int(index_str) if index_str is not None else None
+            link_fields.headers.append(HeaderRef(name=header_name, index=index))
+            return
+
+        # Check for body expression: $response.body#/path
+        if expr.startswith("$response.body#/"):
+            json_pointer = expr[len("$response.body#/"):]
+            if json_pointer:
+                link_fields.body_pointers.add(json_pointer)
 
     for step in chain.steps:
         if step.link_source is None:
             continue
 
-        # link_source.field is JSONPath format: "$.id" or "$.data.items[0].id"
-        field = step.link_source.get("field")
-        if not isinstance(field, str) or not field.startswith("$."):
-            continue
+        # Try new format: "parameters" dict with all expressions
+        parameters = step.link_source.get("parameters")
+        if isinstance(parameters, dict):
+            for expr in parameters.values():
+                if isinstance(expr, str):
+                    _extract_from_expression(expr)
+        else:
+            # Fall back to old format: single "field" expression
+            field = step.link_source.get("field")
+            if isinstance(field, str):
+                _extract_from_expression(field)
 
-        # Convert JSONPath to JSONPointer:
-        # "$.id" -> "id"
-        # "$.data.items[0].id" -> "data/items/0/id"
-        json_path = field[2:]  # Remove "$."
-
-        # Replace array indexing: .items[0]. -> /items/0/
-        # and dot notation: .field -> /field
-        pointer_parts = []
-        current = ""
-        i = 0
-        while i < len(json_path):
-            if json_path[i] == ".":
-                if current:
-                    pointer_parts.append(current)
-                    current = ""
-                i += 1
-            elif json_path[i] == "[":
-                if current:
-                    pointer_parts.append(current)
-                    current = ""
-                # Find closing bracket
-                j = i + 1
-                while j < len(json_path) and json_path[j] != "]":
-                    j += 1
-                # Extract index
-                index = json_path[i + 1 : j]
-                pointer_parts.append(index)
-                i = j + 1
-            else:
-                current += json_path[i]
-                i += 1
-        if current:
-            pointer_parts.append(current)
-
-        if pointer_parts:
-            fields.add("/".join(pointer_parts))
-
-    return fields
+    return link_fields
 
 
 def discover_bundles(directory: Path) -> list[Path]:
