@@ -118,6 +118,18 @@ This is not a "nice to have"—it's as critical as writing correct code.
 
 See DESIGN.md "AI-Optimized Code and Documentation" for the full rationale. In brief: prefer inline logic over indirection, avoid unnecessary abstraction, keep docs token-efficient.
 
+**Comments require justification.** Every comment consumes tokens in future context windows. Add a comment only when:
+- The WHY is non-obvious (the code shows WHAT, but not why it exists)
+- Removing it would cause a future agent to make a wrong assumption
+
+Do NOT add comments that:
+- Restate what code does (`# Loop through items` before a for loop)
+- Explain standard semantics (`# Returns None if key missing`)
+- Describe obvious intent (`# Get user by email` above `get_user_by_email()`)
+- Expand acronyms or define terms an LLM already knows
+
+If code needs explanation, first try improving the code (better names, clearer structure). A comment is an admission that the code couldn't speak for itself.
+
 ## Design Decision Format
 
 When adding decisions to DESIGN.md, use this format:
