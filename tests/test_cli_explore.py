@@ -544,3 +544,249 @@ class TestTimeoutOptions:
             "--operation-timeout", "namespace:getUser:60",
         ])
         assert args.operation_timeout == {"namespace:getUser": 60.0}
+
+
+class TestChainSignature:
+    """Tests for _chain_signature function."""
+
+    def test_signature_extracts_operation_ids(self):
+        """Chain signature is tuple of operation IDs."""
+        from api_parity.cli import _chain_signature
+        from api_parity.models import ChainCase, ChainStep, RequestCase
+
+        # Create a mock chain with 3 steps
+        steps = []
+        for i, op_id in enumerate(["createWidget", "getWidget", "updateWidget"]):
+            request = RequestCase(
+                case_id=f"case-{i}",
+                operation_id=op_id,
+                method="GET",
+                path_template="/test",
+                rendered_path="/test",
+            )
+            steps.append(ChainStep(step_index=i, request_template=request))
+
+        chain = ChainCase(chain_id="test-chain", steps=steps)
+        sig = _chain_signature(chain)
+
+        assert sig == ("createWidget", "getWidget", "updateWidget")
+
+    def test_signature_same_for_same_ops(self):
+        """Chains with same ops have same signature."""
+        from api_parity.cli import _chain_signature
+        from api_parity.models import ChainCase, ChainStep, RequestCase
+
+        def make_chain(chain_id: str) -> ChainCase:
+            steps = []
+            for i, op_id in enumerate(["op1", "op2"]):
+                request = RequestCase(
+                    case_id=f"{chain_id}-{i}",
+                    operation_id=op_id,
+                    method="GET",
+                    path_template="/test",
+                    rendered_path="/test",
+                )
+                steps.append(ChainStep(step_index=i, request_template=request))
+            return ChainCase(chain_id=chain_id, steps=steps)
+
+        chain1 = make_chain("chain-1")
+        chain2 = make_chain("chain-2")
+
+        assert _chain_signature(chain1) == _chain_signature(chain2)
+
+    def test_signature_different_for_different_ops(self):
+        """Chains with different ops have different signatures."""
+        from api_parity.cli import _chain_signature
+        from api_parity.models import ChainCase, ChainStep, RequestCase
+
+        def make_chain(op_ids: list[str]) -> ChainCase:
+            steps = []
+            for i, op_id in enumerate(op_ids):
+                request = RequestCase(
+                    case_id=f"case-{i}",
+                    operation_id=op_id,
+                    method="GET",
+                    path_template="/test",
+                    rendered_path="/test",
+                )
+                steps.append(ChainStep(step_index=i, request_template=request))
+            return ChainCase(chain_id="test", steps=steps)
+
+        chain1 = make_chain(["op1", "op2"])
+        chain2 = make_chain(["op1", "op3"])
+
+        assert _chain_signature(chain1) != _chain_signature(chain2)
+
+
+class TestGenerateChainsWithSeedWalking:
+    """Tests for _generate_chains_with_seed_walking function."""
+
+    def test_no_seed_single_pass(self, tmp_path):
+        """Without seed, single pass is performed without seed walking."""
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+        from api_parity.models import ChainCase, ChainStep, RequestCase
+
+        # Create mock generator
+        mock_generator = MagicMock()
+
+        def make_chain(op_ids: list[str], chain_id: str) -> ChainCase:
+            steps = []
+            for i, op_id in enumerate(op_ids):
+                request = RequestCase(
+                    case_id=f"case-{i}",
+                    operation_id=op_id,
+                    method="GET",
+                    path_template="/test",
+                    rendered_path="/test",
+                )
+                steps.append(ChainStep(step_index=i, request_template=request))
+            return ChainCase(chain_id=chain_id, steps=steps)
+
+        # Return 2 chains from single pass
+        mock_generator.generate_chains.return_value = [
+            make_chain(["op1", "op2"], "c1"),
+            make_chain(["op1", "op3"], "c2"),
+        ]
+
+        chains, seeds_used = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=5,
+            max_steps=6,
+            starting_seed=None,
+        )
+
+        # Should have called generate_chains once with no seed
+        mock_generator.generate_chains.assert_called_once_with(
+            max_chains=5, max_steps=6, seed=None
+        )
+        assert len(chains) == 2
+        assert seeds_used == []  # No seed walking
+
+    def test_seed_walking_accumulates_chains(self, tmp_path):
+        """With seed, walking accumulates unique chains across seeds."""
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+        from api_parity.models import ChainCase, ChainStep, RequestCase
+
+        mock_generator = MagicMock()
+
+        def make_chain(op_ids: list[str], chain_id: str) -> ChainCase:
+            steps = []
+            for i, op_id in enumerate(op_ids):
+                request = RequestCase(
+                    case_id=f"case-{i}",
+                    operation_id=op_id,
+                    method="GET",
+                    path_template="/test",
+                    rendered_path="/test",
+                )
+                steps.append(ChainStep(step_index=i, request_template=request))
+            return ChainCase(chain_id=chain_id, steps=steps)
+
+        # Seed 42 returns 2 unique chains
+        # Seed 43 returns 1 unique chain + 1 duplicate
+        # Seed 44 returns 1 unique chain
+        call_count = [0]
+
+        def mock_generate(max_chains, max_steps, seed):
+            call_count[0] += 1
+            if seed == 42:
+                return [
+                    make_chain(["op1", "op2"], "c1"),
+                    make_chain(["op1", "op3"], "c2"),
+                ]
+            elif seed == 43:
+                return [
+                    make_chain(["op1", "op2"], "c3"),  # Duplicate of c1
+                    make_chain(["op2", "op3"], "c4"),  # New
+                ]
+            elif seed == 44:
+                return [make_chain(["op3", "op4"], "c5")]  # New
+            return []
+
+        mock_generator.generate_chains.side_effect = mock_generate
+
+        chains, seeds_used = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=4,
+            max_steps=6,
+            starting_seed=42,
+        )
+
+        # Should have accumulated 4 unique chains from 3 seeds
+        assert len(chains) == 4
+        assert seeds_used == [42, 43, 44]
+
+        # Verify the chains are deduplicated by signature
+        sigs = [tuple(s.request_template.operation_id for s in c.steps) for c in chains]
+        assert len(sigs) == len(set(sigs))  # All unique
+
+    def test_seed_walking_stops_at_max_chains(self):
+        """Seed walking stops when max_chains is reached."""
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+        from api_parity.models import ChainCase, ChainStep, RequestCase
+
+        mock_generator = MagicMock()
+
+        def make_chain(op_ids: list[str], chain_id: str) -> ChainCase:
+            steps = []
+            for i, op_id in enumerate(op_ids):
+                request = RequestCase(
+                    case_id=f"case-{i}",
+                    operation_id=op_id,
+                    method="GET",
+                    path_template="/test",
+                    rendered_path="/test",
+                )
+                steps.append(ChainStep(step_index=i, request_template=request))
+            return ChainCase(chain_id=chain_id, steps=steps)
+
+        call_count = [0]
+
+        def mock_generate(max_chains, max_steps, seed):
+            call_count[0] += 1
+            # Each seed returns a unique chain
+            return [make_chain([f"op{seed}", f"op{seed+100}"], f"c{seed}")]
+
+        mock_generator.generate_chains.side_effect = mock_generate
+
+        chains, seeds_used = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=3,
+            max_steps=6,
+            starting_seed=0,
+        )
+
+        # Should stop after 3 chains
+        assert len(chains) == 3
+        assert call_count[0] == 3
+        assert seeds_used == [0, 1, 2]
+
+    def test_seed_walking_respects_max_increments(self):
+        """Seed walking stops after MAX_SEED_INCREMENTS even if target not reached."""
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import MAX_SEED_INCREMENTS, _generate_chains_with_seed_walking
+        from api_parity.models import ChainCase, ChainStep, RequestCase
+
+        mock_generator = MagicMock()
+
+        # Always return empty - no chains available
+        mock_generator.generate_chains.return_value = []
+
+        chains, seeds_used = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=1000,  # More than we can possibly get
+            max_steps=6,
+            starting_seed=0,
+        )
+
+        # Should have tried MAX_SEED_INCREMENTS times
+        assert mock_generator.generate_chains.call_count == MAX_SEED_INCREMENTS
+        assert len(chains) == 0
+        assert seeds_used == []  # No seeds contributed chains

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from api_parity.case_generator import CaseGenerator
     from api_parity.comparator import Comparator
     from api_parity.executor import Executor
-    from api_parity.models import ComparisonResult, ComparisonRules, TargetInfo
+    from api_parity.models import ChainCase, ComparisonResult, ComparisonRules, TargetInfo
 
 
 DEFAULT_TIMEOUT = 30.0
@@ -762,6 +762,100 @@ def run_graph_chains(args: GraphChainsArgs) -> int:
     return 0
 
 
+def _chain_signature(chain: "ChainCase") -> tuple[str, ...]:
+    """Get unique signature for chain deduplication (operation sequence).
+
+    Chains are considered duplicates if they have the same sequence of
+    operation IDs, regardless of the actual parameter values generated.
+    """
+    return tuple(step.request_template.operation_id for step in chain.steps)
+
+
+# Maximum seed increments to prevent infinite loops when few chains are available.
+# With 100 seeds tried, we give ample opportunity to find chains while avoiding
+# runaway execution if the spec genuinely has fewer chains than requested.
+MAX_SEED_INCREMENTS = 100
+
+
+def _generate_chains_with_seed_walking(
+    generator: "CaseGenerator",
+    max_chains: int,
+    max_steps: int,
+    starting_seed: int | None,
+) -> tuple[list["ChainCase"], list[int]]:
+    """Generate chains with incremental seed walking.
+
+    When starting_seed is provided and fewer than max_chains are generated,
+    continues with starting_seed+1, +2, etc. until max_chains is reached
+    or MAX_SEED_INCREMENTS seeds are tried.
+
+    Seed walking ONLY activates when a seed is explicitly provided. Without
+    a seed, a single generation pass is performed and whatever chains are
+    produced are returned.
+
+    Chains are deduplicated by operation sequence (chain signature). Two chains
+    with the same sequence of operation IDs are considered duplicates even if
+    they have different generated parameter values.
+
+    Args:
+        generator: The CaseGenerator instance.
+        max_chains: Maximum number of unique chains to accumulate.
+        max_steps: Maximum steps per chain.
+        starting_seed: The initial seed value, or None for non-deterministic.
+
+    Returns:
+        Tuple of (chains, seeds_used) where:
+        - chains: List of unique ChainCase objects
+        - seeds_used: List of seeds that contributed at least one unique chain
+    """
+    accumulated_chains: list["ChainCase"] = []
+    seen_signatures: set[tuple[str, ...]] = set()
+    seeds_used: list[int] = []
+
+    # If no seed provided, do a single pass without seed walking
+    if starting_seed is None:
+        chains = generator.generate_chains(
+            max_chains=max_chains,
+            max_steps=max_steps,
+            seed=None,
+        )
+        return chains, []
+
+    # Seed walking: try incrementing seeds until we have enough chains
+    current_seed = starting_seed
+    seeds_tried = 0
+
+    while len(accumulated_chains) < max_chains and seeds_tried < MAX_SEED_INCREMENTS:
+        chains = generator.generate_chains(
+            max_chains=max_chains,
+            max_steps=max_steps,
+            seed=current_seed,
+        )
+
+        # Track if this seed contributed any new unique chains
+        seed_contributed = False
+
+        for chain in chains:
+            sig = _chain_signature(chain)
+            if sig not in seen_signatures:
+                seen_signatures.add(sig)
+                accumulated_chains.append(chain)
+                seed_contributed = True
+
+                # Stop early if we've reached the target
+                if len(accumulated_chains) >= max_chains:
+                    break
+
+        if seed_contributed:
+            seeds_used.append(current_seed)
+
+        current_seed += 1
+        seeds_tried += 1
+
+    # Trim to max_chains in case we slightly over-collected
+    return accumulated_chains[:max_chains], seeds_used
+
+
 def _run_graph_chains_generated(args: GraphChainsArgs) -> int:
     """Run graph-chains with --generated flag.
 
@@ -786,13 +880,22 @@ def _run_graph_chains_generated(args: GraphChainsArgs) -> int:
     # Get declared links for coverage comparison
     declared_links = _extract_declared_links(generator._raw_spec, set(args.exclude))
 
-    # Generate chains
+    # Generate chains with seed walking if seed is provided
     print(f"Generating chains (max_chains={args.max_chains}, max_steps={args.max_steps})...")
-    chains = generator.generate_chains(
+    chains, seeds_used = _generate_chains_with_seed_walking(
+        generator=generator,
         max_chains=args.max_chains,
         max_steps=args.max_steps,
-        seed=args.seed,
+        starting_seed=args.seed,
     )
+
+    # Report seed walking if it occurred
+    if seeds_used:
+        if len(seeds_used) == 1:
+            print(f"Used seed: {seeds_used[0]}")
+        else:
+            # Show seed range and count of seeds that contributed unique chains
+            print(f"Seed walking: {len(seeds_used)} seeds contributed unique chains (range: {seeds_used[0]}-{seeds_used[-1]})")
 
     if not chains:
         print("\nNo multi-step chains generated.")
@@ -1435,14 +1538,26 @@ def _run_stateful_explore(
     """
     from api_parity.executor import RequestError
 
-    # Generate chains
+    # Generate chains with seed walking if seed is provided
     print("Generating chains...")
-    chains = generator.generate_chains(
-        max_chains=max_chains,
+    effective_max_chains = max_chains or 20
+    chains, seeds_used = _generate_chains_with_seed_walking(
+        generator=generator,
+        max_chains=effective_max_chains,
         max_steps=max_steps,
-        seed=seed,
+        starting_seed=seed,
     )
-    print(f"Generated {len(chains)} chains with multiple steps")
+
+    # Report seed walking if it occurred
+    if seeds_used:
+        if len(seeds_used) == 1:
+            print(f"Generated {len(chains)} chains with multiple steps (seed: {seeds_used[0]})")
+        else:
+            # Show seed range and count of seeds that contributed unique chains
+            print(f"Generated {len(chains)} chains with multiple steps")
+            print(f"Seed walking: {len(seeds_used)} seeds contributed unique chains (range: {seeds_used[0]}-{seeds_used[-1]})")
+    else:
+        print(f"Generated {len(chains)} chains with multiple steps")
     print()
 
     # Track which operations are covered by chains (for --ensure-coverage)

@@ -888,3 +888,39 @@ Uses BFS (breadth-first search) to find the minimum depth, not any arbitrary pat
 **Files affected:**
 - `api_parity/spec_linter.py` — Added `_check_chain_depth_coverage()` method
 - `tests/test_spec_linter.py` — Added `TestChainDepthCoverage` test class
+
+---
+
+# Incremental Seed Walking for Chain Generation
+
+Keywords: seed walking chains max-chains generation reproducibility exploration
+Date: 20260119
+
+When `--seed N` and `--max-chains M` are specified, if seed N generates fewer than M chains, the system now automatically continues with seeds N+1, N+2, etc. until M chains are accumulated or 100 seeds have been tried.
+
+**Problem:** Schemathesis's probabilistic state machine explores chains randomly. A single seed may not explore all reachable chain paths. For APIs with deeply nested links, users might request 50 chains but only get 15 from a single seed because Hypothesis exhausted its search space for that particular random sequence.
+
+**Solution:** When a seed is explicitly provided, implement incremental seed walking:
+
+1. Generate chains with the starting seed
+2. If fewer than max_chains generated, try starting_seed + 1
+3. Continue incrementing until max_chains reached or 100 seeds tried
+4. Deduplicate chains by operation sequence (chain signature)
+5. Report which seeds were used in the output
+
+**Key design decisions:**
+
+1. **Seed walking only activates with explicit --seed** — Without a seed, behavior is unchanged (single non-deterministic pass). This preserves backward compatibility and avoids surprising users who don't want deterministic behavior.
+
+2. **Deduplication by operation sequence** — Chains are considered duplicates if they have the same sequence of operation IDs, regardless of generated parameter values. This prevents accumulating 50 copies of the same `create -> get -> update` pattern with different UUIDs.
+
+3. **Maximum 100 seed increments** — Prevents infinite loops when the spec genuinely has fewer unique chains than requested. The constant `MAX_SEED_INCREMENTS = 100` provides ample opportunity while bounding execution time.
+
+4. **Still reproducible** — The starting seed determines the entire sequence. `--seed 42` with `--max-chains 50` will always produce the same 50 chains (assuming the spec hasn't changed).
+
+5. **Seeds used reported in output** — Users can see which seeds contributed chains for debugging and reproducibility tracking.
+
+**Files affected:**
+- `api_parity/cli.py` — Added `_chain_signature()`, `_generate_chains_with_seed_walking()`, updated `_run_graph_chains_generated()` and `_run_stateful_explore()`
+- `tests/test_cli_explore.py` — Tests for seed walking behavior
+- `tests/test_cli_graph_chains.py` — Tests for seed walking in generated mode
