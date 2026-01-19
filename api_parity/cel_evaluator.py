@@ -142,7 +142,15 @@ class CELEvaluator:
             try:
                 self._process.terminate()
                 self._process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                # Process didn't respond to SIGTERM, escalate to SIGKILL
+                self._process.kill()
+                try:
+                    self._process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass  # Process is unkillable, nothing more we can do
             except Exception:
+                # Other errors (already dead, etc.) - try kill as fallback
                 try:
                     self._process.kill()
                     # Must wait() after kill() to reap zombie process

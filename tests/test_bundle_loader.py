@@ -557,6 +557,44 @@ class TestExtractLinkFieldsFromChain:
         link_fields = extract_link_fields_from_chain(chain)
         assert link_fields.body_pointers == {"items/0/id"}
 
+    def test_extracts_root_body_pointer(self):
+        """Test extraction of root body pointer ($response.body#/).
+
+        RFC 6901 specifies that empty string "" is a valid JSON Pointer
+        referring to the entire document. The expression $response.body#/
+        should extract "" to reference the whole response body.
+        """
+        chain_data = {
+            "chain_id": "test",
+            "steps": [
+                {
+                    "step_index": 0,
+                    "request_template": {
+                        "case_id": "s0", "operation_id": "getRaw", "method": "GET",
+                        "path_template": "/raw", "path_parameters": {},
+                        "rendered_path": "/raw", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": None
+                },
+                {
+                    "step_index": 1,
+                    "request_template": {
+                        "case_id": "s1", "operation_id": "processRaw", "method": "POST",
+                        "path_template": "/process", "path_parameters": {},
+                        "rendered_path": "/process", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    # $response.body#/ means "entire response body"
+                    "link_source": {"step": 0, "field": "$response.body#/"}
+                }
+            ]
+        }
+        chain = ChainCase.model_validate(chain_data)
+        link_fields = extract_link_fields_from_chain(chain)
+        # Empty string is valid - refers to whole document per RFC 6901
+        assert "" in link_fields.body_pointers
+
     def test_extracts_multiple_fields(self):
         """Test extraction of multiple different fields."""
         chain_data = {
@@ -765,3 +803,123 @@ class TestExtractLinkFieldsFromChain:
         link_fields = extract_link_fields_from_chain(chain)
         assert link_fields.body_pointers == {"id"}
         assert get_header_names(link_fields) == {"location"}
+
+    def test_extracts_from_parameters_dict(self):
+        """Test extraction from 'parameters' format in link_source.
+
+        The bundle_loader supports two link_source formats:
+        - Old: {"step": 0, "field": "$response.body#/id"}
+        - New: {"step": 0, "parameters": {"param1": "...", "param2": "..."}}
+        """
+        chain_data = {
+            "chain_id": "test-parameters-format",
+            "steps": [
+                {
+                    "step_index": 0,
+                    "request_template": {
+                        "case_id": "s0", "operation_id": "createOrder", "method": "POST",
+                        "path_template": "/orders", "path_parameters": {},
+                        "rendered_path": "/orders", "query": {}, "headers": {},
+                        "cookies": {}, "body": {"item": "widget"},
+                        "body_base64": None, "media_type": "application/json"
+                    },
+                    "link_source": None
+                },
+                {
+                    "step_index": 1,
+                    "request_template": {
+                        "case_id": "s1", "operation_id": "getOrderWithUser", "method": "GET",
+                        "path_template": "/orders/{orderId}/user/{userId}", "path_parameters": {},
+                        "rendered_path": "/orders/{orderId}/user/{userId}", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": {
+                        "step": 0,
+                        "parameters": {
+                            "orderId": "$response.body#/order_id",
+                            "userId": "$response.body#/user_id",
+                        },
+                        "field": "$response.body#/order_id"
+                    }
+                }
+            ]
+        }
+        chain = ChainCase.model_validate(chain_data)
+        link_fields = extract_link_fields_from_chain(chain)
+        assert "order_id" in link_fields.body_pointers
+        assert "user_id" in link_fields.body_pointers
+
+    def test_extracts_headers_from_parameters_dict(self):
+        """Test extraction of header expressions from parameters format."""
+        chain_data = {
+            "chain_id": "test-parameters-headers",
+            "steps": [
+                {
+                    "step_index": 0,
+                    "request_template": {
+                        "case_id": "s0", "operation_id": "createResource", "method": "POST",
+                        "path_template": "/resources", "path_parameters": {},
+                        "rendered_path": "/resources", "query": {}, "headers": {},
+                        "cookies": {}, "body": {}, "body_base64": None, "media_type": "application/json"
+                    },
+                    "link_source": None
+                },
+                {
+                    "step_index": 1,
+                    "request_template": {
+                        "case_id": "s1", "operation_id": "getResource", "method": "GET",
+                        "path_template": "/resources/{id}", "path_parameters": {},
+                        "rendered_path": "/resources/{id}", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": {
+                        "step": 0,
+                        "parameters": {"id": "$response.header.X-Resource-Id"}
+                    }
+                }
+            ]
+        }
+        chain = ChainCase.model_validate(chain_data)
+        link_fields = extract_link_fields_from_chain(chain)
+        assert "x-resource-id" in get_header_names(link_fields)
+
+    def test_empty_parameters_dict_behavior(self):
+        """Test that empty parameters dict doesn't fall back to field.
+
+        When parameters={} (empty dict), the code enters the if-branch but
+        iterates over nothing. It does NOT fall back to check the "field" key.
+        This documents current behavior (case_generator prevents this in practice).
+        """
+        chain_data = {
+            "chain_id": "test-empty-params",
+            "steps": [
+                {
+                    "step_index": 0,
+                    "request_template": {
+                        "case_id": "s0", "operation_id": "op1", "method": "GET",
+                        "path_template": "/a", "path_parameters": {},
+                        "rendered_path": "/a", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": None
+                },
+                {
+                    "step_index": 1,
+                    "request_template": {
+                        "case_id": "s1", "operation_id": "op2", "method": "GET",
+                        "path_template": "/b", "path_parameters": {},
+                        "rendered_path": "/b", "query": {}, "headers": {},
+                        "cookies": {}, "body": None, "body_base64": None, "media_type": None
+                    },
+                    "link_source": {
+                        "step": 0,
+                        "parameters": {},
+                        "field": "$response.body#/should_be_ignored"
+                    }
+                }
+            ]
+        }
+        chain = ChainCase.model_validate(chain_data)
+        link_fields = extract_link_fields_from_chain(chain)
+        # Empty dict is truthy for isinstance check, so field is NOT extracted
+        assert "should_be_ignored" not in link_fields.body_pointers

@@ -91,10 +91,10 @@ def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
             return
 
         # Body expressions: $response.body#/json/pointer/path
+        # Per RFC 6901, empty string "" is a valid pointer referring to whole document
         if expr.startswith("$response.body#/"):
             json_pointer = expr[len("$response.body#/"):]
-            if json_pointer:
-                link_fields.body_pointers.add(json_pointer)
+            link_fields.body_pointers.add(json_pointer)
 
     for step in chain.steps:
         if step.link_source is None:

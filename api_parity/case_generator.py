@@ -909,7 +909,14 @@ class CaseGenerator:
                 Creates intermediate dicts/lists as needed. Handles both dict keys
                 and array indices in the path (e.g., "items/0/id" creates
                 {"items": [{"id": value}]}).
+
+                Note: Empty pointer ("") means "whole document" per RFC 6901, but we
+                can't replace the dict itself. Skip silently - this edge case only
+                occurs if someone uses $response.body#/ which is extremely rare.
                 """
+                if not pointer:
+                    return  # Can't replace document, skip edge case
+
                 parts = pointer.split("/")
                 current = data
 
