@@ -1355,6 +1355,146 @@ class TestStatusCodeLinkResolution:
         except Exception as e:
             pytest.fail(f"Chain generation failed: {e}")
 
+    def test_multi_status_code_links_all_discoverable(self, tmp_path: Path):
+        """Links on multiple status codes of same operation can all be discovered.
+
+        When an operation has links on both 200 and 201 (e.g., update vs create
+        scenarios), random status code selection ensures both sets of links
+        are reachable over multiple chain generations.
+
+        This tests the fix for the bug where min(status_codes_with_links) always
+        returned the lowest status code, making links on higher status codes
+        permanently unreachable.
+        """
+        from api_parity.case_generator import CaseGenerator
+
+        # Create spec where POST has links on BOTH 200 (update) and 201 (create)
+        # leading to DIFFERENT target operations
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test API", "version": "1.0.0"},
+            "paths": {
+                "/resources": {
+                    "post": {
+                        "operationId": "createOrUpdateResource",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"name": {"type": "string"}},
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {
+                            # 200 = update existing - links to getResource
+                            "200": {
+                                "description": "Updated",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "GetUpdatedResource": {
+                                        "operationId": "getResource",
+                                        "parameters": {"id": "$response.body#/id"},
+                                    }
+                                },
+                            },
+                            # 201 = created new - links to notifyCreation
+                            "201": {
+                                "description": "Created",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}},
+                                        }
+                                    }
+                                },
+                                "links": {
+                                    "NotifyCreation": {
+                                        "operationId": "notifyCreation",
+                                        "parameters": {"resourceId": "$response.body#/id"},
+                                    }
+                                },
+                            },
+                        },
+                    }
+                },
+                "/resources/{id}": {
+                    "get": {
+                        "operationId": "getResource",
+                        "parameters": [
+                            {
+                                "name": "id",
+                                "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {"200": {"description": "Resource"}},
+                    }
+                },
+                "/notifications": {
+                    "post": {
+                        "operationId": "notifyCreation",
+                        "parameters": [
+                            {
+                                "name": "resourceId",
+                                "in": "query",
+                                "required": False,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {"200": {"description": "Notified"}},
+                    }
+                },
+            },
+        }
+        spec_path = tmp_path / "multi_status_links.yaml"
+        with open(spec_path, "w") as f:
+            yaml.dump(spec, f)
+
+        generator = CaseGenerator(spec_path)
+
+        # Import here to avoid module-level dependency on schemathesis internals
+        from hypothesis.errors import HypothesisException
+
+        # Generate many chains with different seeds to test random selection
+        # Over multiple runs, we should see both getResource and notifyCreation
+        # as targets from createOrUpdateResource
+        operations_reached = set()
+        for seed in range(20):  # Try multiple seeds
+            try:
+                chains = generator.generate_chains(max_chains=5, max_steps=3, seed=seed)
+                for chain in chains:
+                    for step in chain.steps:
+                        operations_reached.add(step.request.operation_id)
+            except HypothesisException:
+                # Hypothesis may exhaust the state space with some seeds, that's OK
+                continue
+
+        # The key assertion: notifyCreation should be reachable
+        # Before the fix, it was NEVER reachable because 200 < 201
+        # and min() always returned 200
+        assert "notifyCreation" in operations_reached, (
+            "notifyCreation should be reachable via 201 links. "
+            f"Only reached: {operations_reached}. "
+            "This indicates the status code selection fix may not be working."
+        )
+
+        # Also verify getResource is reachable (sanity check)
+        assert "getResource" in operations_reached, (
+            f"getResource should be reachable via 200 links. Only reached: {operations_reached}"
+        )
+
 
 class TestHeaderBasedChains:
     """Tests for chain generation and execution using header-based links.
