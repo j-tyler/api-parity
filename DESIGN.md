@@ -802,3 +802,46 @@ Schemathesis can use extracted variables from ANY previous step when resolving l
 
 **Files affected:**
 - `api_parity/case_generator.py` — Refactored `_find_link_between()` to accept chain history
+
+---
+
+# Hybrid Coverage Mode for Complete API Testing
+
+Keywords: coverage guarantee all operations ensure-coverage stateful hybrid
+Date: 20260119
+
+Schemathesis's state machine exploration is probabilistic, not exhaustive. Research confirmed this is fundamental to Hypothesis's design—it's optimized for bug hunting, not coverage guarantees. In practice, 26-33% of API operations may never be tested by generated chains because:
+
+1. **Orphan operations** — Operations with no OpenAPI links to/from them (e.g., health checks, standalone GET endpoints)
+2. **Deep chain operations** — Operations reachable only through long chains that random exploration rarely follows
+3. **State explosion** — As chain depth increases, the number of possible paths grows exponentially
+
+This is a critical issue for api-parity's core purpose: verifying API equivalence requires testing ALL operations, not just the ones random exploration happens to reach.
+
+**Solution: Hybrid Coverage Mode**
+
+Added `--ensure-coverage` flag to `explore --stateful` that:
+
+1. Runs chain generation as normal
+2. Tracks which operations were covered by chains
+3. Runs single-request (stateless) tests on any operations not covered by chains
+
+This guarantees 100% operation coverage while still testing multi-step workflows via chains.
+
+**Operation Coverage Reporting**
+
+Added operation coverage statistics to `graph-chains --generated` output:
+- Shows total operations vs tested operations
+- Lists uncovered operations with their characteristics (orphan, no inbound links, etc.)
+- Recommends `--ensure-coverage` when operations are uncovered
+
+**Research sources:**
+- [Hypothesis Stateful Testing](https://hypothesis.readthedocs.io/en/latest/stateful.html) — Confirms probabilistic exploration
+- [WuppieFuzz](https://arxiv.org/html/2512.15554v1) — Graph-based deterministic coverage approach
+- [RESTTestGen](https://github.com/SeUniVr/RestTestGen) — Operation Dependency Graph for coverage
+
+**Files affected:**
+- `api_parity/cli.py` — Added `--ensure-coverage` flag and `_run_stateful_explore` coverage logic
+- `api_parity/cli.py` — Added operation coverage tracking to `_run_graph_chains_generated`
+- `tests/test_cli_explore.py` — Updated tests for new flag
+- `tests/test_cli_graph_chains.py` — Added operation coverage assertions
