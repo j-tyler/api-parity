@@ -575,6 +575,63 @@ class TestCipherConfiguration:
             Executor(target, target)
 
 
+class TestResourceCleanup:
+    """Tests for resource cleanup in Executor."""
+
+    def test_both_clients_closed_even_if_first_fails(
+        self, mock_targets: tuple[TargetConfig, TargetConfig]
+    ) -> None:
+        """Both clients should be closed even if the first close() raises.
+
+        Regression test for Bug 6: Resource leak in Executor.close().
+        Previously, if _client_a.close() raised an exception, _client_b.close()
+        was never called, causing an HTTP connection leak.
+        """
+        target_a, target_b = mock_targets
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            mock_client_a = MagicMock()
+            mock_client_b = MagicMock()
+            mock_client_cls.side_effect = [mock_client_a, mock_client_b]
+
+            executor = Executor(target_a, target_b)
+
+            # Make client_a.close() raise an exception
+            mock_client_a.close.side_effect = Exception("Connection error during close")
+
+            # close() should still close client_b despite client_a failure
+            with pytest.raises(Exception, match="Connection error during close"):
+                executor.close()
+
+            # FIXED: client_b.close() should now be called
+            mock_client_b.close.assert_called_once()
+
+    def test_first_client_closed_if_second_init_fails(
+        self, mock_targets: tuple[TargetConfig, TargetConfig]
+    ) -> None:
+        """First client should be closed if second client creation fails.
+
+        Regression test for Bug 7: Resource leak on Executor initialization failure.
+        If _client_b creation fails, _client_a should be cleaned up.
+        """
+        target_a, target_b = mock_targets
+
+        with patch("api_parity.executor.httpx.Client") as mock_client_cls:
+            mock_client_a = MagicMock()
+            # First call succeeds, second fails
+            mock_client_cls.side_effect = [
+                mock_client_a,
+                Exception("Invalid TLS configuration"),
+            ]
+
+            # Executor creation should fail but clean up client_a
+            with pytest.raises(Exception, match="Invalid TLS configuration"):
+                Executor(target_a, target_b)
+
+            # FIXED: client_a.close() should now be called
+            mock_client_a.close.assert_called_once()
+
+
 class TestHeaderSanitization:
     """Tests for ASCII header sanitization.
 

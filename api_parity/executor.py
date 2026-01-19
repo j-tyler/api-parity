@@ -100,9 +100,14 @@ class Executor:
         self._last_request_time: float = 0.0
         self._rate_limit_lock = Lock()
 
-        # Create HTTP clients for each target
+        # Create HTTP clients for each target. If second client creation fails,
+        # ensure first client is closed to prevent connection leak.
         self._client_a = httpx.Client(**self._build_client_kwargs(target_a, default_timeout))
-        self._client_b = httpx.Client(**self._build_client_kwargs(target_b, default_timeout))
+        try:
+            self._client_b = httpx.Client(**self._build_client_kwargs(target_b, default_timeout))
+        except Exception:
+            self._client_a.close()
+            raise
 
     def __enter__(self) -> "Executor":
         return self
@@ -116,9 +121,15 @@ class Executor:
         self.close()
 
     def close(self) -> None:
-        """Close HTTP clients."""
-        self._client_a.close()
-        self._client_b.close()
+        """Close HTTP clients.
+
+        Uses try/finally to ensure both clients are closed even if the first
+        close() raises an exception. This prevents HTTP connection leaks.
+        """
+        try:
+            self._client_a.close()
+        finally:
+            self._client_b.close()
 
     def _build_client_kwargs(self, target: TargetConfig, timeout: float) -> dict[str, Any]:
         """Build kwargs for httpx.Client including TLS configuration.

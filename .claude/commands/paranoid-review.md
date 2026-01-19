@@ -16,7 +16,9 @@ For each file changed:
 
 4. **Improvement Suggestions**: Provide specific feedback on how the changes could be even better.
 
-Be thorough and critical. The goal is to catch issues before they become problems, not to be nice about suboptimal work.
+5. **Technical Debt**: Flag any shortcuts, code smells, or incomplete work that should be tracked. These must be added to TODO.md if not fixed in the same branch.
+
+Be thorough and critical. The goal is to catch issues before they become problems and avoid accumulating technical debt.
 
 **Before flagging**: Trace the code path. Read tests related to the code paths together.
 

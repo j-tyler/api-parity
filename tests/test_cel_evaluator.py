@@ -388,5 +388,37 @@ class TestCELEvaluatorComplexData:
             assert result is True
 
 
+class TestCELEvaluatorCleanup:
+    """Tests for subprocess cleanup behavior (no binary required)."""
+
+    # Override module-level skip - these tests don't need the binary
+    pytestmark = []
+
+    def test_cleanup_calls_wait_after_kill(self):
+        """Verify _cleanup_process calls wait() after kill() to reap zombie.
+
+        Regression test for Bug 10: Zombie process leak after kill().
+        Without wait() after kill(), the process remains in the process table
+        as a zombie until the parent process exits.
+        """
+        import inspect
+        from api_parity.cel_evaluator import CELEvaluator
+
+        source = inspect.getsource(CELEvaluator._cleanup_process)
+
+        # Find the kill() call and verify wait() follows it
+        kill_pos = source.find(".kill()")
+        assert kill_pos != -1, "Expected kill() call in _cleanup_process"
+
+        # Get the code after kill()
+        after_kill = source[kill_pos:]
+
+        # There should be a wait() call after kill()
+        wait_pos = after_kill.find(".wait(")
+        assert wait_pos != -1, (
+            "BUG: _cleanup_process should call wait() after kill() to reap zombie process"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

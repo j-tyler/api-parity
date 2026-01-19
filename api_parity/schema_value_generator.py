@@ -103,9 +103,15 @@ class SchemaValueGenerator:
         if schema_type == "string":
             return str(uuid.uuid4())
         if schema_type == "array":
-            # Generate single-item array with items schema
+            # Generate array with items schema
             items_schema = schema.get("items", {})
-            return [self.generate(items_schema)]
+            # Handle tuple validation (items is list of schemas) vs homogeneous (items is dict)
+            if isinstance(items_schema, list):
+                # Tuple validation: generate one value per positional schema
+                return [self.generate(item_schema) for item_schema in items_schema]
+            else:
+                # Homogeneous array: generate single-item array
+                return [self.generate(items_schema)]
         if schema_type == "object":
             return {}
 

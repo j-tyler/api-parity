@@ -145,6 +145,8 @@ class CELEvaluator:
             except Exception:
                 try:
                     self._process.kill()
+                    # Must wait() after kill() to reap zombie process
+                    self._process.wait(timeout=1)
                 except Exception:
                     pass
             self._process = None
