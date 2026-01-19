@@ -238,6 +238,7 @@ class TestExploreArgs:
             max_chains=None,
             max_steps=6,
             log_chains=False,
+            ensure_coverage=False,
         )
         args = parse_explore_args(namespace)
         assert isinstance(args, ExploreArgs)
@@ -271,12 +272,73 @@ class TestExploreArgs:
             max_chains=50,
             max_steps=10,
             log_chains=True,
+            ensure_coverage=False,
         )
         args = parse_explore_args(namespace)
         assert args.stateful is True
         assert args.max_chains == 50
         assert args.max_steps == 10
         assert args.log_chains is True
+        assert args.ensure_coverage is False
+
+    def test_parse_explore_args_ensure_coverage_flag(self):
+        """Test parse_explore_args handles ensure_coverage flag."""
+        import argparse
+        namespace = argparse.Namespace(
+            command="explore",
+            spec=Path("spec.yaml"),
+            config=Path("config.yaml"),
+            target_a="a",
+            target_b="b",
+            out=Path("./out"),
+            seed=None,
+            max_cases=None,
+            validate=False,
+            exclude=[],
+            timeout=30.0,
+            operation_timeout=[],
+            stateful=True,
+            max_chains=20,
+            max_steps=6,
+            log_chains=False,
+            ensure_coverage=True,
+        )
+        args = parse_explore_args(namespace)
+        assert args.stateful is True
+        assert args.ensure_coverage is True
+
+    def test_parse_explore_args_exclude_with_ensure_coverage(self):
+        """Test that exclude and ensure_coverage can be used together.
+
+        Verifies that the args are correctly parsed when both --exclude
+        and --ensure-coverage are specified. The actual behavior (excluded
+        operations not appearing in coverage warnings) is tested by the
+        exclude parameter being passed to _run_stateful_explore.
+        """
+        import argparse
+        namespace = argparse.Namespace(
+            command="explore",
+            spec=Path("spec.yaml"),
+            config=Path("config.yaml"),
+            target_a="a",
+            target_b="b",
+            out=Path("./out"),
+            seed=None,
+            max_cases=None,
+            validate=False,
+            exclude=["excludedOp1", "excludedOp2"],
+            timeout=30.0,
+            operation_timeout=[],
+            stateful=True,
+            max_chains=20,
+            max_steps=6,
+            log_chains=False,
+            ensure_coverage=True,
+        )
+        args = parse_explore_args(namespace)
+        assert args.stateful is True
+        assert args.ensure_coverage is True
+        assert args.exclude == ["excludedOp1", "excludedOp2"]
 
 
 class TestValidateMode:

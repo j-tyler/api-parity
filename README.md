@@ -384,6 +384,7 @@ Generate test cases from an OpenAPI spec and compare responses between two targe
 | `--max-chains INT` | No | Maximum chains to generate in stateful mode (default: 20) |
 | `--max-steps INT` | No | Maximum steps per chain in stateful mode (default: 6) |
 | `--log-chains` | No | Write executed chains to chains.txt for debugging (stateful mode only) |
+| `--ensure-coverage` | No | Ensure all operations are tested at least once. Runs single-request tests on any operations not covered by chains (stateful mode only) |
 
 ### `api-parity replay`
 

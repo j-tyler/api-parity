@@ -240,6 +240,7 @@ class ExploreArgs:
     max_chains: int | None
     max_steps: int
     log_chains: bool
+    ensure_coverage: bool
 
 
 @dataclass
@@ -449,6 +450,14 @@ def build_parser() -> argparse.ArgumentParser:
         dest="log_chains",
         help="Write all executed chains to chains.txt for debugging (stateful mode only)",
     )
+    explore_parser.add_argument(
+        "--ensure-coverage",
+        action="store_true",
+        default=False,
+        dest="ensure_coverage",
+        help="Ensure all operations are tested at least once. Runs single-request tests "
+        "on any operations not covered by chains (stateful mode only)",
+    )
 
     # Replay subcommand
     replay_parser = subparsers.add_parser(
@@ -569,6 +578,7 @@ def parse_explore_args(namespace: argparse.Namespace) -> ExploreArgs:
         max_chains=namespace.max_chains,
         max_steps=namespace.max_steps,
         log_chains=namespace.log_chains,
+        ensure_coverage=namespace.ensure_coverage,
     )
 
 
@@ -792,6 +802,9 @@ def _run_graph_chains_generated(args: GraphChainsArgs) -> int:
     # Track which links were actually used
     used_links: set[tuple[str, str, str]] = set()  # (source_op, status_code, target_op)
 
+    # Track which operations are actually called in chains
+    operations_called: set[str] = set()
+
     # Output chains
     print()
     print(f"Generated Chains ({len(chains)} chains)")
@@ -807,6 +820,9 @@ def _run_graph_chains_generated(args: GraphChainsArgs) -> int:
             op_id = step.request_template.operation_id
             method = step.request_template.method
             path = step.request_template.path_template
+
+            # Track this operation was called
+            operations_called.add(op_id)
 
             print(f"  {step_num}. {op_id}: {method} {path}")
 
@@ -849,6 +865,53 @@ def _run_graph_chains_generated(args: GraphChainsArgs) -> int:
         for source_op, status_code, target_op in sorted(unused_links):
             link_name = link_names.get((source_op, status_code, target_op), "?")
             print(f"  {source_op} --({status_code})--> {target_op} [{link_name}]")
+
+    # Output operation coverage summary - CRITICAL for api-parity core usage
+    print()
+    print("=" * 60)
+    print("Operation Coverage Summary")
+    print("=" * 60)
+
+    # Get all operations from the spec (excluding any --exclude ops)
+    all_operations = set(generator.get_all_operation_ids()) - set(args.exclude)
+    uncovered_operations = all_operations - operations_called
+
+    coverage_pct = (len(operations_called) / len(all_operations) * 100) if all_operations else 0
+
+    print(f"Total operations in spec: {len(all_operations)}")
+    print(f"Operations tested:        {len(operations_called)} ({coverage_pct:.0f}%)")
+    print(f"Operations NEVER tested:  {len(uncovered_operations)} ({100 - coverage_pct:.0f}%)")
+
+    if uncovered_operations:
+        # Build operation info for better reporting
+        op_info: dict[str, tuple[str, str]] = {}  # op_id -> (method, path)
+        for op in generator.get_operations():
+            op_info[op["operation_id"]] = (op["method"], op["path"])
+        # Also include excluded operations that aren't in get_operations()
+        for op_id in uncovered_operations:
+            if op_id not in op_info:
+                op_info[op_id] = ("?", "?")
+
+        print("\n*** WARNING: The following operations are NEVER tested by chains ***")
+        print("*** This is a critical issue - api-parity cannot verify these endpoints ***\n")
+        for op_id in sorted(uncovered_operations):
+            method, path = op_info.get(op_id, ("?", "?"))
+            # Check if it has inbound links (someone can reach it)
+            has_inbound = any(target == op_id for _, _, target, _ in declared_links)
+            # Check if it has outbound links (it can start chains to others)
+            has_outbound = any(source == op_id for source, _, _, _ in declared_links)
+
+            if not has_inbound and not has_outbound:
+                status = "(ORPHAN - no links)"
+            elif not has_inbound:
+                status = "(no inbound links - only reachable as entry point)"
+            else:
+                status = "(reachable but exploration didn't reach it)"
+            print(f"  {op_id}: {method} {path} {status}")
+
+        print("\nTo ensure complete API coverage, consider running:")
+        print("  api-parity explore --stateful --ensure-coverage ...")
+        print("This will run single-request tests on any operations not covered by chains.")
 
     return 0
 
@@ -1137,6 +1200,8 @@ def run_explore(args: ExploreArgs) -> int:
         print("Warning: --max-chains is ignored without --stateful", file=sys.stderr)
     if not args.stateful and args.log_chains:
         print("Warning: --log-chains is ignored without --stateful", file=sys.stderr)
+    if not args.stateful and args.ensure_coverage:
+        print("Warning: --ensure-coverage is ignored without --stateful", file=sys.stderr)
 
     # Print run configuration
     mode = "stateful" if args.stateful else "stateless"
@@ -1149,6 +1214,8 @@ def run_explore(args: ExploreArgs) -> int:
         max_chains = args.max_chains or 20
         print(f"  Max chains: {max_chains}")
         print(f"  Max steps per chain: {args.max_steps}")
+        if args.ensure_coverage:
+            print("  Ensure coverage: enabled (will run single-request tests on uncovered operations)")
     elif args.max_cases is not None:
         print(f"  Max cases: {args.max_cases}")
     if args.exclude:
@@ -1228,6 +1295,8 @@ def run_explore(args: ExploreArgs) -> int:
                     get_operation_rules=get_operation_rules,
                     progress_reporter=progress_reporter,
                     log_chains=args.log_chains,
+                    ensure_coverage=args.ensure_coverage,
+                    exclude=args.exclude,
                 )
             else:
                 # Stateless testing
@@ -1356,8 +1425,14 @@ def _run_stateful_explore(
     get_operation_rules: Callable[[ComparisonRules, str], Any],
     progress_reporter: ProgressReporter | None = None,
     log_chains: bool = False,
+    ensure_coverage: bool = False,
+    exclude: list[str] | None = None,
 ) -> None:
-    """Execute stateful chain testing."""
+    """Execute stateful chain testing.
+
+    If ensure_coverage=True, also runs single-request tests on any operations
+    that weren't covered by the generated chains.
+    """
     from api_parity.executor import RequestError
 
     # Generate chains
@@ -1370,6 +1445,9 @@ def _run_stateful_explore(
     print(f"Generated {len(chains)} chains with multiple steps")
     print()
 
+    # Track which operations are covered by chains (for --ensure-coverage)
+    operations_covered_by_chains: set[str] = set()
+
     # Update progress reporter with total now that we know it
     if progress_reporter is not None:
         progress_reporter.set_total(len(chains))
@@ -1379,6 +1457,9 @@ def _run_stateful_explore(
     chain_outcomes: list[str] = []
 
     for chain in chains:
+        # Track all operations in this chain as covered
+        for step in chain.steps:
+            operations_covered_by_chains.add(step.request_template.operation_id)
         stats.total_chains += 1
 
         # Build chain description
@@ -1461,6 +1542,95 @@ def _run_stateful_explore(
             max_steps=max_steps,
         )
         print(f"\nChains log written to: {chains_path}")
+
+    # Ensure coverage: run single-request tests on uncovered operations
+    if ensure_coverage:
+        # Exclude explicitly excluded operations from coverage tracking
+        excluded_set = set(exclude or [])
+        all_operations = set(generator.get_all_operation_ids()) - excluded_set
+        uncovered_operations = all_operations - operations_covered_by_chains
+
+        if uncovered_operations:
+            print()
+            print("=" * 60)
+            print("Coverage Gap: Testing Uncovered Operations")
+            print("=" * 60)
+            print(f"Chains covered {len(operations_covered_by_chains)}/{len(all_operations)} operations")
+            print(f"Running single-request tests on {len(uncovered_operations)} uncovered operations:")
+            for op_id in sorted(uncovered_operations):
+                print(f"  - {op_id}")
+            print()
+
+            # Generate single-request tests for uncovered operations
+            # Use a small number of cases per operation for coverage (not exhaustive fuzzing)
+            cases_per_op = 3  # Just enough to verify the endpoint works
+            coverage_case_count = 0
+            op_coverage_counts: dict[str, int] = {}
+
+            for case in generator.generate(max_cases=len(uncovered_operations) * cases_per_op * 2, seed=seed):
+                if case.operation_id not in uncovered_operations:
+                    continue  # Skip operations already covered by chains
+
+                # Limit to a few cases per uncovered operation
+                current_count = op_coverage_counts.get(case.operation_id, 0)
+                if current_count >= cases_per_op:
+                    continue
+                op_coverage_counts[case.operation_id] = current_count + 1
+
+                coverage_case_count += 1
+                # Mark as covered for tracking
+                operations_covered_by_chains.add(case.operation_id)
+
+                print(f"[Coverage {coverage_case_count}] {case.operation_id}: {case.method} {case.rendered_path}")
+
+                try:
+                    # Execute against both targets
+                    response_a, response_b = executor.execute(case)
+
+                    # Compare responses
+                    rules = get_operation_rules(comparison_rules, case.operation_id)
+                    result = comparator.compare(response_a, response_b, rules, case.operation_id)
+
+                    if result.match:
+                        stats.total_cases += 1
+                        stats.matches += 1
+                        print("  MATCH")
+                    else:
+                        stats.total_cases += 1
+                        stats.mismatches += 1
+                        print(f"  MISMATCH: {result.summary}")
+
+                        # Write mismatch bundle
+                        bundle_path = writer.write_mismatch(
+                            case=case,
+                            response_a=response_a,
+                            response_b=response_b,
+                            diff=result,
+                            target_a_info=target_a_info,
+                            target_b_info=target_b_info,
+                            seed=seed,
+                        )
+                        print(f"  Bundle: {bundle_path}")
+
+                except RequestError as e:
+                    stats.total_cases += 1
+                    stats.errors += 1
+                    print(f"  ERROR: {e}")
+
+            # Report final coverage
+            still_uncovered = all_operations - operations_covered_by_chains
+            if still_uncovered:
+                print()
+                print(f"Warning: {len(still_uncovered)} operations still uncovered after coverage tests:")
+                for op_id in sorted(still_uncovered):
+                    print(f"  - {op_id}")
+                print("These operations may have generation constraints preventing test creation.")
+            else:
+                print()
+                print(f"Coverage complete: all {len(all_operations)} operations tested.")
+        else:
+            print()
+            print(f"Coverage complete: chains covered all {len(all_operations)} operations.")
 
 
 def run_replay(args: ReplayArgs) -> int:

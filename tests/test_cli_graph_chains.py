@@ -567,6 +567,12 @@ class TestRunGraphChainsGenerated:
         assert "Total declared links:" in captured.out
         assert "Links actually used:" in captured.out
 
+        # Should contain operation coverage summary
+        assert "Operation Coverage Summary" in captured.out
+        assert "Total operations in spec:" in captured.out
+        assert "Operations tested:" in captured.out
+        assert "Operations NEVER tested:" in captured.out
+
     def test_generated_with_invalid_spec(self, tmp_path, capsys):
         """Test --generated mode with invalid spec path."""
         args = GraphChainsArgs(
