@@ -10,6 +10,7 @@ See ARCHITECTURE.md "Case Generator Component" for specifications.
 from __future__ import annotations
 
 import json
+import random
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -727,12 +728,16 @@ class CaseGenerator:
                 """Find a status code that has links defined for this operation.
 
                 Examines the OpenAPI spec to find which status codes have links
-                defined for the operation. Returns the lowest 2xx status code with
-                links, or falls back to 201 for POST / 200 otherwise.
+                defined for the operation. Randomly selects from all 2xx status
+                codes that have links to ensure all links can be discovered over
+                multiple chain generations. Falls back to 201 for POST / 200
+                otherwise.
 
-                This fixes the bug where PUT/DELETE operations with links on
-                non-200 status codes (e.g., 201, 202) were not discovered because
-                the synthetic response used the wrong status code.
+                Random selection is necessary because links on different status
+                codes may lead to different operations. For example, an operation
+                with links on both 200 (update) and 201 (create) would have
+                different target operations for each case. Selecting only the
+                lowest status code would make the 201-specific links unreachable.
                 """
                 spec = generator_self._raw_spec
                 paths = spec.get("paths", {})
@@ -779,9 +784,10 @@ class CaseGenerator:
                                 except ValueError:
                                     continue
 
-                        # Return lowest 2xx status code with links
+                        # Randomly select from all status codes with links
+                        # This ensures links on all status codes can be discovered
                         if status_codes_with_links:
-                            return min(status_codes_with_links)
+                            return random.choice(status_codes_with_links)
 
                 # Fallback: POST typically returns 201, others return 200
                 return 201 if method.upper() == "POST" else 200

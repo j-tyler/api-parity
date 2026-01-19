@@ -1,0 +1,119 @@
+openapi: 3.0.3
+info:
+  title: Multi-Status Link Test API
+  version: 1.0.0
+  description: Test spec to verify links on different status codes are handled correctly
+
+paths:
+  /resources:
+    post:
+      operationId: createResource
+      summary: Create or update a resource
+      description: Returns 200 if resource updated, 201 if created
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+              required:
+                - name
+      responses:
+        # Links on 200 - update scenario
+        '200':
+          description: Resource updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+          links:
+            GetUpdatedResource:
+              operationId: getResource
+              parameters:
+                resourceId: '$response.body#/id'
+            # This link should be reachable via 200
+            ListAll200:
+              operationId: listResources
+
+        # Links on 201 - create scenario - THESE SHOULD BE DIFFERENT
+        '201':
+          description: Resource created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+          links:
+            GetCreatedResource:
+              operationId: getResource
+              parameters:
+                resourceId: '$response.body#/id'
+            # This link ONLY exists on 201
+            NotifyCreated:
+              operationId: notifyCreation
+              parameters:
+                resourceId: '$response.body#/id'
+
+  /resources/{resourceId}:
+    get:
+      operationId: getResource
+      summary: Get a resource
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+
+  /resources/list:
+    get:
+      operationId: listResources
+      summary: List all resources
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+
+  /notify/{resourceId}:
+    post:
+      operationId: notifyCreation
+      summary: Notify about resource creation
+      description: This should only be reachable from createResource 201
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Accepted
+          content: {}
