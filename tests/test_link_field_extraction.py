@@ -748,3 +748,44 @@ class TestSeedParameter:
         results_2 = run_with_seed(42)
 
         assert results_1 == results_2, "Same seed should produce identical results"
+
+
+class TestCaseGeneratorSeedBehavior:
+    """Test that CaseGenerator.generate() respects seed parameter.
+
+    The seed parameter enables deterministic generation:
+    - seed=None: Non-deterministic (different each run)
+    - seed=42: Deterministic sequence A (same every run)
+    - seed=100: Deterministic sequence B (different from seed=42, but reproducible)
+    """
+
+    @pytest.fixture
+    def spec_path(self):
+        """Path to test API spec."""
+        return Path(__file__).parent / "fixtures" / "test_api.yaml"
+
+    def test_same_seed_produces_same_sequence(self, spec_path):
+        """Same seed value should produce identical results on repeated runs."""
+        generator = CaseGenerator(spec_path)
+
+        cases_run1 = list(generator.generate(max_cases=5, seed=42))
+        cases_run2 = list(generator.generate(max_cases=5, seed=42))
+
+        ops_run1 = [c.operation_id for c in cases_run1]
+        ops_run2 = [c.operation_id for c in cases_run2]
+
+        assert ops_run1 == ops_run2
+
+    def test_different_seeds_produce_different_data(self, spec_path):
+        """Different seed values should produce different generated data."""
+        generator = CaseGenerator(spec_path)
+
+        # Use more cases to see variation in generated data
+        cases_seed_42 = list(generator.generate(max_cases=20, seed=42))
+        cases_seed_100 = list(generator.generate(max_cases=20, seed=100))
+
+        # The seed affects generated data (query params, bodies), not operation selection
+        data_42 = [(c.query, c.body) for c in cases_seed_42]
+        data_100 = [(c.query, c.body) for c in cases_seed_100]
+
+        assert data_42 != data_100, "Different seeds should produce different generated data"
