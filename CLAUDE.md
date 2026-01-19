@@ -1,10 +1,10 @@
 # Claude Instructions
 
-Instructions for Claude (AI assistant) when working in this repository.
+Instructions for Claude when working in this repository.
 
 ## Repository Overview
 
-This is `api-parity`, a differential fuzzing tool for comparing API implementations against an OpenAPI specification.
+`api-parity` — Differential fuzzing tool for comparing API implementations against an OpenAPI specification. Python (primary), Go (CEL evaluator subprocess).
 
 ## Document Purposes
 
@@ -12,11 +12,11 @@ Each root markdown file has a specific purpose. Put content in the right place:
 
 | File | Purpose | Content Examples |
 |------|---------|------------------|
-| **README.md** | Brief project overview for humans | What it does, how to run it, license |
+| **README.md** | Brief project overview | What it does, how to install, how to run |
 | **CLAUDE.md** | Instructions for AI assistants | Workflow, gotchas, environment notes |
-| **ARCHITECTURE.md** | Technical system structure (for agents) | Components, data models, data flow, interfaces |
+| **ARCHITECTURE.md** | System structure | Components, data models, data flow |
 | **DESIGN.md** | Decisions and reasoning | Why choices were made, tradeoffs considered |
-| **TODO.md** | Future work items | Planned features, known issues, spec work needed |
+| **TODO.md** | Future work ideas | Things that came up, shouldn't be forgotten |
 
 **Rule of thumb:**
 - "What is this project?" → README
@@ -25,80 +25,66 @@ Each root markdown file has a specific purpose. Put content in the right place:
 - "Why was it built this way?" → DESIGN
 - "What might we do later?" → TODO
 
-### ARCHITECTURE.md Content Guidelines
+### What Goes in ARCHITECTURE.md
 
-ARCHITECTURE.md helps new agents efficiently understand the project without clogging context windows with unnecessary code. Be token-efficient but not at the expense of clarity.
-
-**Include in ARCHITECTURE.md:**
+**Include:**
 - Component responsibilities and boundaries
 - Data flow between components
-- Interfaces (what inputs/outputs, how to instantiate)
+- How to instantiate and use components
 - Behavior that affects multiple components or callers
 - Error handling philosophy (what propagates vs what's handled)
 
-**Leave in code (don't document in ARCHITECTURE.md):**
-- Internal implementation details (caching strategies, sentinel values, internal helpers)
-- Information already documented elsewhere (don't duplicate)
+**Leave in code:**
+- Internal implementation details (caching, sentinel values, internal helpers)
 - Details only relevant when modifying that specific file
 
 **Test:** Would a new agent working on a *different* component benefit from knowing this? If yes, document it. If only useful when reading *this* file, leave it in code.
 
-## Key Files to Read First
-
-1. **ARCHITECTURE.md** - Understand system structure
-2. **DESIGN.md** - Check past decisions before proposing changes
-3. **TODO.md** - See current priorities and planned work
+---
 
 ## Development Workflow
 
-### Before Making Changes
-
-1. Read relevant existing code to understand patterns
+### Before Changes
+1. Read relevant code to understand patterns
 2. Check DESIGN.md for decisions that might affect your work
-3. Look at TODO.md to see if this work is already planned
+3. Check TODO.md for related ideas or notes
 
 ### When Making Changes
-
 1. Follow existing code patterns and conventions
-2. Keep changes focused - don't add unrequested features
-3. Check if any markdown files need updates
+2. Keep changes focused — don't add unrequested features
+3. Update markdown files to reflect your changes
 
-### After Making Changes
-
+### After Changes
 1. Add design decisions to DESIGN.md if you made architectural choices
-2. Update TODO.md if you identified future work
-3. Commit with clear, descriptive messages (Linux Kernel style)
+2. Add to TODO.md if ideas came up that shouldn't be forgotten
+3. Commit with clear messages (Linux Kernel style)
 
-## CRITICAL: Keep Documentation in Sync with Implementation
+### Common Tasks
+
+**Adding a New Feature:**
+1. Check DESIGN.md for relevant past decisions
+2. Update ARCHITECTURE.md if adding new components
+3. Document any design choices in DESIGN.md
+
+**Fixing a Bug:**
+1. Understand the root cause before changing code
+2. Keep the fix minimal and focused
+3. Consider if this reveals a design issue worth documenting
+
+**Learning from Mistakes:**
+When something about the environment or project trips you up, add it to CLAUDE.md to prevent future occurrences.
+
+---
+
+## CRITICAL: Keep Docs in Sync
 
 **This is a CRITICAL severity requirement. Outdated documentation creates wrong code.**
 
-In an AI-agent-maintained codebase, each agent session starts with fresh context. Agents read ARCHITECTURE.md and DESIGN.md to understand the system before making changes. If documentation describes interfaces, parameters, or behaviors that don't match the actual code:
+Each agent session starts with fresh context. Agents read ARCHITECTURE.md and DESIGN.md to understand the system before making changes. If docs don't match implementation:
 
 1. The next agent will write code that doesn't work
 2. The agent will trust the docs and not verify against actual implementation
 3. Wrong assumptions compound into architectural drift
-
-**After ANY code change that affects documented interfaces:**
-
-| Changed | Update |
-|---------|--------|
-| Constructor parameters | ARCHITECTURE.md interface section |
-| Method signatures | ARCHITECTURE.md interface section |
-| New design decisions | DESIGN.md with Keywords/Date/Reasoning |
-| Terminology changes | All markdown files (grep to find all occurrences) |
-| New features | ARCHITECTURE.md component behavior section |
-
-**Documentation must explain WHY, not just WHAT:**
-
-Documenting what code does is insufficient. The next agent can read the code to see what it does. What they cannot see is WHY it was designed that way. Without the reasoning:
-- Agent sees "spec is parsed twice" and "fixes" it by removing the second parse
-- Agent doesn't know Schemathesis doesn't expose raw spec, so the "fix" breaks link extraction
-- Hours wasted debugging a "fix" that was actually a regression
-
-**Where to put WHY:**
-- **Inline comments** — Local implementation choices affecting one file. Why this algorithm, why this fallback, why this ordering.
-- **DESIGN.md** — Significant decisions affecting multiple files or the system's architecture. Don't flood DESIGN.md with local implementation details.
 
 **Example of documentation drift causing bugs:**
 - ARCHITECTURE.md shows `Executor.__init__(target_a, target_b, timeout)`
@@ -108,13 +94,21 @@ Documenting what code does is insufficient. The next agent can read the code to 
 
 This is not a "nice to have"—it's as critical as writing correct code.
 
-## Code Style
+**WHY and INTENT matter more than WHAT:**
 
-- Keep code clarity high. Use inline comments for WHY, never for WHAT
-- Avoid over-engineering and premature abstraction
-- Don't add features beyond what was requested
+In the docs and in the code, WHY and INTENT are often more important than WHAT. Make sure the WHY and INTENT will be clear to LLM Agents with no prior context to changes you have made.
 
-### Writing Code for LLM Agents
+The next agent can read code to see what it does. What they cannot see is WHY it was designed that way. Without the reasoning:
+- Agent sees "spec is parsed twice" and "fixes" it by removing the second parse
+- Agent doesn't know Schemathesis doesn't expose raw spec, so the "fix" breaks link extraction
+
+**Where to put WHY:**
+- **Inline comments** — Local implementation choices affecting one file
+- **DESIGN.md** — Significant decisions affecting multiple files or system architecture
+
+---
+
+## Writing Code for LLM Agents
 
 LLM coding agents experience code more like grep output, not like a human using an IDE. LLMs see what is in their context-window, not the full project. LLMs cannot build mental models over months of working in a codebase. Write and modify code accordingly.
 
@@ -144,7 +138,7 @@ Write error messages that state what went wrong, relevant variable context, and 
 
 **7. Comments That State Intent**
 
-Comments should explain why code exists and what it expects, not just what it does. The next agent reading this code will not have your current context window to reference. Write comments like a colleague explaining context you'd need before modifying something. Think of the clarity you'd find in well-documented open source projects like SQLite, but avoid comments that merely restate what is obvious about WHAT the code is or does.
+Comments should explain why code exists and what it expects, not just what it does. The next agent reading this code will not have your current context window to reference. Write comments like a colleague explaining context you'd need before modifying something. Think of the clarity you'd find in well-documented open source projects like SQLite.
 
 **8. Colocate What Changes Together**
 
@@ -158,75 +152,25 @@ Write tests in the style of executable documentation. An LLM agent who reads onl
 
 These principles exist because LLM context windows are finite and lack persistent memory across sessions. But they are principles, not laws. When they conflict, resolve them by asking: "What would make this code easiest to understand and modify for the next LLM agent seeing only this fragment?"
 
-## Design Decision Format
+---
 
-When adding decisions to DESIGN.md, use this format:
+## Environment
 
-```markdown
-# Descriptive Name
-
-Keywords: searchable terms for grep
-Date: YYYYMMDD
-
-Paragraph explaining the problem, the decision, and enough reasoning to understand WHY at a later date.
-```
-
-- H1 heading with descriptive name
-- Keywords line for grep searches when the document is large
-- Date in YYYYMMDD format for chronological ordering
-- Free-form paragraphs explaining problem, decision, and reasoning
-
-## Common Tasks
-
-### Adding a New Feature
-1. Check DESIGN.md for relevant past decisions
-2. Update ARCHITECTURE.md if adding new components
-3. Document any design choices in DESIGN.md
-
-### Fixing a Bug
-1. Understand the root cause before changing code
-2. Keep the fix minimal and focused
-3. Consider if this reveals a design issue worth documenting
-
-### Refactoring
-1. Ensure there's a clear reason for the refactor
-2. Document rationale in DESIGN.md if significant
-3. Don't combine refactoring with feature work
-
-### Learning from Mistakes
-When something about the environment or project trips you up, add it to CLAUDE.md to prevent future occurrences.
-
-## Environment Notes
-
-- This repository uses Git for version control
-- License: MIT
-- Primary documentation is in Markdown files at the repo root
-- **Python** is the primary implementation language
-- **Go** is used for the CEL evaluator subprocess only (see ARCHITECTURE.md "CEL Evaluator Component")
-
-### Git Commands
-
-The `main` branch exists only on the remote, not locally. Use `origin/main` for comparisons:
+**Git:** The `main` branch exists only on the remote, not locally.
 
 ```bash
-# Correct - compare to remote main
-git diff origin/main..HEAD
-git log --oneline origin/main..HEAD
-
-# Wrong - fails with "unknown revision"
-git diff main..HEAD
+git diff origin/main..HEAD   # Correct
+git diff main..HEAD          # Wrong - fails with "unknown revision"
 ```
 
-### Reading Files and Running Commands
-
-- **Read files** with the `Read` tool, not `cat` or shell commands
+**Tools:**
+- **Read files** with `Read` tool, not `cat` or shell commands
 - **Search file contents** with `Grep`, not `grep` or `rg`
 - **Find files by pattern** with `Glob`, not `find` or `ls`
-- **Edit files** with `Edit` tool for surgical changes, `Write` for full rewrites
-- **Run shell commands** with `Bash` tool for git, python, pip, etc.
+- **Edit files** with `Edit` for surgical changes, `Write` for full rewrites
 - **Explore codebase** with `Task` tool (subagent_type=Explore) for open-ended searches
 
-### Scanning Document Structure Before Reading
+**Scanning Document Structure:**
 
 Before reading a long markdown file, scan its headings to understand structure:
 
@@ -234,21 +178,9 @@ Before reading a long markdown file, scan its headings to understand structure:
 grep -n "^##" docs/troubleshooting.md
 ```
 
-This shows section names and line numbers without filling context with content. Use this to:
-1. Decide if the document has what you need
-2. Read only the relevant section with `Read` tool's `offset` and `limit` parameters
-3. Avoid loading 200+ lines when you only need 20
+This shows section names and line numbers without filling context with content. Use `Read` tool's `offset` and `limit` to read only the relevant section instead of loading 200+ lines.
 
-Example: Looking for CEL errors in troubleshooting.md:
-```bash
-grep -n "^##" docs/troubleshooting.md
-# Output shows section headings with line numbers
-# Now read just that section using offset/limit instead of the whole file
-```
-
-### Custom Slash Commands
-
-Commands are defined in `.claude/commands/*.md`. To run a command like `/foo`, read `.claude/commands/foo.md` and execute the logic manually.
+---
 
 ## CRITICAL: No Blocking Code Without Timeouts
 
@@ -260,9 +192,7 @@ Any code that can block indefinitely will eventually hang the entire process, ma
 - `subprocess.Popen.communicate()` — use `communicate(timeout=N)`
 - `file.read()` on pipes — use `select.select()` first
 - `file.readline()` on pipes — use `select.select()` first
-- `socket.recv()` — use `socket.settimeout()` or `select.select()`
 - `queue.get()` — use `get(timeout=N)`
-- Any blocking I/O on subprocess pipes
 
 **Pattern for safe pipe reads:**
 ```python
@@ -272,203 +202,184 @@ import select
 line = proc.stdout.readline()
 
 # RIGHT - timeout prevents hang
-ready, _, _ = select.select([proc.stdout], [], [], timeout_seconds)
-if not ready:
-    raise TimeoutError("read timeout")
-line = proc.stdout.readline()  # Safe only if subprocess writes complete lines atomically
+ready, _, _ = select.select([proc.stdout], [], [], timeout)
+if ready:
+    line = proc.stdout.readline()
 ```
 
-**Pattern for safe subprocess cleanup:**
+**Safe subprocess cleanup:**
 ```python
-# WRONG - can hang forever
-proc.wait()
-
-# RIGHT - timeout with escalation to SIGKILL
 proc.terminate()
 try:
     proc.wait(timeout=5)
 except subprocess.TimeoutExpired:
     proc.kill()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        pass  # Process is unkillable, nothing more we can do
+    proc.wait(timeout=5)
 ```
 
-**If there's no timeout parameter available**, you must use a different approach:
-1. Use `select.select()` with timeout before any blocking read
-2. Use non-blocking I/O with polling
-3. Use a separate thread with `threading.Timer` to kill the operation
-4. Redesign to avoid the blocking call entirely
+For tests: Use `PortReservation` not `find_free_port()` (race condition).
 
-**When writing tests:** Use `PortReservation` (not `find_free_port()`) for server ports—`find_free_port()` has a race window where another process can grab the port before your server binds. Always use context managers for resource cleanup. See `tests/conftest.py` for patterns.
+---
 
-## Schemathesis Gotchas
+## Running Tests
 
-These issues were discovered during prototype validation. Don't repeat them:
+**Build CEL evaluator first.** Many tests require it.
 
-1. **Wrapped results** — `schema.get_all_operations()` returns wrapped `Ok/Err` results. Call `.ok()` to unwrap:
+```bash
+go build -o cel-evaluator ./cmd/cel-evaluator
+python -m pytest tests/ -x -q --tb=short
+```
+
+### Why `-x -q --tb=short` is Mandatory
+
+| Flag | Why |
+|------|-----|
+| `-x` | Stop on first failure. Prevents cascading failures from filling context. |
+| `-q` | Quiet mode. Passing tests don't matter — only failures do. |
+| `--tb=short` | Short tracebacks. Shows only what's needed to diagnose. |
+
+**Without these flags:** A full verbose run produces 500+ lines of passing test names. A failing run with full tracebacks can be 200+ lines per failure. This fills context with noise.
+
+**With these flags:** Passing run is ~5 lines. Failing run shows only the failure.
+
+---
+
+## Gotchas: Schemathesis
+
+1. **Wrapped results** — `schema.get_all_operations()` returns `Ok/Err`. Call `.ok()`:
    ```python
    for result in schema.get_all_operations():
-       operation = result.ok()  # Don't forget this!
+       operation = result.ok()  # Don't forget!
    ```
 
-2. **Response constructor** — `schemathesis.core.transport.Response` requires specific fields:
+2. **Response constructor** — Headers are lists, content is bytes:
    ```python
    Response(
        status_code=200,
-       headers={'content-type': ['application/json']},  # List values!
-       content=b'{"id": "abc"}',  # Bytes, not str
-       request=prepared_request,  # PreparedRequest object required
+       headers={'content-type': ['application/json']},  # List!
+       content=b'{"id": "abc"}',  # Bytes!
+       request=prepared_request,
        elapsed=0.1,
        verify=False,
        http_version='1.1',
    )
    ```
 
-3. **Header values are lists** — Response headers dict must have list values, not strings.
+3. **Override validate_response()** — Return pass to skip built-in validation.
 
-4. **Override validate_response()** — Must override and return `pass` to skip built-in schema validation (we do our own comparison).
-
-5. **InferenceConfig not in public API** — To disable inference algorithms for stateful testing, `InferenceConfig` is needed but not exported in `schemathesis.config.__all__`. Access it via indirection:
+4. **InferenceConfig** — Not exported. Access via:
    ```python
    from schemathesis.config import StatefulPhaseConfig
    _InferenceConfig = type(StatefulPhaseConfig().inference)
-   disabled = _InferenceConfig(algorithms=[])
-   ```
-   If this breaks in a future version, check if `InferenceConfig` was added to the public API.
-
-6. **Non-ASCII in generated header values** — Hypothesis may generate non-ASCII characters (e.g., `\xaf`) for header values during fuzzing. HTTP headers must be ASCII per RFC 7230. The Executor sanitizes header values before sending by replacing non-ASCII characters with `?`. This prevents `UnicodeEncodeError` from httpx while preserving the test structure.
-
-## Comparison Rules Gotchas
-
-These issues were discovered during comparison rules design. Don't repeat them:
-
-1. **Override semantics, not merge** — Operation rules completely override default rules for any key they define. There is no deep merging of nested objects.
-
-2. **`unordered_array` doesn't handle duplicates** — The expression `a.all(x, x in b)` passes for arrays with different duplicate counts (e.g., `[1,1,2]` matches `[1,2,2]`). Only use for arrays with unique elements.
-
-3. **Escape strings in CEL expressions** — When inlining string parameters, escape backslashes and quotes. A regex pattern like `foo"bar` must become `"foo\"bar"` in CEL.
-
-4. **No `inherit_defaults` field** — Operation rules don't have an explicit inheritance flag. They always implicitly inherit unless they override.
-
-5. **Multi-value headers use first value only** — Don't assume header values are strings—they're lists internally. Only the first value is used for comparison.
-
-## CEL Evaluator Gotchas
-
-These patterns apply when working with the Go CEL subprocess:
-
-1. **Flush after every write** — Both Python and Go buffer I/O. Without explicit flush, messages sit in userspace buffers:
-   ```python
-   proc.stdin.write(json.dumps(req) + '\n')
-   proc.stdin.flush()  # Required!
-   ```
-   ```go
-   writer.WriteString(resp + "\n")
-   writer.Flush()  // Required!
    ```
 
-2. **Newline-delimited JSON** — Each message is one line. Use `readline()` in Python, `bufio.Scanner` in Go. Never embed raw newlines in JSON values (they must be escaped as `\n`).
+5. **Non-ASCII headers** — Executor sanitizes by replacing with `?`.
 
-3. **Handle subprocess death** — If Go process crashes, Python sees EOF on stdout. Detect and restart:
-   ```python
-   line = proc.stdout.readline()
-   if not line:  # EOF = subprocess died
-       self._restart_subprocess()
-   ```
-   Limit restarts (e.g., 3 attempts) to avoid infinite loops if the binary is broken.
+## Gotchas: Comparison Rules
 
-4. **Capture stderr** — Use `stderr=PIPE` or `stderr=DEVNULL`. Leaving stderr inherited pollutes CLI output if Go logs or panics.
+1. **Override, not merge** — Operation rules completely replace defaults for keys they define.
+2. **unordered_array** — Doesn't handle duplicates. `[1,1,2]` matches `[1,2,2]`.
+3. **Escape strings in CEL** — `foo"bar` becomes `"foo\"bar"`.
+4. **Headers are lists** — First value only used for comparison.
 
-5. **Correlate by ID** — Always match response `id` to request `id` for debugging and log correlation.
+## Gotchas: CEL Evaluator
 
-6. **CEL errors are not Python exceptions** — A malformed expression returns `{"ok":false,"error":"..."}`, not a crash. Handle both cases:
-   ```python
-   if not result['ok']:
-       raise CELEvaluationError(result['error'])
-   return result['result']
-   ```
+1. **Flush writes** — `proc.stdin.flush()` required after every write.
+2. **NDJSON** — One JSON per line. Newlines must be escaped.
+3. **Handle EOF** — EOF on stdout = subprocess died. Restart (max 3 times).
+4. **CEL errors** — Return `{"ok":false,"error":"..."}`, not exceptions.
+5. **5-second timeout** — Go evaluator times out at 5s per expression.
+6. **Python timeout** — Use `select.select()` with 10s before readline().
 
-7. **Expression timeout** — The Go CEL evaluator has a 5-second timeout per expression (see `evaluationTimeout` in `cmd/cel-evaluator/main.go`). If evaluation exceeds this, it returns `{"ok":false,"error":"evaluation timeout exceeded"}`. The Comparator treats this as a mismatch with `rule: "error: evaluation timeout exceeded"`. No special handling needed—timeout errors flow through the normal error path.
+## Gotchas: Replay
 
-8. **Always use timeouts on blocking I/O** — See "CRITICAL: No Blocking Code Without Timeouts" above. The CELEvaluator uses `select.select()` before every `readline()` call with `EVALUATION_TIMEOUT = 10.0` seconds. This is not optional.
+1. **Classification by pattern** — Compares mismatch_type + paths, not values.
+2. **DIFFERENT MISMATCH expected** — After rule changes, same bundle may fail differently.
+3. **No spec in replay** — Chain replay parses link_source from stored data.
+4. **--in is explore output** — Not a specific bundle path.
 
-## Replay Command Gotchas
+## Gotchas: Task Tool
 
-The replay command re-executes saved mismatch bundles. Key things to know:
+1. **Save agentId** — Returned at end of each Task call.
+2. **Resume limit** — ~2 resumes reliably. After 2-3, may hit API errors.
 
-1. **Classification is by failure pattern, not values** — `_is_same_mismatch()` compares `mismatch_type` and failing paths, not actual values. Two runs with different timestamps at `$.created_at` are "same mismatch" if both fail at that path.
+---
 
-2. **DIFFERENT MISMATCH is expected after rule changes** — If you add a rule for `$.id`, a bundle that previously failed at `$.id` might now fail at `$.other_field` or pass entirely. This is correct behavior, not a bug.
+## Design Decision Format
 
-3. **Chain replay doesn't have the OpenAPI spec** — `extract_link_fields_from_chain()` parses link_source from stored chain data, not the spec. If spec field names changed, chain replay may extract wrong variables. Solution: regenerate chains with `explore --stateful`.
+When adding to DESIGN.md:
 
-4. **Replay writes new bundles for persistent mismatches** — Bundles in `--out` directory are fresh captures from replay execution, not copies of input bundles. They contain current response data.
+```markdown
+# Descriptive Name
 
-5. **Bundle discovery is lenient** — `discover_bundles()` silently skips directories without `case.json` or `chain.json`. It checks for `mismatches/` subdirectory first, then searches the input directory directly. If bundle count in summary is lower than expected, verify bundle directories contain the required files.
+Keywords: searchable terms for grep
+Date: YYYYMMDD
 
-6. **ReplayStats tracks bundle names** — `fixed_bundles`, `persistent_bundles`, and `changed_bundles` lists contain bundle directory names (not full paths). Useful for reporting which specific issues were resolved.
-
-7. **--in points to explore output, not a specific bundle**:
-   ```bash
-   # Correct
-   api-parity replay --in ./artifacts ...
-
-   # Wrong - points to a specific bundle
-   api-parity replay --in ./artifacts/mismatches/20260112T... ...
-   ```
-
-## Running Tests
-
-**Build the CEL evaluator before running tests.** Many tests require the Go CEL binary. Without it, tests fail with `CELSubprocessError: CEL evaluator binary not found`.
-
-```bash
-# Build CEL evaluator first
-go build -o cel-evaluator ./cmd/cel-evaluator
-
-# Run tests - ALWAYS use these flags
-python -m pytest tests/ -x -q --tb=short
+Paragraph explaining the problem, the decision, and WHY.
 ```
 
-### CRITICAL: Always Use `-x -q --tb=short`
+---
 
-**This is mandatory.** Never run pytest without these flags:
+## Common Tasks Reference
 
-| Flag | Purpose |
-|------|---------|
-| `-x` | Stop on first failure. Prevents cascading failures from filling context. |
-| `-q` | Quiet mode. Shows dots instead of test names. Passing tests don't matter. |
-| `--tb=short` | Short tracebacks. Shows only what's needed to diagnose failures. |
+### Adding a New Predefined Comparison
 
-**Why this matters:** Verbose test output fills context with useless information. A full test run with `-v` can produce 500+ lines of passing test names. With `-x -q --tb=short`, a passing run is ~5 lines. A failing run shows only the failure.
+1. Add to `prototype/comparison-rules/comparison_library.json`
+2. Add test in `tests/test_comparator.py`
+3. Document in `docs/comparison-rules.md`
 
-```bash
-# WRONG - fills context with noise
-pytest tests/ -v
+### Adding a New CLI Option
 
-# WRONG - no stop on first failure, cascading failures fill context
-pytest tests/ -q --tb=short
+1. Add to Click command in `api_parity/cli.py`
+2. Thread through to component
+3. Add to CLI reference in `docs/configuration.md`
+4. Add integration test if behavioral
 
-# RIGHT - minimal output, stops on first failure
-python -m pytest tests/ -x -q --tb=short
+### Debugging a CEL Expression
+
+```python
+from api_parity.cel_evaluator import CELEvaluator
+cel = CELEvaluator()
+result = cel.evaluate("a == b", {"a": 1, "b": 2})
+print(result)  # False
+cel.close()
 ```
 
-Tests that require the CEL binary use the `cel_evaluator_exists` fixture or `pytestmark = pytest.mark.skipif(...)` to skip gracefully when the binary is missing. If you add new tests that use `CELEvaluator`, include this skip mechanism.
+### Understanding a Mismatch Bundle
 
-## Task Tool Gotchas
+```bash
+# In a mismatch directory
+cat metadata.json  # Run context, seed, targets
+cat case.json      # Request that was sent
+cat diff.json      # What differed and where
+cat target_a.json  # Full response from A
+cat target_b.json  # Full response from B
+```
 
-When using the Task tool to spawn and resume agents:
+---
 
-1. **Save the agentId** — Each Task call returns `agentId: abc123` at the end. Save it to resume later.
+## Error Handling Patterns
 
-2. **Resume with the `resume` parameter** — Pass `resume="abc123"` to continue the same agent with full context preserved.
+**CEL Errors vs Infrastructure Errors:**
+- CEL evaluation error (bad expression) → Records mismatch with `rule: "error: <message>"`, run continues
+- CEL subprocess crash → Raises `CELSubprocessError`, auto-restarts up to 3 times
 
-3. **Resume limit: ~2 resumes reliably** — After 2-3 sequential resumes, you may hit "API Error: 400 due to tool use concurrency issues". Design workflows to use at most 2 resumes. If resume fails unexpectedly, verify you're using the correct agentId.
+**HTTP Errors:**
+- Connection error → `ResponseCase.error` set, `status_code = 0`, recorded as mismatch if other target succeeded
+- 4xx/5xx responses → Normal `ResponseCase`, compared via status_code rules
+
+**Config Validation:**
+- Missing required field → `ValueError` at load time
+- Unknown predefined → `ValueError` at load time
+- Bad CEL syntax → Caught at runtime, recorded as mismatch
+- Missing env var → `ValueError` with var name
+
+---
 
 ## What NOT to Do
 
-- Don't propose changes without reading relevant code first
-- Don't retread decisions already documented in DESIGN.md
-- Don't add unnecessary complexity or future-proofing
-- Don't create new files unless absolutely necessary
-- Don't use Python CEL libraries (cel-python, common-expression-language) — untrusted dependencies
+- Don't propose changes without reading relevant code
+- Don't retread DESIGN.md decisions
+- Don't add complexity or future-proofing
+- Don't create files unless necessary
+- Don't use Python CEL libraries (untrusted)
