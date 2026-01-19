@@ -107,6 +107,7 @@ api-parity lint-spec --spec openapi.yaml [--output text|json]
 - **Non-200 status links**: Reports links on 201, 202, wildcards, etc.
 - **Response schema coverage**: Reports operations missing 2xx response schemas (affects schema validation)
 - **Duplicate link names**: Detects YAML duplicate keys that get silently overwritten
+- **Chain depth coverage**: Identifies operations only reachable at chain depth 3 or 4+, which are less likely to be explored by Schemathesis's probabilistic state machine
 
 **Exit codes:**
 - `0`: No errors (may have warnings or info)
