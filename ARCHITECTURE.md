@@ -415,6 +415,29 @@ Chains auto-discovered from explicit OpenAPI links via `schema.as_state_machine(
 - If A's POST returns `id: "abc"` and B's returns `id: "xyz"`, subsequent steps use respective IDs
 - Chain stops at first mismatch between targets (comparing subsequent steps after divergence produces noise)
 
+### Link Creation vs Free Transitions
+
+Understanding Schemathesis's state machine behavior is important for interpreting chain output:
+
+**Link Creation (Inference)** — Schemathesis has built-in algorithms that automatically create links between operations even when not explicitly defined in the spec:
+- Parameter name matching: `POST /users` returns `{id: 123}` and `GET /users/{userId}` exists → Schemathesis infers a link
+- Location headers: `POST /resources` returns `Location: /resources/abc` → Schemathesis infers a link to `GET /resources/{id}`
+
+api-parity **disables these inference algorithms** (see `_create_explicit_links_only_config()` in case_generator.py) because it only tests explicit OpenAPI links defined in the spec.
+
+**Free Transitions** — Even with inference disabled, Schemathesis's state machine can still transition between any operations. The state machine explores the API by calling various operations regardless of links. Links only provide **variable passing** — they tell Schemathesis "when you call operation B after A, use values from A's response to fill B's parameters."
+
+Without a link, Schemathesis can still call B after A, but generates random parameter values instead of extracting them from A's response.
+
+**"Unknown Link" in Output** — When chains show "via unknown link (not in spec)", this is normal. It means Schemathesis transitioned between operations without using an explicit link. The state machine made a free transition, not a linked one.
+
+**Implications for Coverage:**
+1. Running more chains improves link coverage (probabilistic exploration)
+2. Operations reachable only via specific links may be undertested
+3. Specs with incomplete link definitions will have gaps in stateful testing
+
+See DESIGN.md "Explicit Links Only for Chains" for the rationale behind disabling inference.
+
 ---
 
 ## Data Flow

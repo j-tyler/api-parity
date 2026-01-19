@@ -789,3 +789,102 @@ class TestCaseGeneratorSeedBehavior:
         data_100 = [(c.query, c.body) for c in cases_seed_100]
 
         assert data_42 != data_100, "Different seeds should produce different generated data"
+
+
+def filter_parent_pointers(pointers: set[str]) -> list[str]:
+    """Filter out pointers that are prefixes of longer pointers.
+
+    This mirrors the filtering logic in CaseGenerator._generate_synthetic_body().
+    Parent pointers are filtered because setting a value at a parent pointer
+    would overwrite the structure needed for child pointers.
+
+    Example: If we have both "entries/0" and "entries/0/assetTerm", we should
+    only process "entries/0/assetTerm" - the parent "entries/0" would be
+    created as an intermediate dict anyway.
+    """
+    sorted_pointers = sorted(pointers, key=len, reverse=True)
+    filtered = []
+    for ptr in sorted_pointers:
+        is_prefix = any(
+            other.startswith(ptr + "/")
+            for other in sorted_pointers if len(other) > len(ptr)
+        )
+        if not is_prefix:
+            filtered.append(ptr)
+    return filtered
+
+
+class TestFilterParentPointers:
+    """Tests for pointer filtering in synthetic body generation.
+
+    When generating synthetic response bodies, pointers that are prefixes of
+    other pointers should be filtered out. Otherwise, setting a value at the
+    parent pointer would overwrite the nested structure needed by child pointers.
+    """
+
+    def test_filters_parent_when_child_exists(self):
+        """Parent pointer is filtered when child pointer exists."""
+        pointers = {"entries/0", "entries/0/assetTerm"}
+        result = filter_parent_pointers(pointers)
+        # Only the child should remain
+        assert "entries/0/assetTerm" in result
+        assert "entries/0" not in result
+
+    def test_keeps_sibling_pointers(self):
+        """Sibling pointers (not prefix relationships) are both kept."""
+        pointers = {"entries/0", "entries/1"}
+        result = filter_parent_pointers(pointers)
+        assert "entries/0" in result
+        assert "entries/1" in result
+
+    def test_filters_deep_parent_chain(self):
+        """Multiple levels of parent pointers are filtered."""
+        pointers = {"a", "a/b", "a/b/c", "a/b/c/d"}
+        result = filter_parent_pointers(pointers)
+        # Only the deepest should remain
+        assert result == ["a/b/c/d"]
+
+    def test_keeps_unrelated_pointers(self):
+        """Unrelated pointers are all kept."""
+        pointers = {"id", "name", "data/value"}
+        result = filter_parent_pointers(pointers)
+        assert len(result) == 3
+        assert set(result) == pointers
+
+    def test_handles_similar_names_not_prefixes(self):
+        """Pointers with similar names but not prefix relationships are kept."""
+        # "foo" is NOT a prefix of "foobar" (no "/" separator)
+        pointers = {"foo", "foobar", "foo/bar"}
+        result = filter_parent_pointers(pointers)
+        # "foo" IS prefix of "foo/bar", so only "foobar" and "foo/bar" remain
+        assert "foobar" in result
+        assert "foo/bar" in result
+        assert "foo" not in result
+
+    def test_empty_input(self):
+        """Empty input returns empty list."""
+        result = filter_parent_pointers(set())
+        assert result == []
+
+    def test_single_pointer(self):
+        """Single pointer is returned."""
+        result = filter_parent_pointers({"only/one"})
+        assert result == ["only/one"]
+
+    def test_complex_nested_structure(self):
+        """Complex nested structure with mixed relationships."""
+        pointers = {
+            "entries/0/assetTerm",      # Keep
+            "entries/0",                 # Filter (parent of assetTerm)
+            "entries/1/assetTerm",      # Keep
+            "entries/1",                 # Filter (parent of assetTerm)
+            "metadata/id",              # Keep (no children)
+            "other",                     # Keep (no children)
+        }
+        result = filter_parent_pointers(pointers)
+        assert set(result) == {
+            "entries/0/assetTerm",
+            "entries/1/assetTerm",
+            "metadata/id",
+            "other",
+        }

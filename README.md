@@ -182,6 +182,42 @@ targets:
     verify_ssl: true               # Set false to skip verification
 ```
 
+## Why Complete OpenAPI Links Matter
+
+api-parity's stateful testing (`--stateful` mode) depends entirely on explicit OpenAPI links defined in your spec. Unlike some tools, api-parity **disables automatic link inference** — it won't guess relationships from parameter names or Location headers.
+
+**This design is intentional:** You should be able to read your spec and know exactly which chains will be tested. Inferred links can create false positives or miss real API contracts.
+
+**The consequence:** If a link isn't defined in your spec, api-parity cannot:
+- Pass data between those operations (IDs, tokens, etc.)
+- Test that sequence as a meaningful stateful chain
+- Verify the relationship between those endpoints
+
+**Example:** If `POST /orders` returns an order ID that should be used with `GET /orders/{id}` and `DELETE /orders/{id}`, you need explicit links:
+
+```yaml
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      responses:
+        '201':
+          description: Order created
+          links:
+            GetOrder:
+              operationId: getOrder
+              parameters:
+                orderId: '$response.body#/id'
+            DeleteOrder:
+              operationId: deleteOrder
+              parameters:
+                orderId: '$response.body#/id'
+```
+
+Without these links, api-parity can still call `getOrder` and `deleteOrder`, but will use random IDs instead of the one returned by `createOrder` — making the test meaningless.
+
+**Recommendation:** Run `api-parity lint-spec --spec your-spec.yaml` to identify missing links, unreachable operations, and other coverage gaps.
+
 ## Documentation
 
 | Document | Description |
