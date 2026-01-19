@@ -1,0 +1,93 @@
+openapi: 3.0.3
+info:
+  title: Request Path Link Test API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+
+# This spec tests the pattern where links use BOTH:
+# - $request.path.* to pass through path parameters
+# - $response.body#/* to extract a value from the response
+
+paths:
+  /tenants/{tenant}/buckets/{bucket}/items:
+    get:
+      summary: List items in bucket
+      operationId: listItems
+      parameters:
+        - name: tenant
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        itemId:
+                          type: string
+          links:
+            # This is the pattern we're testing:
+            # - tenant: from $request.path
+            # - bucket: from $request.path
+            # - itemId: from $response.body
+            GetItemFromList:
+              operationId: getItem
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                itemId: '$response.body#/entries/0/itemId'
+
+  /tenants/{tenant}/buckets/{bucket}/items/{itemId}:
+    get:
+      summary: Get specific item
+      operationId: getItem
+      parameters:
+        - name: tenant
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Item details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+          links:
+            GetItemAgain:
+              operationId: getItem
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                itemId: '$response.body#/id'
