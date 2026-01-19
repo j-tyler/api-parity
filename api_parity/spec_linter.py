@@ -42,6 +42,13 @@ class LintResult:
     operations_with_links: int = 0
     operations_with_response_schemas: int = 0
 
+    # Chain depth statistics
+    operations_at_depth_1: int = 0  # Entry points (outbound links, no inbound)
+    operations_at_depth_2: int = 0
+    operations_at_depth_3: int = 0
+    operations_at_depth_4_plus: int = 0
+    operations_unreachable: int = 0  # Isolated operations
+
     def add(self, msg: LintMessage) -> None:
         """Add a message to the appropriate list based on level."""
         if msg.level == "error":
@@ -68,6 +75,13 @@ class LintResult:
                 "error_count": len(self.errors),
                 "warning_count": len(self.warnings),
                 "info_count": len(self.info),
+            },
+            "chain_depth": {
+                "depth_1": self.operations_at_depth_1,
+                "depth_2": self.operations_at_depth_2,
+                "depth_3": self.operations_at_depth_3,
+                "depth_4_plus": self.operations_at_depth_4_plus,
+                "unreachable": self.operations_unreachable,
             },
         }
 
@@ -148,6 +162,55 @@ class SpecLinter:
                         "raw": operation,
                     }
 
+        # Cached link graph (built lazily on first access)
+        self._link_graph_cache: tuple[dict[str, list[str]], dict[str, list[str]]] | None = None
+
+    def _build_link_graph(self) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+        """Build directed graph of OpenAPI links between operations.
+
+        Returns:
+            Tuple of (outbound, inbound) where:
+            - outbound[op] = list of operations this op links to
+            - inbound[op] = list of operations that link to this op
+
+        Results are cached after first call since multiple lint checks use this.
+        """
+        if self._link_graph_cache is not None:
+            return self._link_graph_cache
+
+        outbound: dict[str, list[str]] = {op: [] for op in self._operation_ids}
+        inbound: dict[str, list[str]] = {op: [] for op in self._operation_ids}
+
+        paths = self._spec.get("paths", {})
+        for path_item in paths.values():
+            if not isinstance(path_item, dict):
+                continue
+            for method, operation in path_item.items():
+                if not isinstance(operation, dict) or method.startswith("$"):
+                    continue
+
+                source_op = operation.get("operationId")
+                if not source_op:
+                    continue
+
+                responses = operation.get("responses", {})
+                for response_def in responses.values():
+                    if not isinstance(response_def, dict):
+                        continue
+                    links = response_def.get("links", {})
+                    for link_def in links.values():
+                        if not isinstance(link_def, dict):
+                            continue
+                        target_op = link_def.get("operationId") or link_def.get("operationRef")
+                        if target_op and target_op in self._operation_ids:
+                            if target_op not in outbound[source_op]:
+                                outbound[source_op].append(target_op)
+                            if source_op not in inbound[target_op]:
+                                inbound[target_op].append(source_op)
+
+        self._link_graph_cache = (outbound, inbound)
+        return outbound, inbound
+
     def lint(self) -> LintResult:
         """Run all lint checks on the spec.
 
@@ -164,21 +227,12 @@ class SpecLinter:
         self._check_non_200_status_code_links(result)
         self._check_response_schema_coverage(result)
         self._check_duplicate_link_names(result)
+        self._check_chain_depth_coverage(result)
 
         return result
 
-    def _check_link_connectivity(self, result: LintResult) -> None:
-        """Check link connectivity and identify isolated operations.
-
-        Identifies:
-        - Operations with no outbound links (chain terminators)
-        - Operations with no inbound links (entry points only)
-        - Completely isolated operations (no links at all)
-        - Invalid link targets (operationId doesn't exist)
-        """
-        outbound: dict[str, list[str]] = {op: [] for op in self._operation_ids}
-        inbound: dict[str, list[str]] = {op: [] for op in self._operation_ids}
-
+    def _check_invalid_link_targets(self, result: LintResult) -> None:
+        """Check for links that reference non-existent operationIds."""
         paths = self._spec.get("paths", {})
         for path_item in paths.values():
             if not isinstance(path_item, dict):
@@ -218,10 +272,21 @@ class SpecLinter:
                                         "status_code": status_code,
                                     },
                                 ))
-                            continue
 
-                        outbound[source_op].append(target_op)
-                        inbound[target_op].append(source_op)
+    def _check_link_connectivity(self, result: LintResult) -> None:
+        """Check link connectivity and identify isolated operations.
+
+        Identifies:
+        - Operations with no outbound links (chain terminators)
+        - Operations with no inbound links (entry points only)
+        - Completely isolated operations (no links at all)
+        - Invalid link targets (operationId doesn't exist)
+        """
+        # Check for invalid link targets (requires separate pass for error details)
+        self._check_invalid_link_targets(result)
+
+        # Use shared graph for connectivity analysis
+        outbound, inbound = self._build_link_graph()
 
         # Count operations with links
         ops_with_outbound = {op for op, targets in outbound.items() if targets}
@@ -588,6 +653,152 @@ class SpecLinter:
                 else:
                     seen[name] = line_num
 
+    def _check_chain_depth_coverage(self, result: LintResult) -> None:
+        """Check minimum chain depth required to reach each operation.
+
+        Operations reachable only at depth 3 or 4+ are less likely to be
+        explored by Schemathesis's probabilistic state machine. This check
+        identifies such operations and recommends adding shorter link paths.
+
+        Depth calculation:
+        - Depth 1: Entry points (operations with outbound links but no inbound)
+        - Depth 2+: Minimum hops from any entry point via links
+        - Unreachable: Operations with no links or not reachable from entry points
+        """
+        from collections import deque
+
+        # Use shared link graph
+        outbound, inbound = self._build_link_graph()
+
+        # Identify entry points: operations with outbound links but no inbound links
+        entry_points: set[str] = set()
+        for op_id in self._operation_ids:
+            has_outbound = bool(outbound[op_id])
+            has_inbound = bool(inbound[op_id])
+            if has_outbound and not has_inbound:
+                entry_points.add(op_id)
+
+        # BFS from all entry points to find minimum depth for each operation
+        # Entry points themselves are at depth 1 (first step in a chain)
+        min_depth: dict[str, int] = {}
+        queue: deque[tuple[str, int]] = deque()
+
+        for entry in entry_points:
+            min_depth[entry] = 1
+            queue.append((entry, 1))
+
+        while queue:
+            current_op, current_depth = queue.popleft()
+            next_depth = current_depth + 1
+
+            for target_op in outbound[current_op]:
+                if target_op not in min_depth or min_depth[target_op] > next_depth:
+                    min_depth[target_op] = next_depth
+                    queue.append((target_op, next_depth))
+
+        # Categorize operations by depth
+        depth_1_ops: list[str] = []
+        depth_2_ops: list[str] = []
+        depth_3_ops: list[str] = []
+        depth_4_plus_ops: list[str] = []
+        unreachable_ops: list[str] = []
+
+        for op_id in self._operation_ids:
+            if op_id not in min_depth:
+                unreachable_ops.append(op_id)
+            elif min_depth[op_id] == 1:
+                depth_1_ops.append(op_id)
+            elif min_depth[op_id] == 2:
+                depth_2_ops.append(op_id)
+            elif min_depth[op_id] == 3:
+                depth_3_ops.append(op_id)
+            else:
+                depth_4_plus_ops.append(op_id)
+
+        # Update result statistics
+        result.operations_at_depth_1 = len(depth_1_ops)
+        result.operations_at_depth_2 = len(depth_2_ops)
+        result.operations_at_depth_3 = len(depth_3_ops)
+        result.operations_at_depth_4_plus = len(depth_4_plus_ops)
+        result.operations_unreachable = len(unreachable_ops)
+
+        # Add info message with depth summary
+        if entry_points:
+            result.add(LintMessage(
+                level="info",
+                code="chain-depth-summary",
+                message=(
+                    f"Chain depth analysis: {len(depth_1_ops)} at depth 1 (entry points), "
+                    f"{len(depth_2_ops)} at depth 2, {len(depth_3_ops)} at depth 3, "
+                    f"{len(depth_4_plus_ops)} at depth 4+, {len(unreachable_ops)} unreachable"
+                ),
+                details={
+                    "depth_1": sorted(depth_1_ops),
+                    "depth_2": sorted(depth_2_ops),
+                    "depth_3": sorted(depth_3_ops),
+                    "depth_4_plus": sorted(depth_4_plus_ops),
+                    "unreachable": sorted(unreachable_ops),
+                },
+            ))
+
+        # Warn about depth 3 operations - less likely to be explored
+        if depth_3_ops:
+            for op_id in sorted(depth_3_ops):
+                op_info = self._operations[op_id]
+                # Find which entry points could provide shortcuts
+                potential_sources = sorted(entry_points)
+                result.add(LintMessage(
+                    level="warning",
+                    code="deep-chain-depth-3",
+                    message=(
+                        f"Operation reachable only at chain depth 3. "
+                        f"Add a direct link from an entry point operation to reduce depth. "
+                        f"See docs/openapi-links.md for link syntax."
+                    ),
+                    operation_id=op_id,
+                    details={
+                        "method": op_info["method"],
+                        "path": op_info["path"],
+                        "min_depth": 3,
+                        "potential_link_sources": potential_sources,
+                        "fix_example": (
+                            f"Add to a 2XX response of one of {potential_sources}: "
+                            f"links:\\n  Link{op_id}:\\n    operationId: {op_id}\\n    "
+                            f"parameters:\\n      <param>: \"$response.body#/<field>\""
+                        ),
+                    },
+                ))
+
+        # Warn about depth 4+ operations - unlikely to be explored
+        if depth_4_plus_ops:
+            for op_id in sorted(depth_4_plus_ops):
+                op_info = self._operations[op_id]
+                depth = min_depth[op_id]
+                # Find which entry points could provide shortcuts
+                potential_sources = sorted(entry_points)
+                result.add(LintMessage(
+                    level="warning",
+                    code="deep-chain-depth-4-plus",
+                    message=(
+                        f"Operation reachable only at chain depth {depth}. "
+                        f"Schemathesis rarely explores chains this deep. "
+                        f"Add a direct link from an entry point or use --ensure-coverage. "
+                        f"See docs/openapi-links.md for link syntax."
+                    ),
+                    operation_id=op_id,
+                    details={
+                        "method": op_info["method"],
+                        "path": op_info["path"],
+                        "min_depth": depth,
+                        "potential_link_sources": potential_sources,
+                        "fix_example": (
+                            f"Add to a 2XX response of one of {potential_sources}: "
+                            f"links:\\n  Link{op_id}:\\n    operationId: {op_id}\\n    "
+                            f"parameters:\\n      <param>: \"$response.body#/<field>\""
+                        ),
+                    },
+                ))
+
 
 class SpecLinterError(Exception):
     """Raised when spec linting fails."""
@@ -611,6 +822,23 @@ def format_lint_result_text(result: LintResult) -> str:
     lines.append(f"Operations with links: {result.operations_with_links}")
     lines.append(f"Operations with response schemas: {result.operations_with_response_schemas}")
     lines.append("")
+
+    # Chain depth summary
+    has_depth_data = (
+        result.operations_at_depth_1 > 0 or
+        result.operations_at_depth_2 > 0 or
+        result.operations_at_depth_3 > 0 or
+        result.operations_at_depth_4_plus > 0
+    )
+    if has_depth_data:
+        lines.append("Chain Depth Coverage")
+        lines.append("-" * 40)
+        lines.append(f"  Depth 1 (entry points):  {result.operations_at_depth_1}")
+        lines.append(f"  Depth 2:                 {result.operations_at_depth_2}")
+        lines.append(f"  Depth 3:                 {result.operations_at_depth_3}")
+        lines.append(f"  Depth 4+:                {result.operations_at_depth_4_plus}")
+        lines.append(f"  Unreachable:             {result.operations_unreachable}")
+        lines.append("")
 
     # Errors
     if result.errors:

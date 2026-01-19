@@ -255,6 +255,69 @@ To exclude specific operations from the graph:
 api-parity graph-chains --spec openapi.yaml --exclude healthCheck --exclude debugEndpoint
 ```
 
+## Lint for Chain Depth Issues
+
+Use `lint-spec` to identify operations that may not be adequately explored due to chain depth:
+
+```bash
+api-parity lint-spec --spec openapi.yaml
+```
+
+The linter reports:
+- **deep-chain-depth-3**: Operations reachable only at depth 3 (less likely to be explored)
+- **deep-chain-depth-4-plus**: Operations reachable only at depth 4+ (rarely explored)
+
+### Example Output
+
+```
+WARNINGS (2)
+----------------------------------------
+  [getC] deep-chain-depth-3: Operation reachable only at chain depth 3.
+    Add a direct link from an entry point operation to reduce depth.
+    See docs/openapi-links.md for link syntax.
+  [getD] deep-chain-depth-4-plus: Operation reachable only at chain depth 4.
+    Schemathesis rarely explores chains this deep.
+    Add a direct link from an entry point or use --ensure-coverage.
+```
+
+### Understanding Chain Depth
+
+**Depth 1**: Entry points (operations with outbound links but no inbound links)
+**Depth 2**: Operations one link away from entry points - high exploration probability
+**Depth 3**: Two links from entry - significantly lower probability
+**Depth 4+**: Three or more links - rarely explored in practice
+
+### Fixing Deep Chain Issues
+
+The lint output includes `potential_link_sources` and `fix_example` in the JSON details. To reduce an operation's depth:
+
+1. Identify an entry point operation (listed in `potential_link_sources`)
+2. Add a link from that operation's response to the deep operation:
+
+```yaml
+# If createWidget is an entry point and getStats is at depth 4
+# Add this to createWidget's 201 response:
+responses:
+  "201":
+    links:
+      GetStats:
+        operationId: getStats
+        parameters:
+          widget_id: "$response.body#/id"
+```
+
+This creates a shortcut that reduces getStats from depth 4 to depth 2.
+
+### Alternative: Use --ensure-coverage
+
+If modifying the OpenAPI spec isn't practical, use `--ensure-coverage` with `explore --stateful`:
+
+```bash
+api-parity explore --stateful --ensure-coverage ...
+```
+
+This guarantees all operations are tested, even those at deep chain depths.
+
 ## Common Issues
 
 | Problem | Cause | Fix |
@@ -263,3 +326,4 @@ api-parity graph-chains --spec openapi.yaml --exclude healthCheck --exclude debu
 | Short chains only | Links don't form cycles | Add links from get/update back to other operations |
 | Parameter not found | Link param name doesn't match operation param | Check spelling, use exact param name |
 | Field not extracted | JSON Pointer path wrong | Verify path matches response schema |
+| Deep operations not explored | Operations only reachable at depth 3+ | Add shortcut links from entry points or use `--ensure-coverage` |

@@ -594,6 +594,488 @@ class TestFormatLintResultText:
         assert "Result: PASS (with warnings)" in text
 
 
+class TestChainDepthCoverage:
+    """Tests for chain depth analysis."""
+
+    def test_simple_chain_depth_analysis(self, tmp_path):
+        """Test depth analysis for a simple linear chain: A -> B -> C."""
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/a": {
+                    "post": {
+                        "operationId": "createA",
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "links": {
+                                    "GetB": {"operationId": "getB"},
+                                },
+                            }
+                        },
+                    }
+                },
+                "/b": {
+                    "get": {
+                        "operationId": "getB",
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "links": {
+                                    "GetC": {"operationId": "getC"},
+                                },
+                            }
+                        },
+                    }
+                },
+                "/c": {
+                    "get": {
+                        "operationId": "getC",
+                        "responses": {"200": {"description": "OK"}},
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "linear_chain.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        linter = SpecLinter(spec_file)
+        result = linter.lint()
+
+        # createA is depth 1 (entry point)
+        # getB is depth 2
+        # getC is depth 3
+        assert result.operations_at_depth_1 == 1
+        assert result.operations_at_depth_2 == 1
+        assert result.operations_at_depth_3 == 1
+        assert result.operations_at_depth_4_plus == 0
+        assert result.operations_unreachable == 0
+
+        # Should have warning for depth 3 operation
+        depth_3_warnings = [w for w in result.warnings if w.code == "deep-chain-depth-3"]
+        assert len(depth_3_warnings) == 1
+        assert depth_3_warnings[0].operation_id == "getC"
+
+    def test_depth_4_plus_chain(self, tmp_path):
+        """Test depth analysis for a chain that goes to depth 4+."""
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/a": {
+                    "post": {
+                        "operationId": "createA",
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "links": {"Next": {"operationId": "stepB"}},
+                            }
+                        },
+                    }
+                },
+                "/b": {
+                    "get": {
+                        "operationId": "stepB",
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "links": {"Next": {"operationId": "stepC"}},
+                            }
+                        },
+                    }
+                },
+                "/c": {
+                    "get": {
+                        "operationId": "stepC",
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "links": {"Next": {"operationId": "stepD"}},
+                            }
+                        },
+                    }
+                },
+                "/d": {
+                    "get": {
+                        "operationId": "stepD",
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "links": {"Next": {"operationId": "stepE"}},
+                            }
+                        },
+                    }
+                },
+                "/e": {
+                    "get": {
+                        "operationId": "stepE",
+                        "responses": {"200": {"description": "OK"}},
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "deep_chain.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        linter = SpecLinter(spec_file)
+        result = linter.lint()
+
+        # createA is depth 1
+        # stepB is depth 2
+        # stepC is depth 3
+        # stepD is depth 4
+        # stepE is depth 5
+        assert result.operations_at_depth_1 == 1
+        assert result.operations_at_depth_2 == 1
+        assert result.operations_at_depth_3 == 1
+        assert result.operations_at_depth_4_plus == 2  # stepD and stepE
+
+        # Should have warnings for both depth 3 and depth 4+ operations
+        depth_3_warnings = [w for w in result.warnings if w.code == "deep-chain-depth-3"]
+        depth_4_warnings = [w for w in result.warnings if w.code == "deep-chain-depth-4-plus"]
+        assert len(depth_3_warnings) == 1
+        assert len(depth_4_warnings) == 2
+
+        # Check that depth is correct in the details
+        step_e_warning = [w for w in depth_4_warnings if w.operation_id == "stepE"][0]
+        assert step_e_warning.details["min_depth"] == 5
+
+        # Verify actionable information is present for LLM agents
+        assert "potential_link_sources" in step_e_warning.details
+        assert "createA" in step_e_warning.details["potential_link_sources"]
+        assert "fix_example" in step_e_warning.details
+        assert "operationId: stepE" in step_e_warning.details["fix_example"]
+
+    def test_multiple_entry_points(self, tmp_path):
+        """Test depth analysis with multiple entry points."""
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/entry1": {
+                    "post": {
+                        "operationId": "entryA",
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "links": {"Next": {"operationId": "sharedOp"}},
+                            }
+                        },
+                    }
+                },
+                "/entry2": {
+                    "post": {
+                        "operationId": "entryB",
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "links": {"Next": {"operationId": "sharedOp"}},
+                            }
+                        },
+                    }
+                },
+                "/shared": {
+                    "get": {
+                        "operationId": "sharedOp",
+                        "responses": {"200": {"description": "OK"}},
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "multi_entry.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        linter = SpecLinter(spec_file)
+        result = linter.lint()
+
+        # Both entryA and entryB are depth 1
+        # sharedOp is depth 2 (reachable from either entry point in 1 hop)
+        assert result.operations_at_depth_1 == 2
+        assert result.operations_at_depth_2 == 1
+        assert result.operations_at_depth_3 == 0
+        assert result.operations_at_depth_4_plus == 0
+
+    def test_shortcut_reduces_depth(self, tmp_path):
+        """Test that a shortcut link reduces the minimum depth."""
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/a": {
+                    "post": {
+                        "operationId": "createA",
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "links": {
+                                    "Long": {"operationId": "getB"},
+                                    "Shortcut": {"operationId": "getC"},  # Direct link to C
+                                },
+                            }
+                        },
+                    }
+                },
+                "/b": {
+                    "get": {
+                        "operationId": "getB",
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "links": {"Next": {"operationId": "getC"}},
+                            }
+                        },
+                    }
+                },
+                "/c": {
+                    "get": {
+                        "operationId": "getC",
+                        "responses": {"200": {"description": "OK"}},
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "shortcut.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        linter = SpecLinter(spec_file)
+        result = linter.lint()
+
+        # createA is depth 1
+        # getB is depth 2
+        # getC is depth 2 (via shortcut, not depth 3 via getB)
+        assert result.operations_at_depth_1 == 1
+        assert result.operations_at_depth_2 == 2
+        assert result.operations_at_depth_3 == 0  # No depth 3 operations!
+
+        # No depth 3 warnings since shortcut exists
+        depth_3_warnings = [w for w in result.warnings if w.code == "deep-chain-depth-3"]
+        assert len(depth_3_warnings) == 0
+
+    def test_unreachable_operations(self, tmp_path):
+        """Test that isolated operations are marked as unreachable."""
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/connected": {
+                    "post": {
+                        "operationId": "connectedOp",
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "links": {"Next": {"operationId": "reachable"}},
+                            }
+                        },
+                    }
+                },
+                "/reachable": {
+                    "get": {
+                        "operationId": "reachable",
+                        "responses": {"200": {"description": "OK"}},
+                    }
+                },
+                "/isolated": {
+                    "get": {
+                        "operationId": "isolated",
+                        "responses": {"200": {"description": "OK"}},
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "unreachable.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        linter = SpecLinter(spec_file)
+        result = linter.lint()
+
+        # isolated has no links, so it's unreachable
+        assert result.operations_unreachable == 1
+
+        # Check depth summary info message
+        depth_msgs = [m for m in result.info if m.code == "chain-depth-summary"]
+        assert len(depth_msgs) == 1
+        assert "isolated" in depth_msgs[0].details["unreachable"]
+
+    def test_depth_in_json_output(self, tmp_path):
+        """Test that chain depth is included in JSON output."""
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/a": {
+                    "post": {
+                        "operationId": "createA",
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "links": {"Next": {"operationId": "getB"}},
+                            }
+                        },
+                    }
+                },
+                "/b": {
+                    "get": {
+                        "operationId": "getB",
+                        "responses": {"200": {"description": "OK"}},
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "json_output.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        linter = SpecLinter(spec_file)
+        result = linter.lint()
+        output = result.to_dict()
+
+        # JSON output should include chain_depth section
+        assert "chain_depth" in output
+        assert output["chain_depth"]["depth_1"] == 1
+        assert output["chain_depth"]["depth_2"] == 1
+        assert output["chain_depth"]["depth_3"] == 0
+        assert output["chain_depth"]["depth_4_plus"] == 0
+
+    def test_depth_in_text_output(self, tmp_path):
+        """Test that chain depth is included in text output."""
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/a": {
+                    "post": {
+                        "operationId": "createA",
+                        "responses": {
+                            "201": {
+                                "description": "Created",
+                                "links": {"Next": {"operationId": "getB"}},
+                            }
+                        },
+                    }
+                },
+                "/b": {
+                    "get": {
+                        "operationId": "getB",
+                        "responses": {"200": {"description": "OK"}},
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "text_output.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        linter = SpecLinter(spec_file)
+        result = linter.lint()
+        text = format_lint_result_text(result)
+
+        # Text output should include chain depth section
+        assert "Chain Depth Coverage" in text
+        assert "Depth 1 (entry points):" in text
+
+    def test_cycle_without_entry_point(self, tmp_path):
+        """Test that cyclic operations with no entry point are marked unreachable.
+
+        A cycle like A→B→A has no entry point because both operations have
+        inbound links. Without an entry point, BFS cannot start, so both
+        are correctly marked as unreachable from chain exploration perspective.
+        """
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/a": {
+                    "post": {
+                        "operationId": "opA",
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "links": {"ToB": {"operationId": "opB"}},
+                            }
+                        },
+                    }
+                },
+                "/b": {
+                    "post": {
+                        "operationId": "opB",
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "links": {"ToA": {"operationId": "opA"}},
+                            }
+                        },
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "cycle.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        linter = SpecLinter(spec_file)
+        result = linter.lint()
+
+        # Both operations are in a cycle with no entry point
+        # They have inbound links (from each other), so neither is an entry point
+        # Without entry points, BFS doesn't run, so both are unreachable
+        assert result.operations_at_depth_1 == 0
+        assert result.operations_unreachable == 2
+
+        # No chain-depth-summary because there are no entry points
+        depth_msgs = [m for m in result.info if m.code == "chain-depth-summary"]
+        assert len(depth_msgs) == 0
+
+    def test_self_loop_operation(self, tmp_path):
+        """Test that a self-loop operation (links to itself) is handled correctly.
+
+        An operation that only links to itself has both outbound (to self) and
+        inbound (from self) links, so it's not considered an entry point.
+        """
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/repeat": {
+                    "post": {
+                        "operationId": "repeatOp",
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "links": {"Repeat": {"operationId": "repeatOp"}},
+                            }
+                        },
+                    }
+                },
+            },
+        }
+
+        spec_file = tmp_path / "self_loop.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        linter = SpecLinter(spec_file)
+        result = linter.lint()
+
+        # Self-loop: has outbound (to self) and inbound (from self)
+        # Not an entry point, so marked unreachable
+        assert result.operations_at_depth_1 == 0
+        assert result.operations_unreachable == 1
+
+
 class TestWithRealFixture:
     """Tests using real test fixtures."""
 

@@ -845,3 +845,46 @@ Added operation coverage statistics to `graph-chains --generated` output:
 - `api_parity/cli.py` — Added operation coverage tracking to `_run_graph_chains_generated`
 - `tests/test_cli_explore.py` — Updated tests for new flag
 - `tests/test_cli_graph_chains.py` — Added operation coverage assertions
+
+---
+
+# Chain Depth Coverage Lint Check
+
+Keywords: lint chain depth coverage exploration probabilistic BFS graph
+Date: 20260119
+
+The `lint-spec` command now identifies operations that are only reachable at chain depth 3 or 4+. This complements the `--ensure-coverage` flag by warning users about spec structure issues that may limit exploration coverage.
+
+**Why chain depth matters:**
+
+Schemathesis uses a probabilistic state machine for chain exploration. At each step, it randomly selects from available links. The probability of reaching an operation at depth N decreases exponentially:
+
+- Depth 2: Each operation is one link away from an entry point - high probability
+- Depth 3: Two consecutive links must be followed - lower probability
+- Depth 4+: Three or more consecutive links - very low probability
+
+Operations at depth 3 may be explored ~50% less often than depth 2. Depth 4+ operations may be explored <10% of the time.
+
+**Implementation:**
+
+1. Build a directed graph from OpenAPI links
+2. Identify entry points (operations with outbound links but no inbound links)
+3. BFS from all entry points to find minimum depth for each operation
+4. Categorize and report:
+   - Depth 1 (entry points)
+   - Depth 2 (one link from entry)
+   - Depth 3 (warning)
+   - Depth 4+ (stronger warning with specific depth)
+   - Unreachable (no link path from any entry point)
+
+**Lint message guidance:**
+
+Messages include actionable guidance: which entry points could provide shortcuts (`potential_link_sources`), example YAML syntax (`fix_example`), and a reference to `docs/openapi-links.md` for full documentation.
+
+**Design choice: BFS for minimum depth:**
+
+Uses BFS (breadth-first search) to find the minimum depth, not any arbitrary path. This matters when an operation is reachable via multiple paths of different lengths. The minimum depth is what determines exploration probability—if there's a shortcut, the operation is more likely to be explored.
+
+**Files affected:**
+- `api_parity/spec_linter.py` — Added `_check_chain_depth_coverage()` method
+- `tests/test_spec_linter.py` — Added `TestChainDepthCoverage` test class
