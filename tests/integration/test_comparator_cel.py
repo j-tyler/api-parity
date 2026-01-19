@@ -22,7 +22,7 @@ from api_parity.models import (
     OperationRules,
     PresenceMode,
 )
-from tests.conftest import make_response
+from tests.conftest import make_response_case as make_response
 
 
 # =============================================================================

@@ -1112,3 +1112,53 @@ class TestLinkAttributionHistory:
         assert link_source.get("link_name") == "GetUpdatedResource", (
             f"Link name should be GetUpdatedResource, got {link_source.get('link_name')}"
         )
+
+
+class TestSeedWalkingGenerated:
+    """Tests for seed walking behavior in --generated mode."""
+
+    def test_generated_reports_seeds_used(self, capsys):
+        """Test that --generated mode reports seeds used when seed walking occurs."""
+        spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
+        if not spec_path.exists():
+            pytest.skip("Test fixture not found")
+
+        # Use a seed to trigger seed walking behavior
+        args = GraphChainsArgs(
+            spec=spec_path,
+            exclude=[],
+            generated=True,
+            max_chains=1,  # Minimal to keep test fast
+            max_steps=2,
+            seed=42,
+        )
+        result = run_graph_chains(args)
+        assert result == 0
+
+        captured = capsys.readouterr()
+
+        # Should report the seed used
+        assert "seed" in captured.out.lower() or "Seed" in captured.out
+
+    def test_generated_without_seed_no_seed_report(self, capsys):
+        """Test that --generated mode without seed doesn't report seeds."""
+        spec_path = Path(__file__).parent / "fixtures" / "test_api.yaml"
+        if not spec_path.exists():
+            pytest.skip("Test fixture not found")
+
+        args = GraphChainsArgs(
+            spec=spec_path,
+            exclude=[],
+            generated=True,
+            max_chains=1,
+            max_steps=2,
+            seed=None,  # No seed
+        )
+        result = run_graph_chains(args)
+        assert result == 0
+
+        captured = capsys.readouterr()
+
+        # Should NOT report "Used seed" or "seeds:" since no seed walking
+        assert "Used seed" not in captured.out
+        assert "seeds:" not in captured.out

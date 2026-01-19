@@ -64,6 +64,8 @@ api-parity explore \
 
 **Stateful mode:** When `--stateful` is passed, the tool generates multi-step chains using OpenAPI links instead of single requests. `--max-chains` controls how many chains to generate (default 20), and `--max-steps` controls maximum steps per chain (default 6).
 
+**Seed walking:** When `--seed` is provided with `--max-chains`, if the initial seed generates fewer chains than requested, the system automatically tries incrementing seeds (seed+1, seed+2, ...) until enough unique chains are accumulated or 100 seeds have been tried. Chains are deduplicated by operation sequence. This enables more thorough exploration of APIs with complex link graphs. Without `--seed`, a single non-deterministic pass is performed.
+
 ### Mode B: Replay
 
 Load previously saved mismatch bundles and re-execute them against both targets. Classify outcomes for regression tracking.
