@@ -1,0 +1,95 @@
+openapi: 3.0.3
+info:
+  title: Minimal Link Test API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+
+paths:
+  /items:
+    post:
+      summary: Create an item
+      operationId: createItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              schema:
+                type: string
+          links:
+            # This link should work: $response.header -> path param
+            GetItemFromHeader:
+              operationId: getItem
+              parameters:
+                itemId: '$response.header.Location'
+
+  /items/{itemId}:
+    get:
+      summary: Get an item
+      operationId: getItem
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+          links:
+            # This link uses $request.path -> path param
+            # Does it work?
+            GetItemAgain:
+              operationId: getItem
+              parameters:
+                itemId: '$request.path.itemId'
+            # This link uses $request.path -> header param
+            DeleteViaHeader:
+              operationId: deleteItem
+              parameters:
+                X-Item-Id: '$request.path.itemId'
+            # This link uses $response.body -> path param
+            GetRelatedItem:
+              operationId: getItem
+              parameters:
+                itemId: '$response.body#/id'
+
+  /items/delete:
+    delete:
+      summary: Delete an item via header
+      operationId: deleteItem
+      parameters:
+        - name: X-Item-Id
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Deleted
+          links:
+            # This link uses $request.header -> path param
+            # Does it work?
+            VerifyDeletedViaPath:
+              operationId: getItem
+              parameters:
+                itemId: '$request.header.X-Item-Id'

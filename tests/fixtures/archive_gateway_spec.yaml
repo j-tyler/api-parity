@@ -1,0 +1,1727 @@
+openapi: 3.0.3
+info:
+  title: Archive Gateway API
+  version: 0.1.0
+servers:
+  - url: http://localhost:1174
+  - url: http://localhost:15158
+tags:
+  - name: Health
+  - name: Direct Assets
+  - name: Termed Assets
+  - name: Compose
+  - name: Collections
+  - name: TTL
+  - name: Accounts
+
+paths:
+  /:
+    post:
+      tags:
+        - Direct Assets
+      summary: Upload asset directly
+      operationId: uploadAsset
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/ServiceId'
+        - $ref: '#/components/parameters/ContentType'
+        - $ref: '#/components/parameters/TargetTenantName'
+        - $ref: '#/components/parameters/TargetBucketName'
+        - $ref: '#/components/parameters/TTL'
+        - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/Private'
+        - $ref: '#/components/parameters/ContentEncoding'
+        - $ref: '#/components/parameters/ClientType'
+        - $ref: '#/components/parameters/ClientVersion'
+        - name: x-gw-chunk-upload
+          in: header
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - name: x-gw-session
+          in: header
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]+$'
+        - name: x-gw-chunk-reference
+          in: header
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_=-]+$'
+        - name: x-gw-part-number
+          in: header
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+          '*/*':
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          headers:
+            Location:
+              $ref: '#/components/headers/LocationAssetId'
+            Date:
+              $ref: '#/components/headers/Date'
+            Content-Length:
+              $ref: '#/components/headers/ContentLength'
+            x-gw-asset-size:
+              $ref: '#/components/headers/GatewayAssetSize'
+            x-gw-creation-time:
+              $ref: '#/components/headers/GatewayCreationTime'
+            x-gw-target-tenant-name:
+              $ref: '#/components/headers/GatewayTargetTenantName'
+            x-gw-target-bucket-name:
+              $ref: '#/components/headers/GatewayTargetBucketName'
+            x-trace-id:
+              $ref: '#/components/headers/TraceId'
+          links:
+            GetAssetById:
+              operationId: getAsset
+              parameters:
+                assetId: '$response.header.Location'
+            HeadAsset:
+              operationId: headAsset
+              parameters:
+                assetId: '$response.header.Location'
+            GetAssetInfo:
+              operationId: getAssetInfo
+              parameters:
+                assetId: '$response.header.Location'
+            GetAssetMetadata:
+              operationId: getAssetMetadata
+              parameters:
+                assetId: '$response.header.Location'
+            DeleteAsset:
+              operationId: deleteAsset
+              parameters:
+                assetId: '$response.header.Location'
+            GetAssetReplicas:
+              operationId: getAssetReplicas
+              parameters:
+                assetId: '$response.header.Location'
+            GetAssetPartIds:
+              operationId: getAssetPartIds
+              parameters:
+                assetId: '$response.header.Location'
+            UpdateExpiry:
+              operationId: updateExpiry
+              parameters:
+                x-gw-asset-id: '$response.header.Location'
+            RestoreAsset:
+              operationId: restoreAsset
+              parameters:
+                x-gw-asset-id: '$response.header.Location'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /{assetId}:
+    get:
+      tags:
+        - Direct Assets
+      summary: Get asset content
+      operationId: getAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetIdPath'
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/Range'
+        - $ref: '#/components/parameters/IfModifiedSince'
+      responses:
+        '200':
+          headers:
+            Date:
+              $ref: '#/components/headers/Date'
+            Content-Type:
+              $ref: '#/components/headers/ContentTypeAsset'
+            Content-Length:
+              $ref: '#/components/headers/ContentLength'
+            x-gw-asset-size:
+              $ref: '#/components/headers/GatewayAssetSize'
+            x-gw-content-type:
+              $ref: '#/components/headers/GatewayContentType'
+            x-gw-creation-time:
+              $ref: '#/components/headers/GatewayCreationTime'
+            x-gw-service-id:
+              $ref: '#/components/headers/GatewayServiceId'
+            x-gw-private:
+              $ref: '#/components/headers/GatewayPrivate'
+            x-gw-ttl:
+              $ref: '#/components/headers/GatewayTtl'
+            x-gw-owner-id:
+              $ref: '#/components/headers/GatewayOwnerId'
+            Last-Modified:
+              $ref: '#/components/headers/LastModified'
+            x-trace-id:
+              $ref: '#/components/headers/TraceId'
+          links:
+            GetAssetInfo:
+              operationId: getAssetInfo
+              parameters:
+                assetId: '$request.path.assetId'
+            GetAssetMetadata:
+              operationId: getAssetMetadata
+              parameters:
+                assetId: '$request.path.assetId'
+            DeleteAsset:
+              operationId: deleteAsset
+              parameters:
+                assetId: '$request.path.assetId'
+            UpdateExpiry:
+              operationId: updateExpiry
+              parameters:
+                x-gw-asset-id: '$request.path.assetId'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            text/plain:
+              schema:
+                type: string
+        '206':
+          headers:
+            Date:
+              $ref: '#/components/headers/Date'
+            Content-Range:
+              $ref: '#/components/headers/ContentRange'
+            Content-Type:
+              $ref: '#/components/headers/ContentTypeAsset'
+            Content-Length:
+              $ref: '#/components/headers/ContentLength'
+            Accept-Ranges:
+              $ref: '#/components/headers/AcceptRanges'
+            x-trace-id:
+              $ref: '#/components/headers/TraceId'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            text/plain:
+              schema:
+                type: string
+        '304':
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/Gone'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+
+    head:
+      tags:
+        - Direct Assets
+      summary: Get asset metadata
+      operationId: headAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetIdPath'
+        - $ref: '#/components/parameters/GatewayClient'
+      responses:
+        '200':
+          headers:
+            Content-Length:
+              $ref: '#/components/headers/ContentLengthAssetSize'
+            Content-Type:
+              $ref: '#/components/headers/ContentTypeAssetStrict'
+            Date:
+              $ref: '#/components/headers/Date'
+            x-gw-asset-size:
+              $ref: '#/components/headers/GatewayAssetSize'
+            x-gw-creation-time:
+              $ref: '#/components/headers/GatewayCreationTime'
+            x-gw-ttl:
+              $ref: '#/components/headers/GatewayTtl'
+            x-trace-id:
+              $ref: '#/components/headers/TraceId'
+          links:
+            GetAssetInfo:
+              operationId: getAssetInfo
+              parameters:
+                assetId: '$request.path.assetId'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/Gone'
+
+    delete:
+      tags:
+        - Direct Assets
+      summary: Delete asset
+      operationId: deleteAsset
+      parameters:
+        - $ref: '#/components/parameters/AssetIdPath'
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/ServiceId'
+      responses:
+        '202':
+          headers:
+            Date:
+              $ref: '#/components/headers/Date'
+            Content-Length:
+              $ref: '#/components/headers/ContentLength'
+            x-trace-id:
+              $ref: '#/components/headers/TraceId'
+          links:
+            VerifyDeletionViaGet:
+              operationId: getAsset
+              parameters:
+                assetId: '$request.path.assetId'
+            RestoreAsset:
+              operationId: restoreAsset
+              parameters:
+                x-gw-asset-id: '$request.path.assetId'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /{assetId}/Info:
+    get:
+      tags:
+        - Direct Assets
+      summary: Get asset properties
+      operationId: getAssetInfo
+      parameters:
+        - $ref: '#/components/parameters/AssetIdPath'
+        - $ref: '#/components/parameters/GatewayClient'
+      responses:
+        '200':
+          headers:
+            Date:
+              $ref: '#/components/headers/Date'
+            Content-Length:
+              $ref: '#/components/headers/ContentLength'
+            x-gw-asset-size:
+              $ref: '#/components/headers/GatewayAssetSize'
+            x-gw-content-type:
+              $ref: '#/components/headers/GatewayContentType'
+            x-gw-service-id:
+              $ref: '#/components/headers/GatewayServiceId'
+            x-gw-creation-time:
+              $ref: '#/components/headers/GatewayCreationTime'
+            x-gw-owner-id:
+              $ref: '#/components/headers/GatewayOwnerId'
+            x-gw-ttl:
+              $ref: '#/components/headers/GatewayTtl'
+            x-gw-private:
+              $ref: '#/components/headers/GatewayPrivate'
+            x-trace-id:
+              $ref: '#/components/headers/TraceId'
+          links:
+            GetAssetContent:
+              operationId: getAsset
+              parameters:
+                assetId: '$request.path.assetId'
+            UpdateExpiry:
+              operationId: updateExpiry
+              parameters:
+                x-gw-asset-id: '$request.path.assetId'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/Gone'
+
+  /{assetId}/Metadata:
+    get:
+      tags:
+        - Direct Assets
+      summary: Get asset metadata only
+      operationId: getAssetMetadata
+      parameters:
+        - $ref: '#/components/parameters/AssetIdPath'
+        - $ref: '#/components/parameters/GatewayClient'
+      responses:
+        '200':
+          headers:
+            Date:
+              $ref: '#/components/headers/Date'
+            Content-Length:
+              $ref: '#/components/headers/ContentLength'
+            Last-Modified:
+              $ref: '#/components/headers/LastModified'
+            x-trace-id:
+              $ref: '#/components/headers/TraceId'
+          links:
+            GetAssetContent:
+              operationId: getAsset
+              parameters:
+                assetId: '$request.path.assetId'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/Gone'
+
+  /{assetId}/Replicas:
+    get:
+      tags:
+        - Direct Assets
+      summary: Get asset replica locations
+      operationId: getAssetReplicas
+      parameters:
+        - $ref: '#/components/parameters/AssetIdPath'
+        - $ref: '#/components/parameters/GatewayClient'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplicaLocations'
+          links:
+            GetAssetContent:
+              operationId: getAsset
+              parameters:
+                assetId: '$request.path.assetId'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+
+  /{assetId}/PartIds:
+    get:
+      tags:
+        - Direct Assets
+      summary: Get asset part IDs
+      operationId: getAssetPartIds
+      parameters:
+        - $ref: '#/components/parameters/AssetIdPath'
+        - $ref: '#/components/parameters/GatewayClient'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartIdsResponse'
+          links:
+            ComposeAsset:
+              operationId: composeAsset
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /restore:
+    put:
+      tags:
+        - TTL
+      summary: Restore deleted asset
+      operationId: restoreAsset
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+        - name: x-gw-asset-id
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_=-]+$'
+        - $ref: '#/components/parameters/ServiceId'
+      responses:
+        '200':
+          links:
+            GetAsset:
+              operationId: getAsset
+              parameters:
+                assetId: '$request.header.x-gw-asset-id'
+            GetAssetInfo:
+              operationId: getAssetInfo
+              parameters:
+                assetId: '$request.header.x-gw-asset-id'
+            UpdateExpiry:
+              operationId: updateExpiry
+              parameters:
+                x-gw-asset-id: '$request.header.x-gw-asset-id'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/Gone'
+
+  /updateExpiry:
+    put:
+      tags:
+        - TTL
+      summary: Update asset expiry
+      operationId: updateExpiry
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+        - name: x-gw-asset-id
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_=-]+$'
+        - $ref: '#/components/parameters/TTL'
+        - $ref: '#/components/parameters/ServiceId'
+      responses:
+        '200':
+          links:
+            GetAssetAfterUpdate:
+              operationId: getAsset
+              parameters:
+                assetId: '$request.header.x-gw-asset-id'
+            RestoreAsset:
+              operationId: restoreAsset
+              parameters:
+                x-gw-asset-id: '$request.header.x-gw-asset-id'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '410':
+          $ref: '#/components/responses/Gone'
+
+  /updateExpiryWrongMethod:
+    get:
+      tags:
+        - Direct Assets
+      summary: Update expiry wrong method
+      operationId: updateExpiryWrongMethod
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+      responses:
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+
+  /termed/{tenant}/{bucket}:
+    get:
+      tags:
+        - Termed Assets
+      summary: List termed assets
+      operationId: listTermedAssets
+      parameters:
+        - $ref: '#/components/parameters/TenantPath'
+        - $ref: '#/components/parameters/BucketPath'
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/Prefix'
+        - $ref: '#/components/parameters/MaxResults'
+      responses:
+        '200':
+          headers:
+            x-gw-target-tenant-name:
+              $ref: '#/components/headers/GatewayTargetTenantName'
+            x-gw-target-bucket-name:
+              $ref: '#/components/headers/GatewayTargetBucketName'
+          links:
+            GetTermedAssetFromList:
+              operationId: getTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                assetTerm: '$response.body#/entries/0/assetTerm'
+            HeadTermedAssetFromList:
+              operationId: headTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                assetTerm: '$response.body#/entries/0/assetTerm'
+            PutTermedAsset:
+              operationId: putTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /termed/{tenant}/{bucket}/{assetTerm}:
+    get:
+      tags:
+        - Termed Assets
+      summary: Get termed asset
+      operationId: getTermedAsset
+      parameters:
+        - $ref: '#/components/parameters/TenantPath'
+        - $ref: '#/components/parameters/BucketPath'
+        - $ref: '#/components/parameters/AssetTermPath'
+        - $ref: '#/components/parameters/GatewayClient'
+      responses:
+        '200':
+          headers:
+            x-gw-asset-id:
+              $ref: '#/components/headers/GatewayAssetId'
+            x-gw-asset-size:
+              $ref: '#/components/headers/GatewayAssetSize'
+            x-gw-target-tenant-name:
+              $ref: '#/components/headers/GatewayTargetTenantName'
+            x-gw-target-bucket-name:
+              $ref: '#/components/headers/GatewayTargetBucketName'
+            x-trace-id:
+              $ref: '#/components/headers/TraceId'
+          links:
+            DeleteDirectAsset:
+              operationId: deleteAsset
+              parameters:
+                assetId: '$response.header.x-gw-asset-id'
+            DeleteTermedAsset:
+              operationId: deleteTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                assetTerm: '$request.path.assetTerm'
+            GetDirectAsset:
+              operationId: getAsset
+              parameters:
+                assetId: '$response.header.x-gw-asset-id'
+            HeadTermedAsset:
+              operationId: headTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                assetTerm: '$request.path.assetTerm'
+            ListTermedAssets:
+              operationId: listTermedAssets
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+            PutTermedAsset:
+              operationId: putTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags:
+        - Termed Assets
+      summary: Create or update termed asset
+      operationId: putTermedAsset
+      parameters:
+        - $ref: '#/components/parameters/TenantPath'
+        - $ref: '#/components/parameters/BucketPath'
+        - $ref: '#/components/parameters/AssetTermPath'
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/TTL'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          headers:
+            Location:
+              $ref: '#/components/headers/LocationAssetId'
+            x-gw-asset-id:
+              $ref: '#/components/headers/GatewayAssetId'
+            x-gw-asset-size:
+              $ref: '#/components/headers/GatewayAssetSize'
+            x-gw-creation-time:
+              $ref: '#/components/headers/GatewayCreationTime'
+            x-trace-id:
+              $ref: '#/components/headers/TraceId'
+          links:
+            DeleteDirectAsset:
+              operationId: deleteAsset
+              parameters:
+                assetId: '$response.header.x-gw-asset-id'
+            DeleteTermedAsset:
+              operationId: deleteTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                assetTerm: '$request.path.assetTerm'
+            GetDirectAsset:
+              operationId: getAsset
+              parameters:
+                assetId: '$response.header.x-gw-asset-id'
+            GetTermedAsset:
+              operationId: getTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                assetTerm: '$request.path.assetTerm'
+            HeadTermedAsset:
+              operationId: headTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                assetTerm: '$request.path.assetTerm'
+            ListTermedAssets:
+              operationId: listTermedAssets
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+    head:
+      tags:
+        - Termed Assets
+      summary: Head termed asset
+      operationId: headTermedAsset
+      parameters:
+        - $ref: '#/components/parameters/TenantPath'
+        - $ref: '#/components/parameters/BucketPath'
+        - $ref: '#/components/parameters/AssetTermPath'
+        - $ref: '#/components/parameters/GatewayClient'
+      responses:
+        '200':
+          headers:
+            x-gw-asset-id:
+              $ref: '#/components/headers/GatewayAssetId'
+            x-gw-asset-size:
+              $ref: '#/components/headers/GatewayAssetSize'
+          links:
+            DeleteTermedAsset:
+              operationId: deleteTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                assetTerm: '$request.path.assetTerm'
+            GetDirectAsset:
+              operationId: getAsset
+              parameters:
+                assetId: '$response.header.x-gw-asset-id'
+            GetTermedAsset:
+              operationId: getTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                assetTerm: '$request.path.assetTerm'
+            ListTermedAssets:
+              operationId: listTermedAssets
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+            PutTermedAsset:
+              operationId: putTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+          content: {}
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags:
+        - Termed Assets
+      summary: Delete termed asset
+      operationId: deleteTermedAsset
+      parameters:
+        - $ref: '#/components/parameters/TenantPath'
+        - $ref: '#/components/parameters/BucketPath'
+        - $ref: '#/components/parameters/AssetTermPath'
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/ServiceId'
+      responses:
+        '202':
+          headers:
+            x-gw-asset-id:
+              $ref: '#/components/headers/GatewayAssetId'
+          links:
+            VerifyDeletionViaGet:
+              operationId: getTermedAsset
+              parameters:
+                tenant: '$request.path.tenant'
+                bucket: '$request.path.bucket'
+                assetTerm: '$request.path.assetTerm'
+          content: {}
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /compose:
+    post:
+      tags:
+        - Compose
+      summary: Compose parts together
+      operationId: composeAsset
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/ServiceId'
+        - $ref: '#/components/parameters/ContentType'
+        - $ref: '#/components/parameters/TargetTenantName'
+        - $ref: '#/components/parameters/TargetBucketName'
+        - $ref: '#/components/parameters/TTL'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComposeRequest'
+      responses:
+        '201':
+          headers:
+            Location:
+              $ref: '#/components/headers/LocationAssetId'
+            x-gw-asset-size:
+              $ref: '#/components/headers/GatewayAssetSize'
+          links:
+            GetComposedAsset:
+              operationId: getAsset
+              parameters:
+                assetId: '$response.header.Location'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /signedUrl:
+    get:
+      tags:
+        - Compose
+      summary: Get signed URL for upload
+      operationId: getSignedUrl
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+        - name: x-gw-url-type
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [GET, POST]
+        - name: x-gw-chunk-upload
+          in: header
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - $ref: '#/components/parameters/TargetTenantName'
+        - $ref: '#/components/parameters/TargetBucketName'
+        - $ref: '#/components/parameters/ServiceId'
+        - $ref: '#/components/parameters/ContentType'
+        - name: x-gw-session
+          in: header
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]+$'
+        - name: x-gw-max-upload-size
+          in: header
+          schema:
+            type: integer
+            default: 4194304
+            maximum: 4194304
+        - name: x-gw-url-ttl-secs
+          in: header
+          schema:
+            type: integer
+            default: 300
+        - $ref: '#/components/parameters/TTL'
+        - $ref: '#/components/parameters/OwnerId'
+        - name: x-gw-asset-id
+          in: header
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_=-]+$'
+      responses:
+        '200':
+          headers:
+            x-gw-signed-url:
+              schema:
+                type: string
+                pattern: '^[A-Za-z0-9:/?&=._%-]+$'
+          links:
+            UploadChunkViaSignedUrl:
+              operationId: uploadAsset
+            ComposeAfterParts:
+              operationId: composeAsset
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+
+  /signedId/{signedId}:
+    post:
+      tags:
+        - Compose
+      summary: Upload part via signed ID
+      operationId: uploadPartViaSignedId
+      parameters:
+        - name: signedId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_=-]+$'
+        - $ref: '#/components/parameters/GatewayClient'
+        - name: x-gw-part-number
+          in: header
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          headers:
+            Location:
+              schema:
+                type: string
+                pattern: '^/signedId/[A-Za-z0-9_=-]+$'
+          links:
+            ComposeParts:
+              operationId: composeAsset
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /accounts:
+    get:
+      tags:
+        - Accounts
+      summary: Get accounts
+      operationId: getAccounts
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/TargetTenantName'
+      responses:
+        '200':
+          links:
+            ListTermedAssets:
+              operationId: listTermedAssets
+              parameters:
+                tenant: '$response.body#/accounts/0/accountName'
+                bucket: '$response.body#/accounts/0/buckets/0/bucketName'
+            GetBuckets:
+              operationId: getBuckets
+              parameters:
+                x-gw-target-tenant-name: '$response.body#/accounts/0/accountName'
+            GetOrListCollections:
+              operationId: getOrListCollections
+              parameters:
+                x-gw-target-tenant-name: '$response.body#/accounts/0/accountName'
+                x-gw-target-bucket-name: '$response.body#/accounts/0/buckets/0/bucketName'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    head:
+      tags:
+        - Accounts
+      summary: Check accounts endpoint
+      operationId: headAccounts
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+      responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /accounts/buckets:
+    get:
+      tags:
+        - Accounts
+      summary: Get buckets
+      operationId: getBuckets
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/TargetTenantName'
+        - $ref: '#/components/parameters/TargetBucketName'
+      responses:
+        '200':
+          headers:
+            x-gw-target-tenant-name:
+              $ref: '#/components/headers/GatewayTargetTenantName'
+          links:
+            ListTermedAssets:
+              operationId: listTermedAssets
+              parameters:
+                tenant: '$response.header.x-gw-target-tenant-name'
+                bucket: '$response.body#/buckets/0/bucketName'
+            GetOrListCollections:
+              operationId: getOrListCollections
+              parameters:
+                x-gw-target-tenant-name: '$response.header.x-gw-target-tenant-name'
+                x-gw-target-bucket-name: '$response.body#/buckets/0/bucketName'
+            RefreshBuckets:
+              operationId: getBuckets
+              parameters:
+                x-gw-target-tenant-name: '$request.header.x-gw-target-tenant-name'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BucketsResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /accounts/buckets/collections:
+    get:
+      tags:
+        - Collections
+      summary: Get or list collections
+      operationId: getOrListCollections
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/TargetTenantName'
+        - $ref: '#/components/parameters/TargetBucketName'
+        - name: x-gw-collection-term
+          in: header
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,149}$'
+      responses:
+        '200':
+          headers:
+            x-gw-target-tenant-name:
+              $ref: '#/components/headers/GatewayTargetTenantName'
+            x-gw-target-bucket-name:
+              $ref: '#/components/headers/GatewayTargetBucketName'
+            x-trace-id:
+              $ref: '#/components/headers/TraceId'
+          links:
+            DeleteCollection:
+              operationId: deleteCollection
+              parameters:
+                x-gw-target-tenant-name: '$response.header.x-gw-target-tenant-name'
+                x-gw-target-bucket-name: '$response.header.x-gw-target-bucket-name'
+                x-gw-collection-term: '$response.body#/entries/0'
+            UpdateCollection:
+              operationId: createOrUpdateCollection
+              parameters:
+                x-gw-target-tenant-name: '$response.header.x-gw-target-tenant-name'
+                x-gw-target-bucket-name: '$response.header.x-gw-target-bucket-name'
+            ListTermedAssets:
+              operationId: listTermedAssets
+              parameters:
+                tenant: '$response.header.x-gw-target-tenant-name'
+                bucket: '$response.header.x-gw-target-bucket-name'
+            InitiateChunkedUpload:
+              operationId: getSignedUrl
+              parameters:
+                x-gw-target-tenant-name: '$response.header.x-gw-target-tenant-name'
+                x-gw-target-bucket-name: '$response.header.x-gw-target-bucket-name'
+                x-gw-url-type: 'POST'
+                x-gw-chunk-upload: 'true'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionListResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    post:
+      tags:
+        - Collections
+      summary: Create or update collection
+      operationId: createOrUpdateCollection
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/TargetTenantName'
+        - $ref: '#/components/parameters/TargetBucketName'
+        - name: x-gw-collection-update
+          in: header
+          schema:
+            type: string
+            enum: ['true', 'false']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Collection'
+      responses:
+        '200':
+          headers:
+            x-gw-target-tenant-name:
+              $ref: '#/components/headers/GatewayTargetTenantName'
+            x-gw-target-bucket-name:
+              $ref: '#/components/headers/GatewayTargetBucketName'
+          links:
+            GetOrListCollections:
+              operationId: getOrListCollections
+              parameters:
+                x-gw-target-tenant-name: '$response.header.x-gw-target-tenant-name'
+                x-gw-target-bucket-name: '$response.header.x-gw-target-bucket-name'
+            ListTermedAssets:
+              operationId: listTermedAssets
+              parameters:
+                tenant: '$response.header.x-gw-target-tenant-name'
+                bucket: '$response.header.x-gw-target-bucket-name'
+          content: {}
+        '202':
+          headers:
+            x-gw-target-tenant-name:
+              $ref: '#/components/headers/GatewayTargetTenantName'
+            x-gw-target-bucket-name:
+              $ref: '#/components/headers/GatewayTargetBucketName'
+          links:
+            GetOrListCollections:
+              operationId: getOrListCollections
+              parameters:
+                x-gw-target-tenant-name: '$response.header.x-gw-target-tenant-name'
+                x-gw-target-bucket-name: '$response.header.x-gw-target-bucket-name'
+            CreateNewCollection:
+              operationId: createOrUpdateCollection
+              parameters:
+                x-gw-target-tenant-name: '$response.header.x-gw-target-tenant-name'
+                x-gw-target-bucket-name: '$response.header.x-gw-target-bucket-name'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+    delete:
+      tags:
+        - Collections
+      summary: Delete collection
+      operationId: deleteCollection
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+        - $ref: '#/components/parameters/TargetTenantName'
+        - $ref: '#/components/parameters/TargetBucketName'
+        - name: x-gw-collection-term
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,149}$'
+      responses:
+        '202':
+          headers:
+            x-gw-target-tenant-name:
+              $ref: '#/components/headers/GatewayTargetTenantName'
+            x-gw-target-bucket-name:
+              $ref: '#/components/headers/GatewayTargetBucketName'
+          links:
+            VerifyDeletion:
+              operationId: getOrListCollections
+              parameters:
+                x-gw-target-tenant-name: '$response.header.x-gw-target-tenant-name'
+                x-gw-target-bucket-name: '$response.header.x-gw-target-bucket-name'
+            ListTermedAssets:
+              operationId: listTermedAssets
+              parameters:
+                tenant: '$response.header.x-gw-target-tenant-name'
+                bucket: '$response.header.x-gw-target-bucket-name'
+            CreateNewCollection:
+              operationId: createOrUpdateCollection
+              parameters:
+                x-gw-target-tenant-name: '$response.header.x-gw-target-tenant-name'
+                x-gw-target-bucket-name: '$response.header.x-gw-target-bucket-name'
+          content: {}
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /_import/register:
+    post:
+      tags:
+        - Direct Assets
+      summary: Register imported asset
+      operationId: importRegister
+      parameters:
+        - $ref: '#/components/parameters/GatewayClient'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportRequest'
+      responses:
+        '201':
+          headers:
+            Location:
+              $ref: '#/components/headers/LocationAssetId'
+            x-gw-asset-size:
+              $ref: '#/components/headers/GatewayAssetSize'
+          links:
+            GetAssetInfo:
+              operationId: getAssetInfo
+              parameters:
+                assetId: '$response.header.Location'
+            HeadAsset:
+              operationId: headAsset
+              parameters:
+                assetId: '$response.header.Location'
+            UpdateExpiry:
+              operationId: updateExpiry
+              parameters:
+                x-gw-asset-id: '$response.header.Location'
+            DeleteAsset:
+              operationId: deleteAsset
+              parameters:
+                assetId: '$response.header.Location'
+          content: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy, degraded]
+
+components:
+  headers:
+    Date:
+      schema:
+        $ref: '#/components/schemas/HttpDate'
+    ContentTypeText:
+      schema:
+        type: string
+        example: "text/plain;charset=utf-8"
+    ContentLength:
+      schema:
+        type: integer
+        example: 0
+    AllowMethods:
+      schema:
+        type: string
+        pattern: '^[A-Z,]+$'
+        example: "PUT"
+    TraceId:
+      schema:
+        $ref: '#/components/schemas/TraceId'
+    Connection:
+      schema:
+        $ref: '#/components/schemas/ConnectionState'
+    ConnectionClose:
+      schema:
+        allOf:
+          - $ref: '#/components/schemas/ConnectionState'
+        default: close
+    LocationAssetId:
+      schema:
+        $ref: '#/components/schemas/AssetId'
+    LocationAssetIdPath:
+      schema:
+        $ref: '#/components/schemas/AssetIdPath'
+    GatewayAssetId:
+      schema:
+        $ref: '#/components/schemas/AssetId'
+    GatewayAssetSize:
+      schema:
+        type: integer
+    GatewayCreationTime:
+      schema:
+        $ref: '#/components/schemas/HttpDate'
+    GatewayTargetTenantName:
+      schema:
+        $ref: '#/components/schemas/TenantNameToken'
+    GatewayTargetBucketName:
+      schema:
+        $ref: '#/components/schemas/BucketNameToken'
+    GatewayServiceId:
+      schema:
+        $ref: '#/components/schemas/OptionalToken'
+    GatewayPrivate:
+      schema:
+        $ref: '#/components/schemas/BooleanStringDefaultFalse'
+    GatewayTtl:
+      schema:
+        type: integer
+    GatewayOwnerId:
+      schema:
+        $ref: '#/components/schemas/OptionalToken'
+    GatewayContentType:
+      schema:
+        $ref: '#/components/schemas/GatewayContentType'
+    ContentTypeAsset:
+      schema:
+        $ref: '#/components/schemas/MimeType'
+    ContentTypeAssetStrict:
+      schema:
+        $ref: '#/components/schemas/GatewayContentType'
+    ContentRange:
+      schema:
+        $ref: '#/components/schemas/ContentRange'
+    AcceptRanges:
+      schema:
+        $ref: '#/components/schemas/BytesLiteral'
+    LastModified:
+      schema:
+        $ref: '#/components/schemas/HttpDate'
+    ContentEncoding:
+      schema:
+        type: string
+        pattern: '^[a-z0-9-]+$'
+    ContentLengthAssetSize:
+      schema:
+        type: integer
+
+  parameters:
+    AssetIdPath:
+      name: assetId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/AssetId'
+
+    TenantPath:
+      name: tenant
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/TenantName'
+
+    BucketPath:
+      name: bucket
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/BucketName'
+
+    AssetTermPath:
+      name: assetTerm
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/AssetTerm'
+
+    GatewayClient:
+      name: x-gw-client
+      in: header
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_.-]+$'
+
+    ServiceId:
+      name: x-gw-service-id
+      in: header
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_.-]+$'
+
+    ContentType:
+      name: Content-Type
+      in: header
+      schema:
+        $ref: '#/components/schemas/GatewayContentType'
+
+    TargetTenantName:
+      name: x-gw-target-tenant-name
+      in: header
+      schema:
+        $ref: '#/components/schemas/TenantNameToken'
+
+    TargetBucketName:
+      name: x-gw-target-bucket-name
+      in: header
+      schema:
+        $ref: '#/components/schemas/BucketNameToken'
+
+    TTL:
+      name: x-gw-ttl-secs
+      in: header
+      schema:
+        type: integer
+        format: int64
+
+    OwnerId:
+      name: x-gw-owner-id
+      in: header
+      schema:
+        $ref: '#/components/schemas/OptionalToken'
+
+    Private:
+      name: x-gw-private
+      in: header
+      schema:
+        $ref: '#/components/schemas/BooleanStringDefaultFalse'
+
+    ContentEncoding:
+      name: Content-Encoding
+      in: header
+      schema:
+        type: string
+        pattern: '^[a-z0-9-]+$'
+
+    ClientType:
+      name: x-gw-client-type
+      in: header
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]+$'
+
+    ClientVersion:
+      name: x-gw-client-version
+      in: header
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_.-]+$'
+
+    Prefix:
+      name: prefix
+      in: query
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_./-]*$'
+
+    MaxResults:
+      name: maxResults
+      in: query
+      schema:
+        type: integer
+
+    Range:
+      name: Range
+      in: header
+      schema:
+        type: string
+        pattern: '^bytes=[0-9]*-[0-9]*$'
+
+    IfModifiedSince:
+      name: If-Modified-Since
+      in: header
+      schema:
+        $ref: '#/components/schemas/HttpDate'
+
+  schemas:
+    HttpDate:
+      type: string
+      pattern: '^[A-Za-z0-9, :+-]+$'
+
+    TraceId:
+      type: string
+      pattern: '^[A-Za-z0-9+/=]+$'
+
+    ConnectionState:
+      type: string
+      pattern: '^[A-Za-z]+$'
+
+    AssetId:
+      type: string
+      pattern: '^[A-Za-z0-9_=-]+$'
+
+    AssetIdPath:
+      type: string
+      pattern: '^/?[A-Za-z0-9_=-]+(\\.[A-Za-z0-9_-]+)?$'
+
+    TenantName:
+      type: string
+      pattern: '^[A-Za-z0-9_-]+$'
+
+    BucketName:
+      type: string
+      pattern: '^[A-Za-z0-9_-]+$'
+
+    AssetTerm:
+      type: string
+      pattern: '^[A-Za-z0-9_./-]+$'
+
+    TenantNameToken:
+      type: string
+      pattern: '^[A-Za-z0-9_-]+$'
+
+    BucketNameToken:
+      type: string
+      pattern: '^[A-Za-z0-9_-]+$'
+
+    OptionalToken:
+      type: string
+      pattern: '^[A-Za-z0-9_-]*$'
+
+    BooleanStringDefaultFalse:
+      type: string
+      enum: ['true', 'false']
+      default: 'false'
+
+    MimeType:
+      type: string
+      pattern: '^[A-Za-z0-9/_+.-]+$'
+
+    GatewayContentType:
+      type: string
+      pattern: '^[A-Za-z0-9/_+-]+$'
+
+    ContentRange:
+      type: string
+      pattern: '^bytes [0-9]+-[0-9]+/[0-9]+$'
+      example: "bytes 0-10/57"
+
+    BytesLiteral:
+      type: string
+      pattern: '^bytes$'
+      default: bytes
+      example: bytes
+
+    ListResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/ListEntry'
+        nextPageToken:
+          type: string
+          pattern: '^[A-Za-z0-9_=-]*$'
+          nullable: true
+
+    ListEntry:
+      type: object
+      properties:
+        assetTerm:
+          $ref: '#/components/schemas/AssetTerm'
+        assetSize:
+          type: integer
+          format: int64
+        expirationTimeMs:
+          type: integer
+          format: int64
+          nullable: true
+        modifiedTimeMs:
+          type: integer
+          format: int64
+          nullable: true
+        isDirectory:
+          type: boolean
+          nullable: true
+
+    ReplicaLocations:
+      type: object
+      properties:
+        replicas:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReplicaInfo'
+
+    ReplicaInfo:
+      type: object
+      properties:
+        hostname:
+          type: string
+          pattern: '^[A-Za-z0-9.-]+$'
+        port:
+          type: integer
+        datacenter:
+          type: string
+          pattern: '^[A-Za-z0-9_-]+$'
+        disk:
+          type: string
+          pattern: '^[A-Za-z0-9_./-]+$'
+        isSealed:
+          type: boolean
+        isDown:
+          type: boolean
+
+    PartIdsResponse:
+      type: object
+      properties:
+        partIds:
+          type: array
+          items:
+            type: string
+            pattern: '^[/A-Za-z0-9_=-]+$'
+        totalSize:
+          type: integer
+          format: int64
+
+    ComposeRequest:
+      type: object
+      required:
+        - signedPartIds
+      properties:
+        signedPartIds:
+          type: array
+          items:
+            type: string
+            pattern: '^[/A-Za-z0-9_=-]+$'
+          minItems: 1
+
+    CollectionListResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9_.-]+$'
+        nextPageToken:
+          type: string
+          pattern: '^[A-Za-z0-9_=-]*$'
+          nullable: true
+
+    Collection:
+      type: object
+      required:
+        - collectionTerm
+      properties:
+        collectionTerm:
+          type: string
+          pattern: '^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,149}$'
+        versionSchema:
+          type: string
+          enum: [TIMESTAMP, MONOTONIC, SEMANTIC]
+        retentionCount:
+          type: integer
+          nullable: true
+
+    ImportRequest:
+      type: object
+      required:
+        - sourceUrl
+      properties:
+        sourceUrl:
+          type: string
+          pattern: '^https?://.*$'
+        targetTenant:
+          type: string
+          pattern: '^[A-Za-z0-9_-]+$'
+
+    AccountsResponse:
+      type: object
+      properties:
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Account'
+
+    BucketsResponse:
+      type: object
+      properties:
+        buckets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Bucket'
+
+    Account:
+      type: object
+      properties:
+        accountName:
+          $ref: '#/components/schemas/TenantName'
+        buckets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Bucket'
+
+    Bucket:
+      type: object
+      properties:
+        bucketId:
+          type: integer
+        bucketName:
+          $ref: '#/components/schemas/BucketName'
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, DELETE_IN_PROGRESS]
+
+  responses:
+    BadRequest:
+      headers:
+        x-gw-error-code:
+          schema:
+            type: string
+            pattern: '^[A-Za-z]+$'
+        x-gw-failure-reason:
+          schema:
+            type: string
+      content: {}
+
+    NotFound:
+      headers:
+        x-gw-error-code:
+          schema:
+            type: string
+            pattern: '^[A-Za-z]+$'
+            default: NotFound
+      content: {}
+
+    Gone:
+      headers:
+        x-gw-error-code:
+          schema:
+            type: string
+            pattern: '^[A-Za-z]+$'
+            default: Deleted
+      content: {}
+
+    MethodNotAllowed:
+      headers:
+        Allow:
+          schema:
+            type: string
+            example: "PUT"
+        x-gw-error-code:
+          schema:
+            type: string
+            pattern: '^[A-Za-z]+$'
+            default: NotAllowed
+      content: {}
+
+    InternalError:
+      headers:
+        x-gw-error-code:
+          schema:
+            type: string
+            pattern: '^[A-Za-z]+$'
+            default: InternalServerError
+      content: {}
+
+    Unauthorized:
+      headers:
+        x-gw-error-code:
+          schema:
+            type: string
+            pattern: '^[A-Za-z]+$'
+            default: Unauthorized
+      content: {}
+
+    AccessDenied:
+      headers:
+        x-gw-error-code:
+          schema:
+            type: string
+            pattern: '^[A-Za-z]+$'
+            default: AccessDenied
+      content: {}
+
+    RangeNotSatisfiable:
+      headers:
+        x-gw-error-code:
+          schema:
+            type: string
+            pattern: '^[A-Za-z]+$'
+            default: RangeNotSatisfiable
+      content: {}
