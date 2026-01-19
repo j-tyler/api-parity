@@ -834,6 +834,7 @@ def _generate_chains_with_seed_walking(
 
         # Track if this seed contributed any new unique chains
         seed_contributed = False
+        new_chains_this_seed = 0
 
         for chain in chains:
             sig = _chain_signature(chain)
@@ -841,6 +842,7 @@ def _generate_chains_with_seed_walking(
                 seen_signatures.add(sig)
                 accumulated_chains.append(chain)
                 seed_contributed = True
+                new_chains_this_seed += 1
 
                 # Stop early if we've reached the target
                 if len(accumulated_chains) >= max_chains:
@@ -849,10 +851,15 @@ def _generate_chains_with_seed_walking(
         if seed_contributed:
             seeds_used.append(current_seed)
 
+        # Progress indication: report every 10 seeds tried to show activity
+        # during potentially long-running seed walking (each seed can take 10-20s)
+        if seeds_tried > 0 and seeds_tried % 10 == 0:
+            print(f"  Seed walking: tried {seeds_tried} seeds, {len(accumulated_chains)}/{max_chains} unique chains found...")
+
         current_seed += 1
         seeds_tried += 1
 
-    # Trim to max_chains in case we slightly over-collected
+    # Defensive slice in case future code changes allow over-collection
     return accumulated_chains[:max_chains], seeds_used
 
 
