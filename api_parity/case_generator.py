@@ -841,7 +841,29 @@ class CaseGenerator:
                 )
 
                 # Add all body fields referenced by links in the spec
-                for field_pointer in generator_self._link_fields.body_pointers:
+                # Sort by length descending (longest first) to ensure nested fields
+                # are set before their parents. This prevents parent pointers from
+                # overwriting nested structures. E.g., if we have both "entries/0"
+                # and "entries/0/assetTerm", process the longer one first.
+                # Also filter out pointers that are prefixes of longer pointers,
+                # since they would be created as intermediate structures anyway.
+                sorted_pointers = sorted(
+                    generator_self._link_fields.body_pointers,
+                    key=len,
+                    reverse=True
+                )
+                # Filter out pointers that are prefixes of other pointers
+                filtered_pointers = []
+                for ptr in sorted_pointers:
+                    # Check if this pointer is a prefix of any longer pointer
+                    is_prefix = any(
+                        other.startswith(ptr + "/")
+                        for other in sorted_pointers if len(other) > len(ptr)
+                    )
+                    if not is_prefix:
+                        filtered_pointers.append(ptr)
+
+                for field_pointer in filtered_pointers:
                     # Try to get field schema for schema-aware generation
                     field_schema = None
                     if response_schema is not None:

@@ -1,0 +1,109 @@
+openapi: 3.0.3
+info:
+  title: Mixed Link Test API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+
+paths:
+  /tenants/{tenantId}/items:
+    get:
+      summary: List items in tenant
+      operationId: listItems
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        itemId:
+                          type: string
+          links:
+            # This mimics the problematic pattern:
+            # - One param from $request.path
+            # - One param from $response.body with array index
+            GetItemFromList:
+              operationId: getItem
+              parameters:
+                tenantId: '$request.path.tenantId'
+                itemId: '$response.body#/entries/0/itemId'
+
+  /tenants/{tenantId}/items/{itemId}:
+    get:
+      summary: Get a specific item
+      operationId: getItem
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+          links:
+            # Simple $request.path only link
+            GetItemAgain:
+              operationId: getItem
+              parameters:
+                tenantId: '$request.path.tenantId'
+                itemId: '$request.path.itemId'
+            # $response.body only link
+            GetRelatedItem:
+              operationId: getItem
+              parameters:
+                tenantId: '$request.path.tenantId'
+                itemId: '$response.body#/id'
+
+  /init:
+    post:
+      summary: Create initial data
+      operationId: createInit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tenantId:
+                  type: string
+      responses:
+        '201':
+          description: Created
+          headers:
+            X-Tenant-Id:
+              schema:
+                type: string
+          links:
+            ListItemsFromInit:
+              operationId: listItems
+              parameters:
+                tenantId: '$response.header.X-Tenant-Id'
