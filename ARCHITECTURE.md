@@ -299,7 +299,7 @@ When `max_cases` is specified, cases are distributed across operations:
 
 ### Seed Behavior
 
-The `seed` parameter enables reproducible generation via Hypothesis `derandomize=True` mode. Same seed produces same test case sequence.
+The `seed` parameter enables reproducible generation through a two-part mechanism: `derandomize=True` removes randomness, and `_hypothesis_internal_use_seed` differentiates between seed values. Both are required—`derandomize=True` alone makes all seeds produce identical results. See DESIGN.md "Hypothesis Seed Control" for rationale.
 
 ### Chain Generation
 

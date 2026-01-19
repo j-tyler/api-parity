@@ -131,6 +131,38 @@ class TestTypeGeneration:
         assert len(value) == 1
         assert value[0] == 1
 
+    def test_array_tuple_validation(self):
+        """Array with tuple validation (items as list) produces correct-length array.
+
+        Regression test for Bug 4: Tuple validation schema crashes generate().
+        JSON Schema allows items to be a list of schemas (tuple validation)
+        where each position has its own schema. Previously this crashed with
+        AttributeError because the code called .get() on the list.
+        """
+        spec = {}
+        generator = SchemaValueGenerator(spec)
+
+        # Tuple validation schema: [string, integer, boolean]
+        schema = {
+            "type": "array",
+            "items": [
+                {"type": "string"},
+                {"type": "integer"},
+                {"type": "boolean"},
+            ]
+        }
+
+        value = generator.generate(schema)
+        assert isinstance(value, list)
+        assert len(value) == 3
+        # First item should be UUID string
+        assert isinstance(value[0], str)
+        uuid_module.UUID(value[0])  # Should not raise
+        # Second item should be integer 1
+        assert value[1] == 1
+        # Third item should be boolean True
+        assert value[2] is True
+
     def test_object_type(self):
         """Object type produces empty dict."""
         spec = {}

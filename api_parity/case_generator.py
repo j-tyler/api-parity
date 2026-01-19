@@ -41,6 +41,24 @@ from api_parity.models import ChainCase, ChainStep, RequestCase
 from api_parity.schema_value_generator import SchemaValueGenerator
 
 
+def _get_operation_id(raw_operation: dict[str, Any], method: str, path: str) -> str:
+    """Get operationId from operation definition, or generate a consistent default.
+
+    When an operation doesn't have an explicit operationId, generates one using
+    the format "{method}_{path}" (e.g., "get_/users/{id}"). This ensures consistent
+    identification across all code paths that need to reference operations.
+
+    Args:
+        raw_operation: The raw operation definition dict from the spec.
+        method: HTTP method (GET, POST, etc.)
+        path: The path template (e.g., "/users/{id}")
+
+    Returns:
+        The operationId or a generated default.
+    """
+    return raw_operation.get("operationId", f"{method}_{path}")
+
+
 # Pattern to extract field references from OpenAPI link expressions
 # Matches: $response.body#/fieldname or $response.body#/nested/path
 LINK_BODY_PATTERN = re.compile(r'\$response\.body#/(.+)$')
@@ -181,12 +199,28 @@ def extract_link_fields_from_spec(spec: dict) -> LinkFields:
     return link_fields
 
 
+def _decode_jsonpointer_segment(segment: str) -> str:
+    """Decode RFC 6901 escape sequences in a JSONPointer segment.
+
+    Per RFC 6901, escape sequences are:
+    - ~1 → / (slash)
+    - ~0 → ~ (tilde)
+
+    Order matters: ~1 must be decoded before ~0 to avoid turning ~01 into ~1 then /.
+    """
+    return segment.replace("~1", "/").replace("~0", "~")
+
+
 def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
     """Extract a value from nested data using a JSONPointer path.
 
     Follows RFC 6901 JSONPointer semantics with slash-separated path segments.
     Returns None for any invalid path rather than raising - callers handle
     missing values gracefully during variable extraction.
+
+    Escape sequences per RFC 6901:
+    - ~0 decodes to ~ (tilde)
+    - ~1 decodes to / (slash)
 
     Args:
         data: The data structure to extract from (dict or list).
@@ -202,6 +236,9 @@ def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
     current = data
 
     for part in parts:
+        # Decode RFC 6901 escape sequences
+        part = _decode_jsonpointer_segment(part)
+
         if current is None:
             return None
         if isinstance(current, dict):
@@ -418,6 +455,12 @@ class CaseGenerator:
         def collect_cases(case):
             collected.append(case)
 
+        # When a seed is provided, set Hypothesis's internal seed attribute.
+        # This makes different seed values produce different (but reproducible) results.
+        # Without this, derandomize=True alone just uses a hash of the function.
+        if seed is not None:
+            collect_cases._hypothesis_internal_use_seed = seed
+
         collect_cases()
 
         for schemathesis_case in collected:
@@ -553,8 +596,10 @@ class CaseGenerator:
                 """
                 nonlocal current_steps, step_counter, prev_steps
 
-                # Extract operation info
-                op_id = case.operation.definition.raw.get("operationId", "unknown")
+                # Extract operation info - use consistent ID generation
+                op_id = _get_operation_id(
+                    case.operation.definition.raw, case.method, case.path
+                )
                 if op_id in generator_self._exclude:
                     # Return synthetic response for excluded operations
                     return self._synthetic_response(case)
@@ -610,14 +655,15 @@ class CaseGenerator:
                 # from recent operations
                 for source_op, status_code in reversed(prev_steps):
                     # Find the source operation in the spec
-                    for path_item in paths.values():
+                    for path_template, path_item in paths.items():
                         if not isinstance(path_item, dict):
                             continue
                         for method_or_key, operation in path_item.items():
                             if not isinstance(operation, dict) or method_or_key.startswith("$"):
                                 continue
 
-                            op_id = operation.get("operationId")
+                            # Use consistent operationId generation
+                            op_id = _get_operation_id(operation, method_or_key, path_template)
                             if op_id != source_op:
                                 continue
 
@@ -747,8 +793,10 @@ class CaseGenerator:
                 allows Schemathesis to resolve OpenAPI link expressions and discover
                 possible chain paths. Real HTTP execution happens later in the Executor.
                 """
-                # Extract operation info for schema-aware generation
-                op_id = case.operation.definition.raw.get("operationId", "unknown")
+                # Extract operation info for schema-aware generation - use consistent ID
+                op_id = _get_operation_id(
+                    case.operation.definition.raw, case.method, case.path
+                )
                 status_code = self._find_status_code_with_links(op_id, case.method)
                 synthetic_body = self._generate_synthetic_body(op_id, status_code)
                 synthetic_headers = self._generate_synthetic_headers()
@@ -920,6 +968,11 @@ class CaseGenerator:
         )
         def run_generation():
             run_state_machine_as_test(CombinedMachine)
+
+        # When a seed is provided, set Hypothesis's internal seed attribute.
+        # This makes different seed values produce different (but reproducible) chains.
+        if seed is not None:
+            run_generation._hypothesis_internal_use_seed = seed
 
         try:
             run_generation()

@@ -277,6 +277,164 @@ class TestNestedObjectValidation:
 # =============================================================================
 
 
+class TestSchemaComposition:
+    """Tests for schema composition handling (allOf/anyOf/oneOf).
+
+    Regression tests for Bug 2: Schema composition not handled in _find_extra_fields.
+    """
+
+    @pytest.fixture
+    def allof_spec_path(self, tmp_path):
+        """Create a spec with allOf schema composition."""
+        spec_content = """
+openapi: "3.0.0"
+info:
+  title: Test API with allOf
+  version: "1.0"
+paths:
+  /items:
+    get:
+      operationId: getItem
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      id:
+                        type: string
+                  - type: object
+                    properties:
+                      name:
+                        type: string
+                      status:
+                        type: string
+                        enum: [active, inactive]
+"""
+        spec_path = tmp_path / "allof_spec.yaml"
+        spec_path.write_text(spec_content)
+        return spec_path
+
+    def test_allof_properties_recognized(self, allof_spec_path):
+        """Properties from allOf branches are recognized as defined."""
+        validator = SchemaValidator(allof_spec_path)
+
+        # Response with fields defined in allOf branches
+        body = {
+            "id": "123",
+            "name": "Test Item",
+            "status": "active"
+        }
+
+        # These fields should NOT be extra - they're defined in allOf branches
+        extra_fields = validator.get_extra_fields(body, "getItem", 200)
+        assert "$.id" not in extra_fields
+        assert "$.name" not in extra_fields
+        assert "$.status" not in extra_fields
+
+    def test_allof_extra_field_detected(self, allof_spec_path):
+        """Extra fields not in any allOf branch are still detected."""
+        validator = SchemaValidator(allof_spec_path)
+
+        body = {
+            "id": "123",
+            "name": "Test",
+            "status": "active",
+            "unknown_field": "should be extra"
+        }
+
+        extra_fields = validator.get_extra_fields(body, "getItem", 200)
+        assert "$.unknown_field" in extra_fields
+
+    @pytest.fixture
+    def anyof_spec_path(self, tmp_path):
+        """Create a spec with anyOf schema composition."""
+        spec_content = """
+openapi: "3.0.0"
+info:
+  title: Test API with anyOf
+  version: "1.0"
+paths:
+  /items:
+    get:
+      operationId: getItem
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - type: object
+                    properties:
+                      type_a_field:
+                        type: string
+                  - type: object
+                    properties:
+                      type_b_field:
+                        type: integer
+"""
+        spec_path = tmp_path / "anyof_spec.yaml"
+        spec_path.write_text(spec_content)
+        return spec_path
+
+    def test_anyof_properties_recognized(self, anyof_spec_path):
+        """Properties from anyOf branches are recognized as defined."""
+        validator = SchemaValidator(anyof_spec_path)
+
+        # Response could match either branch - both fields should be recognized
+        body = {"type_a_field": "value"}
+        extra_fields = validator.get_extra_fields(body, "getItem", 200)
+        assert "$.type_a_field" not in extra_fields
+
+        body = {"type_b_field": 42}
+        extra_fields = validator.get_extra_fields(body, "getItem", 200)
+        assert "$.type_b_field" not in extra_fields
+
+    @pytest.fixture
+    def oneof_spec_path(self, tmp_path):
+        """Create a spec with oneOf schema composition."""
+        spec_content = """
+openapi: "3.0.0"
+info:
+  title: Test API with oneOf
+  version: "1.0"
+paths:
+  /items:
+    get:
+      operationId: getItem
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      dog_breed:
+                        type: string
+                  - type: object
+                    properties:
+                      cat_breed:
+                        type: string
+"""
+        spec_path = tmp_path / "oneof_spec.yaml"
+        spec_path.write_text(spec_content)
+        return spec_path
+
+    def test_oneof_properties_recognized(self, oneof_spec_path):
+        """Properties from oneOf branches are recognized as defined."""
+        validator = SchemaValidator(oneof_spec_path)
+
+        body = {"dog_breed": "labrador"}
+        extra_fields = validator.get_extra_fields(body, "getItem", 200)
+        assert "$.dog_breed" not in extra_fields
+
+
 class TestEdgeCases:
     """Edge case tests for schema validation."""
 

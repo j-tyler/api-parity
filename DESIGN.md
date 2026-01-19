@@ -13,6 +13,19 @@ Each decision: H1 heading, Keywords line (for grep), Date (YYYYMMDD), then free-
 
 ---
 
+# Hypothesis Seed Control via Internal Attribute
+
+Keywords: hypothesis seed derandomize reproducibility internal random
+Date: 20260119
+
+Controlling Hypothesis randomness for dynamically-defined test functions requires setting `_hypothesis_internal_use_seed` on the function object in addition to `derandomize=True`. The `@seed()` decorator cannot be used because the test function is defined at runtime inside `generate()` and `generate_chains()`.
+
+The key insight: `derandomize=True` alone makes ALL seed values produce identical results—it removes randomness but doesn't differentiate between seeds. The `_hypothesis_internal_use_seed` attribute is what Hypothesis's `@seed()` decorator sets internally to control which deterministic sequence is generated.
+
+This is an internal Hypothesis API (note the `_hypothesis_internal_` prefix). It may change in future Hypothesis versions. If seed reproducibility breaks after a Hypothesis upgrade, check if this attribute was renamed or replaced.
+
+---
+
 # Differential Testing Approach
 
 Keywords: testing fuzz comparison parity verification

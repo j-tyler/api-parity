@@ -448,6 +448,58 @@ class SchemaValidator:
         # True, unspecified, or a schema (object) means allowed
         return True
 
+    def _collect_properties(
+        self,
+        schema: dict[str, Any],
+        visited: frozenset[str] | None = None,
+    ) -> dict[str, Any]:
+        """Collect all properties from a schema, including composition branches.
+
+        Handles allOf, anyOf, oneOf by merging properties from all branches.
+        Properties from later branches override earlier ones (last-write-wins).
+
+        Args:
+            schema: The schema to collect properties from.
+            visited: Set of already-visited $ref paths to detect cycles.
+
+        Returns:
+            Merged properties dict from all sources.
+        """
+        if not isinstance(schema, dict):
+            return {}
+
+        if visited is None:
+            visited = frozenset()
+
+        # Handle $ref
+        ref = schema.get("$ref")
+        if ref:
+            if ref in visited:
+                return {}  # Circular reference
+            resolved = self._resolve_ref(schema)
+            if resolved != schema:
+                return self._collect_properties(resolved, visited | {ref})
+
+        properties: dict[str, Any] = {}
+
+        # Collect from direct properties
+        if "properties" in schema:
+            properties.update(schema["properties"])
+
+        # Collect from allOf branches (all must match, so merge all)
+        for subschema in schema.get("allOf", []):
+            properties.update(self._collect_properties(subschema, visited))
+
+        # Collect from anyOf branches (any can match, so merge all for extra field detection)
+        for subschema in schema.get("anyOf", []):
+            properties.update(self._collect_properties(subschema, visited))
+
+        # Collect from oneOf branches (one must match, so merge all for extra field detection)
+        for subschema in schema.get("oneOf", []):
+            properties.update(self._collect_properties(subschema, visited))
+
+        return properties
+
     def _find_extra_fields(
         self,
         body: Any,
@@ -457,6 +509,8 @@ class SchemaValidator:
         """Find fields in body that are not defined in schema.
 
         Recursively walks the body and schema to identify extra fields.
+        Handles schema composition (allOf/anyOf/oneOf) by collecting
+        properties from all branches.
 
         Args:
             body: The response body (or nested part of it).
@@ -470,6 +524,9 @@ class SchemaValidator:
 
         if not isinstance(schema, dict):
             return extra
+
+        # Resolve $ref at top level
+        schema = self._resolve_ref(schema)
 
         # Handle arrays - check items in the array
         if isinstance(body, list):
@@ -486,8 +543,8 @@ class SchemaValidator:
         if not isinstance(body, dict):
             return extra
 
-        # Get defined properties from schema
-        properties = schema.get("properties", {})
+        # Get defined properties from schema, including composition branches
+        properties = self._collect_properties(schema)
         defined_fields = set(properties.keys())
 
         # Find fields in body not in schema
