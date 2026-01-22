@@ -9,12 +9,15 @@ See ARCHITECTURE.md "Executor" for specifications.
 from __future__ import annotations
 
 import base64
+import logging
 import ssl
 import time
 from threading import Lock
 from typing import Any, Callable
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from api_parity.case_generator import LinkFields, extract_by_jsonpointer
 from api_parity.models import (
@@ -50,6 +53,40 @@ def _sanitize_header_value(value: str) -> str:
     """
     # Use 'replace' error handler to convert non-ASCII to '?'
     return value.encode('ascii', errors='replace').decode('ascii')
+
+
+def _is_safe_parameter_value(value: Any) -> bool:
+    """Check if a value is safe for use as an HTTP path/query parameter.
+
+    Rejects values containing control characters (0x00-0x1F, 0x7F) which:
+    - Indicate binary/corrupt data that shouldn't be used as identifiers
+    - Can cause protocol-level issues in HTTP requests
+    - Would fail pattern constraints like ^/?[A-Za-z0-9_=./+-]+$
+
+    This validation prevents using binary response content (e.g., from
+    application/octet-stream responses or corrupted JSON) as parameter values
+    in subsequent chain steps. See DESIGN.md for rationale.
+
+    Args:
+        value: The value to check. Non-string values are converted to str first.
+
+    Returns:
+        True if the value is safe, False if it contains control characters.
+    """
+    if value is None:
+        return False
+
+    # Convert to string for validation
+    str_value = str(value)
+
+    # Check for control characters (0x00-0x1F and 0x7F)
+    # These are never valid in URL path segments or query parameter values
+    for char in str_value:
+        code = ord(char)
+        if code <= 0x1F or code == 0x7F:
+            return False
+
+    return True
 
 
 class Executor:
@@ -412,6 +449,10 @@ class Executor:
 
         Body fields stored at JSONPointer paths. Headers at "header/{name}" (list)
         or "header/{name}/{index}" (single value).
+
+        Values containing control characters (0x00-0x1F, 0x7F) are rejected to
+        prevent using binary/corrupt data as HTTP parameters. When a value fails
+        validation, a warning is logged and the value is not extracted.
         """
         extracted: dict[str, Any] = {}
 
@@ -421,7 +462,16 @@ class Executor:
             for field_pointer in self._link_fields.body_pointers:
                 value = extract_by_jsonpointer(response.body, field_pointer)
                 if value is not None:
-                    extracted[field_pointer] = value
+                    if _is_safe_parameter_value(value):
+                        extracted[field_pointer] = value
+                    else:
+                        # Log warning for rejected values containing control characters
+                        logger.warning(
+                            "Skipping extracted value for '%s': contains control "
+                            "characters (binary/corrupt data). Value repr: %r",
+                            field_pointer,
+                            str(value)[:50],
+                        )
 
             # Add shortcut aliases: "userId" -> value (from "data/user/userId")
             # Only when unambiguous (single pointer with that last segment)
@@ -450,14 +500,24 @@ class Executor:
             # ResponseCase headers are already lowercase keys with list values
             header_values = response.headers.get(header_name, [])
             if header_values:
-                # Store all values as list at header/{name}
-                extracted[f"header/{header_name}"] = header_values
+                # Filter out header values containing control characters
+                safe_values = [v for v in header_values if _is_safe_parameter_value(v)]
+                if len(safe_values) < len(header_values):
+                    logger.warning(
+                        "Skipping %d header value(s) for '%s': contain control characters",
+                        len(header_values) - len(safe_values),
+                        header_name,
+                    )
 
-                # Store specific indexed values at header/{name}/{index}
-                if header_name in indexed_headers:
-                    for index in indexed_headers[header_name]:
-                        if index < len(header_values):
-                            extracted[f"header/{header_name}/{index}"] = header_values[index]
+                if safe_values:
+                    # Store all safe values as list at header/{name}
+                    extracted[f"header/{header_name}"] = safe_values
+
+                    # Store specific indexed values at header/{name}/{index}
+                    if header_name in indexed_headers:
+                        for index in indexed_headers[header_name]:
+                            if index < len(safe_values):
+                                extracted[f"header/{header_name}/{index}"] = safe_values[index]
 
         return extracted
 

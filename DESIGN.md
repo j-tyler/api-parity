@@ -426,6 +426,23 @@ Controlling Hypothesis randomness for dynamic test functions requires setting `_
 
 ---
 
+# Extracted Value Validation for Chain Parameters
+
+Keywords: binary control characters validation parameters chain
+Date: 20260122
+
+**Problem:** Response bodies may contain values with control characters (0x00-0x1F, 0x7F) from binary data, corrupt JSON, or unexpected encoding. If extracted and used as path/query parameters in subsequent chain steps, these produce invalid HTTP requests or protocol violations.
+
+**Example:** If a response contains `{"id": "\x18?\x00??"}` (binary data in JSON string), and a link extracts this ID for the next request's path parameter, the request `/resources/\x18?\x00??` would fail or produce undefined behavior.
+
+**Solution:** `_extract_variables()` validates all extracted values before storing them. Values containing control characters are rejected with a warning logged. Subsequent chain steps won't have access to invalid values—they'll use stale synthetic placeholders from chain discovery, which is safer than attempting requests with binary data.
+
+**Why control characters specifically:** Control characters (0x00-0x1F, 0x7F) are never valid in URL path segments or query parameter values. They indicate binary/corrupt data that shouldn't be used as identifiers. This catches the common case without over-restricting (non-ASCII UTF-8 like "日本語" is allowed and will be URL-encoded by httpx).
+
+**Alternative considered:** Schema-based pattern validation (e.g., checking against `^/?[A-Za-z0-9_=./+-]+$`). Rejected because: (1) requires parsing response schemas at runtime, (2) patterns vary per parameter, (3) control character check catches 99% of binary data issues with zero config.
+
+---
+
 # Session-Scoped Test Fixtures
 
 Keywords: pytest fixtures session performance
