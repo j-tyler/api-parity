@@ -865,6 +865,151 @@ class TestCustomFieldNames:
         get_resource_link = links["GetResource"]
         assert get_resource_link["parameters"]["resource_id"] == "$response.body#/resource_uuid"
 
+    def test_is_safe_parameter_value_rejects_control_characters(self):
+        """_is_safe_parameter_value rejects values with control characters."""
+        from api_parity.executor import _is_safe_parameter_value
+
+        # Valid values should pass
+        assert _is_safe_parameter_value("abc-123") is True
+        assert _is_safe_parameter_value("hello world") is True
+        assert _is_safe_parameter_value("日本語") is True  # Non-ASCII UTF-8 is allowed
+        assert _is_safe_parameter_value("user@example.com") is True
+        assert _is_safe_parameter_value(12345) is True  # Numbers are converted to str
+        assert _is_safe_parameter_value("") is True  # Empty string is valid
+
+        # Control characters (0x00-0x1F) should fail
+        assert _is_safe_parameter_value("\x00") is False  # Null
+        assert _is_safe_parameter_value("\x01") is False  # Start of heading
+        assert _is_safe_parameter_value("\t") is False  # Tab (0x09)
+        assert _is_safe_parameter_value("\n") is False  # Newline (0x0A)
+        assert _is_safe_parameter_value("\r") is False  # Carriage return (0x0D)
+        assert _is_safe_parameter_value("\x1F") is False  # Unit separator
+        assert _is_safe_parameter_value("\x7F") is False  # DEL
+
+        # Values containing control characters should fail
+        assert _is_safe_parameter_value("abc\x00def") is False
+        assert _is_safe_parameter_value("\x18?\x00??") is False  # The bug report example
+        assert _is_safe_parameter_value("id\twith\ttabs") is False
+
+        # None should fail
+        assert _is_safe_parameter_value(None) is False
+
+    def test_extract_variables_skips_values_with_control_characters(self):
+        """_extract_variables skips body values containing control characters."""
+        from api_parity.case_generator import LinkFields
+        from api_parity.executor import Executor
+        from api_parity.models import ResponseCase, TargetConfig
+
+        target = TargetConfig(base_url="http://localhost:9999")
+        link_fields = LinkFields(
+            body_pointers={"id", "name", "binary_field", "nested/value"}
+        )
+        executor = Executor(target, target, link_fields=link_fields)
+
+        # Response with mix of valid and invalid values
+        response = ResponseCase(
+            status_code=200,
+            body={
+                "id": "valid-id-123",
+                "name": "valid name",
+                "binary_field": "\x18?\x00??",  # Contains control characters
+                "nested": {
+                    "value": "normal\x00value"  # Contains null byte
+                }
+            },
+            elapsed_ms=50.0,
+        )
+
+        extracted = executor._extract_variables(response)
+
+        # Valid values should be extracted
+        assert extracted["id"] == "valid-id-123"
+        assert extracted["name"] == "valid name"
+
+        # Invalid values should NOT be extracted
+        assert "binary_field" not in extracted
+        assert "nested/value" not in extracted
+        assert "value" not in extracted  # Shortcut alias also not created
+
+        executor.close()
+
+    def test_extract_variables_skips_headers_with_control_characters(self):
+        """_extract_variables skips header values containing control characters."""
+        from api_parity.case_generator import HeaderRef, LinkFields
+        from api_parity.executor import Executor
+        from api_parity.models import ResponseCase, TargetConfig
+
+        target = TargetConfig(base_url="http://localhost:9999")
+        link_fields = LinkFields(
+            headers=[
+                HeaderRef(name="location", original_name="Location", index=None),
+                HeaderRef(name="x-binary", original_name="X-Binary", index=0),
+            ]
+        )
+        executor = Executor(target, target, link_fields=link_fields)
+
+        response = ResponseCase(
+            status_code=201,
+            headers={
+                "location": ["http://example.com/resource/123"],  # Valid
+                "x-binary": ["value\x00with\x00nulls"],  # Contains control chars
+            },
+            body={},
+            elapsed_ms=50.0,
+        )
+
+        extracted = executor._extract_variables(response)
+
+        # Valid header should be extracted
+        assert extracted["header/location"] == ["http://example.com/resource/123"]
+
+        # Invalid header should NOT be extracted
+        assert "header/x-binary" not in extracted
+        assert "header/x-binary/0" not in extracted
+
+        executor.close()
+
+    def test_extract_variables_filters_partially_invalid_header_lists(self):
+        """_extract_variables filters out invalid values from multi-value headers."""
+        from api_parity.case_generator import HeaderRef, LinkFields
+        from api_parity.executor import Executor
+        from api_parity.models import ResponseCase, TargetConfig
+
+        target = TargetConfig(base_url="http://localhost:9999")
+        link_fields = LinkFields(
+            headers=[
+                HeaderRef(name="set-cookie", original_name="Set-Cookie", index=None),
+                HeaderRef(name="set-cookie", original_name="Set-Cookie", index=0),
+                HeaderRef(name="set-cookie", original_name="Set-Cookie", index=1),
+            ]
+        )
+        executor = Executor(target, target, link_fields=link_fields)
+
+        response = ResponseCase(
+            status_code=200,
+            headers={
+                # Mix of valid and invalid values
+                "set-cookie": [
+                    "session=abc",  # Valid (index 0)
+                    "tracking\x00=xyz",  # Invalid - contains null (index 1)
+                    "pref=dark",  # Valid (index 2)
+                ],
+            },
+            body={},
+            elapsed_ms=50.0,
+        )
+
+        extracted = executor._extract_variables(response)
+
+        # Only valid values should be in the list
+        assert extracted["header/set-cookie"] == ["session=abc", "pref=dark"]
+
+        # Indexed access should use filtered list indices
+        assert extracted["header/set-cookie/0"] == "session=abc"
+        assert extracted["header/set-cookie/1"] == "pref=dark"
+
+        executor.close()
+
 
 # =============================================================================
 # Explicit Links Only Tests
