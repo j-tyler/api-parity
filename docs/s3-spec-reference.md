@@ -405,3 +405,292 @@ Same precedence rules apply.
 | S3 Express One Zone | `EXPRESS_ONEZONE` | Single-digit ms latency, directory buckets |
 | Outposts | `OUTPOSTS` | S3 on Outposts only |
 | Snow | `SNOW` | AWS Snow devices only |
+
+---
+
+## 2. Bucket Operations
+
+### 2.1 CreateBucket
+
+**Request:** `PUT /{bucket}`
+
+**Request Headers (operation-specific):**
+
+| Header | Required | Values |
+|--------|----------|--------|
+| `x-amz-acl` | No | `private`, `public-read`, `public-read-write`, `authenticated-read` |
+| `x-amz-grant-full-control` | No | `id="CanonicalUserId"` |
+| `x-amz-grant-read` | No | `id="CanonicalUserId"` |
+| `x-amz-grant-read-acp` | No | `id="CanonicalUserId"` |
+| `x-amz-grant-write` | No | `id="CanonicalUserId"` |
+| `x-amz-grant-write-acp` | No | `id="CanonicalUserId"` |
+| `x-amz-bucket-object-lock-enabled` | No | `true`, `false`. Enables Object Lock and versioning. |
+| `x-amz-object-ownership` | No | `BucketOwnerPreferred`, `ObjectWriter`, `BucketOwnerEnforced` (default) |
+
+**Request Body (optional):**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<CreateBucketConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+    <LocationConstraint>us-west-2</LocationConstraint>
+</CreateBucketConfiguration>
+```
+
+| Element | Type | Required | Description |
+|---------|------|----------|-------------|
+| `CreateBucketConfiguration` | Container | Root | Required if specifying sub-elements |
+| `LocationConstraint` | String | No | AWS Region code. Omit or leave empty for `us-east-1`. Special value `EU` maps to `eu-west-1`. |
+
+If no body is provided, or if body has no `LocationConstraint`, bucket is
+created in `us-east-1`.
+
+**Response:** `200 OK`
+
+**Response Headers:**
+
+| Header | Description |
+|--------|-------------|
+| `Location` | `/{bucket-name}` |
+
+**Response Body:** Empty on success.
+
+**Error Codes:**
+
+| Code | HTTP Status | Condition |
+|------|-------------|-----------|
+| `InvalidBucketName` | 400 | Name violates naming rules |
+| `InvalidLocationConstraint` | 400 | Region string is not valid |
+| `IllegalLocationConstraintException` | 400 | Request sent to wrong regional endpoint |
+| `TooManyBuckets` | 400 | Account limit exceeded (default 100) |
+| `BucketAlreadyExists` | 409 | Name taken by a different account |
+| `BucketAlreadyOwnedByYou` | 409 | You already own this bucket |
+
+**Behavior Rules:**
+
+1. **Empty body or missing `LocationConstraint`:** Bucket created in `us-east-1`.
+2. **`LocationConstraint` = `EU`:** Bucket physically created in `eu-west-1`.
+3. **SigV4 signing region for global endpoint:** When sending to
+   `s3.amazonaws.com`, always use `us-east-1` as the signing region in the
+   `Credential` field, regardless of the `LocationConstraint` value.
+4. **Default ownership:** `BucketOwnerEnforced` (ACLs disabled). To use ACLs,
+   set `x-amz-object-ownership` to `ObjectWriter` or `BucketOwnerPreferred`.
+5. **Object Lock:** Setting `x-amz-bucket-object-lock-enabled: true`
+   automatically enables versioning.
+
+**Edge Cases:**
+
+1. **`BucketAlreadyOwnedByYou` in `us-east-1`:** Returns `200 OK` (not 409)
+   and resets the bucket ACL. This is legacy behavior unique to us-east-1.
+   All other regions return 409.
+2. **Public ACL creation:** Cannot create bucket with public ACL in a single
+   request. Must create, then delete public access block, then set ACL.
+
+**MinIO Deviations:**
+
+- `x-minio-force-create` header bypasses certain creation constraints.
+- Returns `BucketAlreadyOwnedByYou` if bucket exists locally (no
+  per-region distinction).
+- Warns when bucket count exceeds threshold, but does not reject.
+
+---
+
+### 2.2 DeleteBucket
+
+**Request:** `DELETE /{bucket}`
+
+**Request Headers:** `x-amz-expected-bucket-owner` (optional).
+
+**Request Body:** None.
+
+**Response:** `204 No Content`. No body.
+
+**Error Codes:**
+
+| Code | HTTP Status | Condition |
+|------|-------------|-----------|
+| `NoSuchBucket` | 404 | Bucket does not exist |
+| `BucketNotEmpty` | 409 | Contains objects, versions, or delete markers |
+| `AccessDenied` | 403 | Insufficient permissions or owner mismatch |
+
+**Behavior Rules:**
+
+1. **Bucket must be completely empty:** All objects, all object versions (for
+   versioned buckets), and all delete markers must be deleted first.
+2. **After deletion:** Bucket name becomes available for reuse by any account.
+3. **Irreversible:** No confirmation prompt.
+
+**Edge Cases:**
+
+1. **Versioned buckets:** `DeleteObject` creates a delete marker instead of
+   deleting. Must explicitly delete each version by version ID.
+2. **Lifecycle-managed buckets:** Objects pending expiration may prevent
+   deletion until processed.
+
+**MinIO Deviations:**
+
+- `x-minio-force-delete` header force-deletes (needs `ForceDeleteBucketAction`).
+- Force delete blocked if bucket has Object Lock or active replication rules.
+
+---
+
+### 2.3 HeadBucket
+
+**Request:** `HEAD /{bucket}`
+
+**Request Headers:** `x-amz-expected-bucket-owner` (optional).
+
+**Request Body:** None.
+
+**Response:** `200 OK`. **No body ever** (HEAD spec).
+
+**Response Headers:**
+
+| Header | Always Present | Description |
+|--------|----------------|-------------|
+| `x-amz-bucket-region` | **Yes, even on 403/404** | Region where bucket is located |
+| `x-amz-access-point-alias` | Yes | `true` if bucket name is access point alias |
+
+**Status Codes:**
+
+| HTTP Status | Condition |
+|-------------|-----------|
+| 200 OK | Bucket exists and you have access |
+| 301 Moved Permanently | Bucket in different region. `x-amz-bucket-region` tells correct region. |
+| 403 Forbidden | Access denied. **`x-amz-bucket-region` still returned.** |
+| 404 Not Found | Bucket does not exist |
+
+**Key Rules:**
+
+1. **No response body on ANY status.** Error details inferred from status code
+   and headers only.
+2. **Region always disclosed:** `x-amz-bucket-region` returned even on 403
+   and 404. This is intentional for region discovery.
+3. **Region-agnostic routing:** Can send HeadBucket to any regional endpoint
+   and it will respond about any bucket in the partition.
+4. **Permission:** Requires `s3:ListBucket` (not `s3:HeadBucket`).
+
+**MinIO Deviations:**
+
+- Checks `HeadBucketAction` first; falls back to `ListBucketAction`.
+- Does not return `x-amz-bucket-region` header.
+
+---
+
+### 2.4 ListBuckets
+
+**Request:** `GET /`
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `bucket-region` | string | - | Filter to buckets in this region |
+| `prefix` | string | - | Filter by name prefix |
+| `continuation-token` | string | - | Opaque pagination token (0-1024 chars) |
+| `max-buckets` | integer | 10000 | Max results (1-10000) |
+
+**Response:** `200 OK`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+    <Owner>
+        <ID>canonical-user-id</ID>
+        <DisplayName>display-name</DisplayName>
+    </Owner>
+    <Buckets>
+        <Bucket>
+            <Name>my-bucket</Name>
+            <CreationDate>2006-02-03T16:45:09.000Z</CreationDate>
+            <BucketRegion>us-east-1</BucketRegion>
+        </Bucket>
+    </Buckets>
+    <ContinuationToken>opaque-token</ContinuationToken>
+    <Prefix>my</Prefix>
+</ListAllMyBucketsResult>
+```
+
+| Element | Type | Presence | Description |
+|---------|------|----------|-------------|
+| `ListAllMyBucketsResult` | Container | Always | Root element |
+| `Owner` | Container | Always | Bucket owner |
+| `Owner/ID` | String | Always | Canonical user ID (64-char hex) |
+| `Owner/DisplayName` | String | Always | Display name |
+| `Buckets` | Container | Always | Container for Bucket elements. Empty `<Buckets/>` if none. |
+| `Bucket/Name` | String | Always in Bucket | Bucket name |
+| `Bucket/CreationDate` | Timestamp | Always in Bucket | ISO 8601 with ms: `YYYY-MM-DDTHH:MM:SS.000Z` |
+| `Bucket/BucketRegion` | String | Paginated responses | AWS Region |
+| `ContinuationToken` | String | Only if more results | Opaque token for next page |
+| `Prefix` | String | If prefix was in request | Echo of prefix filter |
+
+**Behavior Rules:**
+
+1. Returns all buckets across all regions unless `bucket-region` filter set.
+2. Sorted alphabetically by name.
+3. No `ContinuationToken` in response = all results returned.
+4. Empty result: Valid XML with `<Buckets/>`, not an error.
+5. Permission: `s3:ListAllMyBuckets`.
+
+**MinIO Deviations:**
+
+- **No pagination:** Returns all buckets in one response.
+- No `continuation-token`, `max-buckets`, `prefix`, or `bucket-region` support.
+- Filters by IAM permissions when `ListAllMyBuckets` denied.
+
+---
+
+### 2.5 GetBucketLocation
+
+**Request:** `GET /{bucket}?location`
+
+The `location` query parameter has no value — its presence alone identifies
+the operation.
+
+**Request Headers:** `x-amz-expected-bucket-owner` (optional).
+
+**Response:** `200 OK`
+
+**For a bucket in `us-west-2`:**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">us-west-2</LocationConstraint>
+```
+
+**For a bucket in `us-east-1` (CRITICAL EDGE CASE):**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>
+```
+
+The `LocationConstraint` element is **self-closing/empty**, not absent.
+Clients must treat empty/null as `us-east-1`.
+
+**For a bucket created with `LocationConstraint` = `EU`:**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">EU</LocationConstraint>
+```
+
+Returns `EU`, not `eu-west-1`. The value mirrors what was provided at creation.
+
+**Error Codes:**
+
+| Code | HTTP Status | Condition |
+|------|-------------|-----------|
+| `NoSuchBucket` | 404 | Bucket does not exist |
+| `AccessDenied` | 403 | Insufficient permissions |
+
+**Behavior Rules:**
+
+1. `us-east-1` returns empty `LocationConstraint` (not missing, not text).
+2. `EU` preserved verbatim from creation.
+3. Deprecated — use HeadBucket's `x-amz-bucket-region` header instead.
+4. Region is immutable for a bucket's lifetime.
+
+**MinIO Deviations:**
+
+- Region is server-wide, not per-bucket. All buckets in same "region".
+- Returns empty element for default region (matches us-east-1 behavior).
