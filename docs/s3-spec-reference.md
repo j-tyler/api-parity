@@ -1123,3 +1123,407 @@ Implementations MUST check whether root XML element is `<Error>` or
    specific version. Source is not affected.
 6. **Cross-account:** Needs `s3:GetObject` on source, `s3:PutObject` on
    destination.
+
+---
+
+## 4. Multipart Upload Operations
+
+### 4.1 CreateMultipartUpload
+
+**Request:** `POST /{bucket}/{key}?uploads`
+
+Identified by: bare `?uploads` query param (no value, no `uploadId`).
+
+**Request Body:** Empty.
+
+**Request Headers:** Accepts all PutObject metadata headers: Content-Type,
+Cache-Control, Content-Disposition, Content-Encoding, Content-Language,
+Expires, `x-amz-meta-*`, all encryption headers, ACL, storage class, tagging,
+Object Lock, checksum algorithm. All metadata set at initiation, not on parts.
+
+SSE-C headers set here must be repeated identically on every UploadPart and
+UploadPartCopy call.
+
+**Response:** `200 OK`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+   <Bucket>bucket-name</Bucket>
+   <Key>object-key</Key>
+   <UploadId>upload-id</UploadId>
+</InitiateMultipartUploadResult>
+```
+
+| Element | Description |
+|---------|-------------|
+| `Bucket` | Bucket name |
+| `Key` | Object key |
+| `UploadId` | Opaque string. Must be used in all subsequent multipart calls. |
+
+**Response Headers:** `x-amz-abort-date`, `x-amz-abort-rule-id` (lifecycle),
+encryption echoes, `x-amz-checksum-algorithm`.
+
+**Behavior Rules:**
+
+1. `UploadId` is opaque — do not assume any format.
+2. Multiple concurrent uploads for the same key are allowed, each with unique
+   UploadId.
+3. Uploaded parts incur storage charges until completed or aborted.
+4. Lifecycle rules can auto-abort incomplete uploads after configured days.
+
+---
+
+### 4.2 UploadPart
+
+**Request:** `PUT /{bucket}/{key}?partNumber={n}&uploadId={id}`
+
+Identified by: PUT with `partNumber` + `uploadId`, NO `x-amz-copy-source`.
+
+**Request Body:** Raw binary part data.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Range |
+|-----------|------|----------|-------|
+| `partNumber` | integer | Yes | 1-10,000 inclusive |
+| `uploadId` | string | Yes | From CreateMultipartUpload |
+
+**Request Headers:**
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Content-Length` | No | Size of body in bytes |
+| `Content-MD5` | Conditional | Base64 MD5. Required for Object Lock. Validated → 400 BadDigest. |
+| `x-amz-checksum-*` | No | Must match algorithm from CreateMultipartUpload |
+| SSE-C headers | Conditional | Required if SSE-C set in CreateMultipartUpload. Must match exactly. |
+
+**Response:** `200 OK`
+
+**Response Headers:**
+
+| Header | Description |
+|--------|-------------|
+| `ETag` | **Critical.** Entity tag for the uploaded part. Must be saved and provided verbatim in CompleteMultipartUpload. |
+
+**Response Body:** Empty.
+
+**Part Size Rules:**
+
+| Constraint | Value | Enforced When |
+|-----------|-------|---------------|
+| All parts except last | Min **5 MB** (5,242,880 bytes) | At CompleteMultipartUpload |
+| Last part | **No minimum** (can be 0 bytes) | N/A |
+| Any part | Max **5 GB** (5,368,709,120 bytes) | At UploadPart |
+
+Part size minimums are NOT validated at UploadPart time. The 5 MB minimum is
+only checked at CompleteMultipartUpload.
+
+**Behavior Rules:**
+
+1. **Part number range:** 1-10,000. Outside → `InvalidArgument` (400).
+2. **Overwrite:** Uploading same part number again overwrites previous data.
+   New ETag replaces old.
+3. **ETag value:** For non-encrypted, ETag = hex MD5 of part data. For SSE-C/KMS,
+   computed differently. Regardless, store and echo back the exact string.
+4. **Checksum consistency:** Must match algorithm from CreateMultipartUpload.
+
+**Error Codes:**
+
+| Code | Status | Cause |
+|------|--------|-------|
+| `NoSuchUpload` | 404 | Upload completed, aborted, or invalid |
+| `InvalidArgument` | 400 | Part number outside 1-10,000 |
+| `BadDigest` | 400 | Content-MD5 mismatch |
+
+---
+
+### 4.3 UploadPartCopy
+
+**Request:** `PUT /{bucket}/{key}?partNumber={n}&uploadId={id}` with
+`x-amz-copy-source` header.
+
+Same URL as UploadPart — distinguished by presence of `x-amz-copy-source`.
+
+**Request Body:** None. Data comes from source object.
+
+**Key Request Headers:**
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `x-amz-copy-source` | Yes | `/{bucket}/{key}` or `/{bucket}/{key}?versionId={id}` |
+| `x-amz-copy-source-range` | No | `bytes=first-last` (zero-based, inclusive). Source must be > 5 MB for range copy. |
+| `x-amz-copy-source-if-match` | No | Conditional on source ETag |
+| `x-amz-copy-source-if-none-match` | No | Conditional on source ETag |
+| `x-amz-copy-source-if-modified-since` | No | Conditional on source date |
+| `x-amz-copy-source-if-unmodified-since` | No | Conditional on source date |
+| Source SSE-C headers | Conditional | To decrypt source (if SSE-C) |
+| Destination SSE-C headers | Conditional | Must match CreateMultipartUpload |
+
+**Response:** `200 OK`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<CopyPartResult>
+   <ETag>string</ETag>
+   <LastModified>timestamp</LastModified>
+</CopyPartResult>
+```
+
+Save the `ETag` for CompleteMultipartUpload.
+
+**Error Codes:**
+
+| Code | Status | Cause |
+|------|--------|-------|
+| `NoSuchUpload` | 404 | Invalid/completed/aborted upload |
+| `NoSuchKey` | 404 | Source object does not exist |
+| `InvalidRequest` | 400 | Source < 5 MB with range copy |
+| `PreconditionFailed` | 412 | Conditional check failed |
+
+---
+
+### 4.4 CompleteMultipartUpload
+
+**Request:** `POST /{bucket}/{key}?uploadId={id}`
+
+Identified by: POST with `uploadId` (no bare `?uploads`).
+
+**Request Body:**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<CompleteMultipartUpload xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+   <Part>
+      <PartNumber>1</PartNumber>
+      <ETag>"a54357aff0632cce46d942af68356b38"</ETag>
+   </Part>
+   <Part>
+      <PartNumber>2</PartNumber>
+      <ETag>"0c78aef83f66abc1fa1e8477f296d394"</ETag>
+   </Part>
+</CompleteMultipartUpload>
+```
+
+| Element | Required | Description |
+|---------|----------|-------------|
+| `Part` | Yes (1+) | One per part. Must be ascending PartNumber. No duplicates. |
+| `Part/PartNumber` | Yes | 1-10,000. Must be ascending. |
+| `Part/ETag` | Yes | Exact ETag from UploadPart/UploadPartCopy response. |
+
+**Not all uploaded parts must be included.** Unlisted parts are discarded and
+their storage freed.
+
+**Request Headers:**
+
+| Header | Description |
+|--------|-------------|
+| `If-Match` | Complete only if existing object's ETag matches |
+| `If-None-Match` | `*` — complete only if object doesn't exist |
+| `x-amz-mp-object-size` | Expected total size. S3 validates against actual. |
+| SSE-C headers | If SSE-C was used |
+
+**Response:** `200 OK` — but **can contain error in body** (same as CopyObject).
+
+S3 begins sending 200 before finishing assembly. If assembly fails mid-stream,
+it cannot change the status code, so it sends `<Error>` XML instead.
+
+**Success Response Body:**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+   <Location>https://bucket.s3.region.amazonaws.com/key</Location>
+   <Bucket>bucket-name</Bucket>
+   <Key>object-key</Key>
+   <ETag>"composite-etag-3"</ETag>
+</CompleteMultipartUploadResult>
+```
+
+**ETag Calculation (critical for implementation):**
+
+```
+ETag = "hex(MD5(MD5_binary(part1) || MD5_binary(part2) || ... || MD5_binary(partN)))-N"
+```
+
+Step-by-step:
+
+1. For each part (in part-number order), compute MD5 → 16 raw bytes.
+2. Concatenate all part MD5 hashes → N * 16 bytes buffer.
+3. MD5 hash the concatenated buffer → 16 bytes.
+4. Hex-encode → 32-char string.
+5. Append `-N` where N = number of parts in the completion request.
+
+```python
+import hashlib
+
+def compute_multipart_etag(part_data_list):
+    md5_digests = b""
+    for part_data in part_data_list:
+        md5_digests += hashlib.md5(part_data).digest()  # 16 raw bytes
+    composite = hashlib.md5(md5_digests).hexdigest()
+    return f'"{composite}-{len(part_data_list)}"'
+```
+
+The `-N` suffix distinguishes multipart ETags from single-part. N is the
+count of parts listed in the completion request, NOT total parts uploaded.
+
+**Error Codes:**
+
+| Code | Status | Cause |
+|------|--------|-------|
+| `EntityTooSmall` | 400 | Non-last part < 5 MB |
+| `InvalidPart` | 400 | Part not found or ETag mismatch |
+| `InvalidPartOrder` | 400 | Parts not in ascending order |
+| `NoSuchUpload` | 404 | Upload already completed/aborted |
+| `PreconditionFailed` | 412 | Conditional header not met |
+
+**"Last part" determination:** The part with the highest PartNumber in the
+request is the "last part" (exempt from 5 MB minimum). Determined by position,
+not upload order.
+
+**Behavior Rules:**
+
+1. Part list must be sorted ascending by PartNumber.
+2. No duplicate PartNumbers.
+3. ETags must match exactly.
+4. Processing can take minutes for large objects. S3 sends periodic whitespace
+   to prevent client/proxy timeouts.
+5. Completing same upload twice → `NoSuchUpload` on second call.
+
+---
+
+### 4.5 AbortMultipartUpload
+
+**Request:** `DELETE /{bucket}/{key}?uploadId={id}`
+
+**Response:** `204 No Content`. Parts freed asynchronously.
+
+**Error Codes:**
+
+| Code | Status | Cause |
+|------|--------|-------|
+| `NoSuchUpload` | 404 | Already completed, aborted, or never existed |
+
+**Behavior Rules:**
+
+1. After abort, upload ID becomes invalid.
+2. **Race with in-progress uploads:** Parts being uploaded concurrently may
+   succeed after abort, becoming orphaned (still consuming storage).
+3. May need to call abort again or use lifecycle rules to clean up orphans.
+4. Idempotent: aborting already-aborted upload → `NoSuchUpload` (404).
+
+---
+
+### 4.6 ListParts
+
+**Request:** `GET /{bucket}/{key}?uploadId={id}`
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `uploadId` | string | (required) | Upload ID |
+| `max-parts` | integer | 1000 | Max per response (cap: 1000) |
+| `part-number-marker` | integer | - | List parts with PartNumber **strictly greater** than this (exclusive) |
+
+**Response:** `200 OK`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<ListPartsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+   <Bucket>bucket-name</Bucket>
+   <Key>object-key</Key>
+   <UploadId>upload-id</UploadId>
+   <PartNumberMarker>0</PartNumberMarker>
+   <NextPartNumberMarker>2</NextPartNumberMarker>
+   <MaxParts>1000</MaxParts>
+   <IsTruncated>false</IsTruncated>
+   <Part>
+      <PartNumber>1</PartNumber>
+      <LastModified>2010-11-10T20:48:34.000Z</LastModified>
+      <ETag>"7778aef83f66abc1fa1e8477f296d394"</ETag>
+      <Size>10485760</Size>
+   </Part>
+   <Initiator>
+      <ID>arn:aws:iam::123456789012:user/name</ID>
+      <DisplayName>name</DisplayName>
+   </Initiator>
+   <Owner>
+      <ID>canonical-id</ID>
+      <DisplayName>name</DisplayName>
+   </Owner>
+   <StorageClass>STANDARD</StorageClass>
+</ListPartsResult>
+```
+
+**Pagination:**
+
+- `part-number-marker` is exclusive: only parts > marker returned.
+- When `IsTruncated` is `true`, use `NextPartNumberMarker` as next marker.
+- Hard max 1000 per response.
+- Parts in ascending PartNumber order.
+- Overwritten parts show only latest upload for that number.
+
+---
+
+### 4.7 ListMultipartUploads
+
+**Request:** `GET /{bucket}?uploads`
+
+Bucket-level operation (no object key in path).
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `delimiter` | string | - | Group keys (max 1 char) |
+| `encoding-type` | string | - | `url` |
+| `key-marker` | string | - | List uploads with keys after this value |
+| `upload-id-marker` | string | - | With `key-marker`, list uploads with ID after this. Ignored without `key-marker`. |
+| `max-uploads` | integer | 1000 | Range: 1-1000 |
+| `prefix` | string | - | Filter by key prefix |
+
+**Response:** `200 OK`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<ListMultipartUploadsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+   <Bucket>bucket-name</Bucket>
+   <KeyMarker></KeyMarker>
+   <UploadIdMarker></UploadIdMarker>
+   <NextKeyMarker>key</NextKeyMarker>
+   <NextUploadIdMarker>id</NextUploadIdMarker>
+   <MaxUploads>1000</MaxUploads>
+   <IsTruncated>false</IsTruncated>
+   <Upload>
+      <Key>object-key</Key>
+      <UploadId>upload-id</UploadId>
+      <Initiator>
+         <ID>arn</ID>
+         <DisplayName>name</DisplayName>
+      </Initiator>
+      <Owner>
+         <ID>canonical-id</ID>
+         <DisplayName>name</DisplayName>
+      </Owner>
+      <StorageClass>STANDARD</StorageClass>
+      <Initiated>2010-11-10T20:48:34.000Z</Initiated>
+   </Upload>
+   <CommonPrefixes>
+      <Prefix>prefix/</Prefix>
+   </CommonPrefixes>
+</ListMultipartUploadsResult>
+```
+
+**Sorting:** Primary: key ascending lexicographic. Secondary: initiation
+time ascending within same key.
+
+**Pagination:**
+
+- When `IsTruncated` = true, use both `NextKeyMarker` AND `NextUploadIdMarker`.
+- `upload-id-marker` ignored without `key-marker`.
+- Without `upload-id-marker`, only uploads with keys > `key-marker` returned.
+- With both, uploads for exact `key-marker` key included only if upload ID >
+  `upload-id-marker`.
+- Max 1000 per response.
