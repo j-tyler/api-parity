@@ -408,6 +408,22 @@ Date: 20260119
 
 ---
 
+# Coverage Depth: Per-Operation Hit Targeting
+
+Keywords: coverage depth min-hits-per-op min-coverage seed walking
+Date: 20260207
+
+Seed walking's original stopping criterion was "all linked operations covered at least once." This is necessary but not sufficient for thorough testing — an operation appearing in only 1 chain gets tested with just one set of fuzz inputs.
+
+Added `--min-hits-per-op N` and `--min-coverage P` to control how deeply each operation is explored. The coverage target is: P% of linked operations must appear in N+ unique (deduplicated) chains. Default is N=1, P=100 (backward compatible).
+
+Key design choices:
+- **Hits count unique chains, not total appearances.** A chain [A, B, A] gives opA one hit, not two. Duplicate chains (same operation-ID sequence) are filtered.
+- **When depth target set, max_chains defaults to unlimited.** Without this, the legacy default of 20 chains would prematurely stop seed walking before the depth target is met. Users can still set `--max-chains` as an explicit hard cap.
+- **Partial coverage via min_coverage_pct.** Allows tolerating hard-to-reach operations (e.g., depth-5 chains) while still ensuring most of the API is well-tested.
+
+---
+
 # Incremental Seed Walking
 
 Keywords: seed walking chains reproducibility

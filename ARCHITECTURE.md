@@ -111,10 +111,14 @@ When replaying saved bundles, each is classified:
 class CaseGenerator:
     def __init__(self, spec_path: Path, exclude_operations: list[str] | None = None): ...
     def get_operations(self) -> list[dict[str, Any]]: ...
+    def get_all_operation_ids(self) -> set[str]: ...
+    def get_linked_operation_ids(self) -> set[str]: ...  # Ops that participate in links
     def get_link_fields(self) -> LinkFields: ...
     def generate(self, max_cases: int | None, seed: int | None) -> Iterator[RequestCase]: ...
     def generate_chains(self, max_chains: int | None, max_steps: int, seed: int | None) -> list[ChainCase]: ...
 ```
+
+`get_linked_operation_ids()` returns operations that are source or target of at least one OpenAPI link. These are the operations Schemathesis can reach via its state machine. Operations not in this set are "orphans" — invisible to chain generation and only testable via `--ensure-coverage`. Used by the CLI for coverage-guided seed walking (see below).
 
 Link field references are parsed from the OpenAPI spec at init. `LinkFields` contains:
 - `body_pointers`: JSONPointer paths for body fields
@@ -437,6 +441,50 @@ Without a link, Schemathesis can still call B after A, but generates random para
 3. Specs with incomplete link definitions will have gaps in stateful testing
 
 See DESIGN.md "Explicit Links Only for Chains" for the rationale behind disabling inference.
+
+### Coverage-Guided Seed Walking
+
+When `--seed` is provided, the CLI walks seeds (seed, seed+1, seed+2, ...) to accumulate chains. **Stopping is coverage-guided**: seed walking continues until the coverage target is met, then stops.
+
+The coverage target is defined by two parameters:
+- **`--min-hits-per-op N`** (default: 1) — each linked operation must appear in at least N unique (deduplicated) chains.
+- **`--min-coverage P`** (default: 100) — P% of linked operations must meet the min-hits-per-op threshold.
+
+Common configurations:
+
+| Configuration | Meaning | Use case |
+|---|---|---|
+| `--min-hits-per-op 1 --min-coverage 100` | Every linked op in at least 1 chain (default) | Quick coverage check |
+| `--min-hits-per-op 5 --min-coverage 100` | Every linked op in at least 5 unique chains | Deeper testing with diverse inputs |
+| `--min-hits-per-op 5 --min-coverage 80` | 80% of linked ops at 5+ chains | Tolerates hard-to-reach operations |
+
+The stopping conditions are checked in priority order:
+1. **Coverage met** — min_coverage% of linked operations have min_hits_per_op hits (primary goal)
+2. **Max chains** — accumulated `--max-chains` unique chain sequences (secondary limit, if set)
+3. **Max seeds** — tried 100 seeds without meeting the above (hard safety limit)
+
+When `--min-hits-per-op > 1` and `--max-chains` is not explicitly set, the chain count limit is removed (unlimited), so seed walking is driven entirely by the coverage depth target.
+
+A "hit" counts the number of unique (deduplicated) chains containing an operation, not the number of times the operation appears within a single chain. Chain deduplication uses the operation-ID signature (the ordered sequence of operation IDs in the chain).
+
+Coverage tracking uses `CaseGenerator.get_linked_operation_ids()` to know the target set. Operations are classified as:
+- **Linked** — participates in at least one OpenAPI link (source or target). These get state machine rules and are reachable via chains.
+- **Orphan** — no link involvement at all. Invisible to the state machine. Only testable via `--ensure-coverage`, which runs single-request tests with random parameters.
+
+Progress is printed during seed walking:
+```
+# Default (min_hits_per_op=1):
+  Seed 42: 150 chains, 12/14 linked operations covered
+  Seed 43: +47 new chains, 14/14 linked operations covered
+  Full linked coverage in 2 seed(s) (197 unique chains)
+
+# With --min-hits-per-op 5:
+  Seed 42: 150 chains, 8/14 ops at 5+ hits
+  Seed 43: +47 new chains, 14/14 ops at 5+ hits
+  Coverage target met in 2 seed(s) (197 unique chains, all at 5+ hits)
+```
+
+See TODO.md "Chain Coverage: Behavior and Spec Design Guidance" for empirical data on how many seeds different spec sizes require.
 
 ---
 

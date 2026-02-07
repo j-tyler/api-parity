@@ -239,6 +239,8 @@ class TestExploreArgs:
             max_steps=6,
             log_chains=False,
             ensure_coverage=False,
+            min_hits_per_op=1,
+            min_coverage=100,
         )
         args = parse_explore_args(namespace)
         assert isinstance(args, ExploreArgs)
@@ -251,6 +253,8 @@ class TestExploreArgs:
         assert args.max_chains is None
         assert args.max_steps == 6
         assert args.log_chains is False
+        assert args.min_hits_per_op == 1
+        assert args.min_coverage == 100
 
     def test_parse_explore_args_stateful_mode(self):
         """Test parse_explore_args handles stateful mode flags."""
@@ -273,6 +277,8 @@ class TestExploreArgs:
             max_steps=10,
             log_chains=True,
             ensure_coverage=False,
+            min_hits_per_op=1,
+            min_coverage=100,
         )
         args = parse_explore_args(namespace)
         assert args.stateful is True
@@ -302,6 +308,8 @@ class TestExploreArgs:
             max_steps=6,
             log_chains=False,
             ensure_coverage=True,
+            min_hits_per_op=1,
+            min_coverage=100,
         )
         args = parse_explore_args(namespace)
         assert args.stateful is True
@@ -334,11 +342,41 @@ class TestExploreArgs:
             max_steps=6,
             log_chains=False,
             ensure_coverage=True,
+            min_hits_per_op=1,
+            min_coverage=100,
         )
         args = parse_explore_args(namespace)
         assert args.stateful is True
         assert args.ensure_coverage is True
         assert args.exclude == ["excludedOp1", "excludedOp2"]
+
+    def test_parse_explore_args_coverage_depth_flags(self):
+        """Test parse_explore_args handles coverage depth flags."""
+        import argparse
+        namespace = argparse.Namespace(
+            command="explore",
+            spec=Path("spec.yaml"),
+            config=Path("config.yaml"),
+            target_a="a",
+            target_b="b",
+            out=Path("./out"),
+            seed=42,
+            max_cases=None,
+            validate=False,
+            exclude=[],
+            timeout=30.0,
+            operation_timeout=[],
+            stateful=True,
+            max_chains=None,
+            max_steps=6,
+            log_chains=False,
+            ensure_coverage=False,
+            min_hits_per_op=5,
+            min_coverage=80,
+        )
+        args = parse_explore_args(namespace)
+        assert args.min_hits_per_op == 5
+        assert args.min_coverage == 80
 
 
 class TestValidateMode:
@@ -619,174 +657,624 @@ class TestChainSignature:
 
 
 class TestGenerateChainsWithSeedWalking:
-    """Tests for _generate_chains_with_seed_walking function."""
+    """Tests for _generate_chains_with_seed_walking function.
 
-    def test_no_seed_single_pass(self, tmp_path):
+    The function returns a ChainGenerationResult dataclass with:
+    - chains: deduplicated chain list
+    - seeds_used: seeds that contributed unique chains
+    - operations_covered: all operation IDs seen in chains
+    - linked_operations / orphan_operations: classification from spec
+    - stopped_reason: why walking stopped (coverage_met, max_chains, max_seeds, no_seed)
+    - seeds_tried: total seeds attempted
+    """
+
+    @staticmethod
+    def _make_chain(op_ids: list[str], chain_id: str) -> "ChainCase":
+        """Helper to create a ChainCase from operation ID list."""
+        from api_parity.models import ChainCase, ChainStep, RequestCase
+        steps = []
+        for i, op_id in enumerate(op_ids):
+            request = RequestCase(
+                case_id=f"case-{i}",
+                operation_id=op_id,
+                method="GET",
+                path_template="/test",
+                rendered_path="/test",
+            )
+            steps.append(ChainStep(step_index=i, request_template=request))
+        return ChainCase(chain_id=chain_id, steps=steps)
+
+    def test_no_seed_single_pass(self):
         """Without seed, single pass is performed without seed walking."""
         from unittest.mock import MagicMock
 
         from api_parity.cli import _generate_chains_with_seed_walking
-        from api_parity.models import ChainCase, ChainStep, RequestCase
 
-        # Create mock generator
         mock_generator = MagicMock()
-
-        def make_chain(op_ids: list[str], chain_id: str) -> ChainCase:
-            steps = []
-            for i, op_id in enumerate(op_ids):
-                request = RequestCase(
-                    case_id=f"case-{i}",
-                    operation_id=op_id,
-                    method="GET",
-                    path_template="/test",
-                    rendered_path="/test",
-                )
-                steps.append(ChainStep(step_index=i, request_template=request))
-            return ChainCase(chain_id=chain_id, steps=steps)
-
-        # Return 2 chains from single pass
         mock_generator.generate_chains.return_value = [
-            make_chain(["op1", "op2"], "c1"),
-            make_chain(["op1", "op3"], "c2"),
+            self._make_chain(["op1", "op2"], "c1"),
+            self._make_chain(["op1", "op3"], "c2"),
         ]
 
-        chains, seeds_used = _generate_chains_with_seed_walking(
+        result = _generate_chains_with_seed_walking(
             generator=mock_generator,
             max_chains=5,
             max_steps=6,
             starting_seed=None,
         )
 
-        # Should have called generate_chains once with no seed
         mock_generator.generate_chains.assert_called_once_with(
             max_chains=5, max_steps=6, seed=None
         )
-        assert len(chains) == 2
-        assert seeds_used == []  # No seed walking
+        assert len(result.chains) == 2
+        assert result.seeds_used == []
+        assert result.stopped_reason == "no_seed"
+        assert result.operations_covered == {"op1", "op2", "op3"}
 
-    def test_seed_walking_accumulates_chains(self, tmp_path):
+    def test_seed_walking_accumulates_chains(self):
         """With seed, walking accumulates unique chains across seeds."""
         from unittest.mock import MagicMock
 
         from api_parity.cli import _generate_chains_with_seed_walking
-        from api_parity.models import ChainCase, ChainStep, RequestCase
 
         mock_generator = MagicMock()
 
-        def make_chain(op_ids: list[str], chain_id: str) -> ChainCase:
-            steps = []
-            for i, op_id in enumerate(op_ids):
-                request = RequestCase(
-                    case_id=f"case-{i}",
-                    operation_id=op_id,
-                    method="GET",
-                    path_template="/test",
-                    rendered_path="/test",
-                )
-                steps.append(ChainStep(step_index=i, request_template=request))
-            return ChainCase(chain_id=chain_id, steps=steps)
-
-        # Seed 42 returns 2 unique chains
-        # Seed 43 returns 1 unique chain + 1 duplicate
-        # Seed 44 returns 1 unique chain
-        call_count = [0]
-
         def mock_generate(max_chains, max_steps, seed):
-            call_count[0] += 1
             if seed == 42:
                 return [
-                    make_chain(["op1", "op2"], "c1"),
-                    make_chain(["op1", "op3"], "c2"),
+                    self._make_chain(["op1", "op2"], "c1"),
+                    self._make_chain(["op1", "op3"], "c2"),
                 ]
             elif seed == 43:
                 return [
-                    make_chain(["op1", "op2"], "c3"),  # Duplicate of c1
-                    make_chain(["op2", "op3"], "c4"),  # New
+                    self._make_chain(["op1", "op2"], "c3"),  # Duplicate of c1
+                    self._make_chain(["op2", "op3"], "c4"),  # New
                 ]
             elif seed == 44:
-                return [make_chain(["op3", "op4"], "c5")]  # New
+                return [self._make_chain(["op3", "op4"], "c5")]  # New
             return []
 
         mock_generator.generate_chains.side_effect = mock_generate
 
-        chains, seeds_used = _generate_chains_with_seed_walking(
+        result = _generate_chains_with_seed_walking(
             generator=mock_generator,
             max_chains=4,
             max_steps=6,
             starting_seed=42,
         )
 
-        # Should have accumulated 4 unique chains from 3 seeds
-        assert len(chains) == 4
-        assert seeds_used == [42, 43, 44]
+        assert len(result.chains) == 4
+        assert result.seeds_used == [42, 43, 44]
+        assert result.stopped_reason == "max_chains"
 
         # Verify the chains are deduplicated by signature
-        sigs = [tuple(s.request_template.operation_id for s in c.steps) for c in chains]
-        assert len(sigs) == len(set(sigs))  # All unique
+        sigs = [tuple(s.request_template.operation_id for s in c.steps) for c in result.chains]
+        assert len(sigs) == len(set(sigs))
 
     def test_seed_walking_stops_at_max_chains(self):
         """Seed walking stops when max_chains is reached."""
         from unittest.mock import MagicMock
 
         from api_parity.cli import _generate_chains_with_seed_walking
-        from api_parity.models import ChainCase, ChainStep, RequestCase
 
         mock_generator = MagicMock()
-
-        def make_chain(op_ids: list[str], chain_id: str) -> ChainCase:
-            steps = []
-            for i, op_id in enumerate(op_ids):
-                request = RequestCase(
-                    case_id=f"case-{i}",
-                    operation_id=op_id,
-                    method="GET",
-                    path_template="/test",
-                    rendered_path="/test",
-                )
-                steps.append(ChainStep(step_index=i, request_template=request))
-            return ChainCase(chain_id=chain_id, steps=steps)
-
         call_count = [0]
 
         def mock_generate(max_chains, max_steps, seed):
             call_count[0] += 1
-            # Each seed returns a unique chain
-            return [make_chain([f"op{seed}", f"op{seed+100}"], f"c{seed}")]
+            return [self._make_chain([f"op{seed}", f"op{seed+100}"], f"c{seed}")]
 
         mock_generator.generate_chains.side_effect = mock_generate
 
-        chains, seeds_used = _generate_chains_with_seed_walking(
+        result = _generate_chains_with_seed_walking(
             generator=mock_generator,
             max_chains=3,
             max_steps=6,
             starting_seed=0,
         )
 
-        # Should stop after 3 chains
-        assert len(chains) == 3
+        assert len(result.chains) == 3
         assert call_count[0] == 3
-        assert seeds_used == [0, 1, 2]
+        assert result.seeds_used == [0, 1, 2]
+        assert result.stopped_reason == "max_chains"
 
     def test_seed_walking_respects_max_increments(self):
         """Seed walking stops after MAX_SEED_INCREMENTS even if target not reached."""
         from unittest.mock import MagicMock
 
         from api_parity.cli import MAX_SEED_INCREMENTS, _generate_chains_with_seed_walking
-        from api_parity.models import ChainCase, ChainStep, RequestCase
 
         mock_generator = MagicMock()
-
-        # Always return empty - no chains available
         mock_generator.generate_chains.return_value = []
 
-        chains, seeds_used = _generate_chains_with_seed_walking(
+        result = _generate_chains_with_seed_walking(
             generator=mock_generator,
-            max_chains=1000,  # More than we can possibly get
+            max_chains=1000,
             max_steps=6,
             starting_seed=0,
         )
 
-        # Should have tried MAX_SEED_INCREMENTS times
         assert mock_generator.generate_chains.call_count == MAX_SEED_INCREMENTS
-        assert len(chains) == 0
-        assert seeds_used == []  # No seeds contributed chains
+        assert len(result.chains) == 0
+        assert result.seeds_used == []
+        assert result.stopped_reason == "max_seeds"
+
+    def test_coverage_guided_stops_when_all_linked_covered(self):
+        """Seed walking stops early when all linked operations are covered.
+
+        This is the primary coverage-guided stopping behavior. Given linked
+        operations {A, B, C, D}, walking stops as soon as chains cover all four,
+        even if max_chains hasn't been reached yet.
+        """
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+        linked_ops = {"opA", "opB", "opC", "opD"}
+
+        def mock_generate(max_chains, max_steps, seed):
+            if seed == 0:
+                # Covers opA, opB
+                return [self._make_chain(["opA", "opB"], "c1")]
+            elif seed == 1:
+                # Covers opC, opD — now all linked ops are covered
+                return [self._make_chain(["opC", "opD"], "c2")]
+            elif seed == 2:
+                # Would add more chains, but shouldn't be called
+                return [self._make_chain(["opA", "opD"], "c3")]
+            return []
+
+        mock_generator.generate_chains.side_effect = mock_generate
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=100,  # High limit — coverage should stop us first
+            max_steps=6,
+            starting_seed=0,
+            linked_operations=linked_ops,
+            all_operations=linked_ops | {"orphanOp"},
+        )
+
+        # Should stop after seed 1 (coverage met), NOT continue to seed 2
+        assert result.stopped_reason == "coverage_met"
+        assert len(result.chains) == 2
+        assert result.seeds_used == [0, 1]
+        assert result.coverage_complete is True
+        assert result.linked_covered_count == 4
+        assert result.linked_total_count == 4
+        assert result.linked_uncovered == set()
+        # Seed 2 should NOT have been called
+        assert mock_generator.generate_chains.call_count == 2
+
+    def test_coverage_tracking_reports_uncovered(self):
+        """When coverage isn't fully met, result shows which ops are missing."""
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+        linked_ops = {"opA", "opB", "opC"}
+
+        # Only covers opA and opB, never opC
+        mock_generator.generate_chains.return_value = [
+            self._make_chain(["opA", "opB"], "c1"),
+        ]
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=1,  # Stops at 1 chain
+            max_steps=6,
+            starting_seed=0,
+            linked_operations=linked_ops,
+        )
+
+        assert result.stopped_reason == "max_chains"
+        assert result.coverage_complete is False
+        assert result.linked_covered_count == 2
+        assert result.linked_uncovered == {"opC"}
+
+    def test_orphan_operations_computed_correctly(self):
+        """Orphan operations are all_operations minus linked_operations."""
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+        mock_generator.generate_chains.return_value = [
+            self._make_chain(["opA", "opB"], "c1"),
+        ]
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=5,
+            max_steps=6,
+            starting_seed=None,
+            linked_operations={"opA", "opB"},
+            all_operations={"opA", "opB", "healthCheck", "listAll"},
+        )
+
+        assert result.orphan_operations == {"healthCheck", "listAll"}
+
+    def test_no_linked_operations_falls_back_to_chain_count(self):
+        """Without linked_operations, seed walking uses only chain count stopping."""
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+        call_count = [0]
+
+        def mock_generate(max_chains, max_steps, seed):
+            call_count[0] += 1
+            return [self._make_chain([f"op{seed}", f"op{seed+10}"], f"c{seed}")]
+
+        mock_generator.generate_chains.side_effect = mock_generate
+
+        # No linked_operations provided — should behave like old chain-count mode
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=3,
+            max_steps=6,
+            starting_seed=0,
+            linked_operations=None,
+        )
+
+        assert len(result.chains) == 3
+        assert result.stopped_reason == "max_chains"
+        assert result.linked_operations is None
+        assert result.coverage_complete is False  # Can't be True without linked_operations
+
+    def test_coverage_met_overrides_max_chains(self):
+        """Coverage stopping takes priority: stops before max_chains if all ops covered."""
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+        linked_ops = {"opA", "opB"}
+
+        # Single seed covers everything
+        mock_generator.generate_chains.return_value = [
+            self._make_chain(["opA", "opB"], "c1"),
+        ]
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=100,  # Would need 100 chains without coverage stopping
+            max_steps=6,
+            starting_seed=0,
+            linked_operations=linked_ops,
+        )
+
+        # Coverage met on first seed — should not continue walking
+        assert result.stopped_reason == "coverage_met"
+        assert mock_generator.generate_chains.call_count == 1
+        assert result.coverage_complete is True
+
+    def test_min_hits_per_op_requires_multiple_chains(self):
+        """With min_hits_per_op=3, walking continues until each op appears in 3 chains.
+
+        Each linked operation must appear in at least 3 unique (deduplicated) chains
+        before the coverage target is met. Seed walking should continue past what
+        simple 1-hit coverage would require.
+
+        Chains are deduplicated by their operation-ID signature (the sequence of
+        operation IDs in the chain). So each seed must produce a chain with a
+        different signature to count as unique.
+        """
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+        linked_ops = {"opA", "opB"}
+
+        def mock_generate(max_chains, max_steps, seed):
+            # Each seed produces a unique chain (different signature via unique extra op)
+            # All chains contain opA and opB, so both get a hit per unique chain
+            return [self._make_chain(["opA", "opB", f"extra{seed}"], f"c{seed}")]
+
+        mock_generator.generate_chains.side_effect = mock_generate
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=None,  # Unlimited — coverage depth drives stopping
+            max_steps=6,
+            starting_seed=0,
+            linked_operations=linked_ops,
+            min_hits_per_op=3,
+            min_coverage_pct=100.0,
+        )
+
+        # Need 3 unique chains (each covers both ops), so 3 seeds
+        assert result.stopped_reason == "coverage_met"
+        assert len(result.chains) == 3
+        assert result.operation_hit_counts["opA"] == 3
+        assert result.operation_hit_counts["opB"] == 3
+        assert result.min_hits_per_op == 3
+        assert result.min_coverage_pct == 100.0
+        assert result.coverage_complete is True
+        assert result.ops_meeting_hits_target == 2
+
+    def test_min_hits_per_op_partial_coverage(self):
+        """With min_coverage_pct < 100, stops when enough ops meet the hit target.
+
+        min_hits_per_op=5, min_coverage_pct=50 means: stop when 50% of linked ops
+        have 5+ hits. This tolerates hard-to-reach operations.
+        """
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+        linked_ops = {"opA", "opB"}  # 2 ops, 50% = 1 op
+
+        def mock_generate(max_chains, max_steps, seed):
+            # Only opA gets hit every seed; opB never appears.
+            # Each seed produces a unique chain (different signature via seed suffix).
+            return [self._make_chain(["opA", f"filler{seed}"], f"c{seed}")]
+
+        mock_generator.generate_chains.side_effect = mock_generate
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=None,
+            max_steps=6,
+            starting_seed=0,
+            linked_operations=linked_ops,
+            min_hits_per_op=5,
+            min_coverage_pct=50.0,
+        )
+
+        # opA hits 5 on seed 4 (0-indexed). 50% of 2 ops = 1 op needed at 5+ hits.
+        assert result.stopped_reason == "coverage_met"
+        assert result.operation_hit_counts["opA"] == 5
+        assert result.operation_hit_counts.get("opB", 0) == 0
+        assert result.coverage_complete is True
+        assert result.ops_meeting_hits_target == 1
+
+    def test_operation_hit_counts_track_unique_chains_only(self):
+        """Hit counts only count deduplicated chains, not duplicates.
+
+        If seed 0 and seed 1 both produce chain [opA, opB], that's only 1 hit
+        for opA and opB (the duplicate is filtered out).
+        """
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+        linked_ops = {"opA", "opB"}
+
+        # Seed 0 and 1 produce the SAME chain (duplicate)
+        # Seed 2 produces a different chain
+        def mock_generate(max_chains, max_steps, seed):
+            if seed < 2:
+                return [self._make_chain(["opA", "opB"], f"c{seed}")]
+            else:
+                return [self._make_chain(["opB", "opA"], f"c{seed}")]
+
+        mock_generator.generate_chains.side_effect = mock_generate
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=None,
+            max_steps=6,
+            starting_seed=0,
+            linked_operations=linked_ops,
+            min_hits_per_op=2,
+            min_coverage_pct=100.0,
+        )
+
+        # Seed 0: chain [opA, opB] -> unique, opA=1, opB=1
+        # Seed 1: chain [opA, opB] -> DUPLICATE, ignored
+        # Seed 2: chain [opB, opA] -> unique, opA=2, opB=2 -> target met
+        assert result.stopped_reason == "coverage_met"
+        assert len(result.chains) == 2  # Only 2 unique chains
+        assert result.operation_hit_counts["opA"] == 2
+        assert result.operation_hit_counts["opB"] == 2
+
+    def test_operation_hit_counts_one_per_chain_even_if_op_appears_twice(self):
+        """An operation appearing multiple times in one chain counts as 1 hit.
+
+        Chain [opA, opB, opA] counts opA once (not twice), because we're
+        counting "number of unique chains containing this operation."
+        """
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+
+        # Chain has opA twice — should count as 1 hit for opA
+        mock_generator.generate_chains.return_value = [
+            self._make_chain(["opA", "opB", "opA"], "c1"),
+        ]
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=5,
+            max_steps=6,
+            starting_seed=None,
+        )
+
+        assert result.operation_hit_counts["opA"] == 1
+        assert result.operation_hit_counts["opB"] == 1
+
+    def test_ops_below_hits_target_shows_shortfall(self):
+        """ops_below_hits_target shows which linked ops haven't reached the target."""
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+        linked_ops = {"opA", "opB", "opC"}
+
+        # opA appears in 2 chains, opB in 1, opC in 0
+        mock_generator.generate_chains.return_value = [
+            self._make_chain(["opA", "opB"], "c1"),
+            self._make_chain(["opA"], "c2"),
+        ]
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=5,
+            max_steps=6,
+            starting_seed=None,
+            linked_operations=linked_ops,
+            min_hits_per_op=3,
+        )
+
+        below = result.ops_below_hits_target
+        assert "opA" in below  # 2 < 3
+        assert below["opA"] == 2
+        assert "opB" in below  # 1 < 3
+        assert below["opB"] == 1
+        assert "opC" in below  # 0 < 3
+        assert below["opC"] == 0
+
+    def test_cli_min_hits_per_op_default(self):
+        """--min-hits-per-op defaults to 1."""
+        args = parse_args([
+            "explore",
+            "--spec", "openapi.yaml",
+            "--config", "runtime.yaml",
+            "--target-a", "prod",
+            "--target-b", "stage",
+            "--out", "./out",
+            "--stateful",
+        ])
+
+        assert isinstance(args, ExploreArgs)
+        assert args.min_hits_per_op == 1
+        assert args.min_coverage == 100
+
+    def test_cli_min_hits_per_op_custom(self):
+        """--min-hits-per-op can be set to a custom value."""
+        args = parse_args([
+            "explore",
+            "--spec", "openapi.yaml",
+            "--config", "runtime.yaml",
+            "--target-a", "prod",
+            "--target-b", "stage",
+            "--out", "./out",
+            "--stateful",
+            "--min-hits-per-op", "5",
+            "--min-coverage", "80",
+            "--seed", "42",
+        ])
+
+        assert isinstance(args, ExploreArgs)
+        assert args.min_hits_per_op == 5
+        assert args.min_coverage == 80
+
+    def test_unlimited_max_chains_when_depth_target_set(self):
+        """When min_hits_per_op > 1 and no --max-chains, max_chains is None (unlimited).
+
+        This ensures seed walking continues until the depth target is met,
+        not stopped by an arbitrary chain count limit.
+        """
+        args = parse_args([
+            "explore",
+            "--spec", "openapi.yaml",
+            "--config", "runtime.yaml",
+            "--target-a", "prod",
+            "--target-b", "stage",
+            "--out", "./out",
+            "--stateful",
+            "--min-hits-per-op", "5",
+            "--seed", "42",
+        ])
+
+        assert isinstance(args, ExploreArgs)
+        assert args.min_hits_per_op == 5
+        # max_chains should be None (not explicitly set by user)
+        assert args.max_chains is None
+
+    def test_min_coverage_rejects_negative(self):
+        """--min-coverage rejects values below 0."""
+        # Validation is deferred to run_explore(), so argparse accepts it.
+        # We test that parse_args accepts -1 but run_explore would reject it.
+        # Since run_explore requires real config/spec, test the validation
+        # boundary directly via the parsed value.
+        args = parse_args([
+            "explore",
+            "--spec", "openapi.yaml",
+            "--config", "runtime.yaml",
+            "--target-a", "prod",
+            "--target-b", "stage",
+            "--out", "./out",
+            "--min-coverage", "-1",
+        ])
+        assert isinstance(args, ExploreArgs)
+        assert args.min_coverage == -1  # Accepted by argparse, rejected by run_explore
+
+    def test_min_coverage_rejects_over_100(self):
+        """--min-coverage rejects values above 100."""
+        args = parse_args([
+            "explore",
+            "--spec", "openapi.yaml",
+            "--config", "runtime.yaml",
+            "--target-a", "prod",
+            "--target-b", "stage",
+            "--out", "./out",
+            "--min-coverage", "200",
+        ])
+        assert isinstance(args, ExploreArgs)
+        assert args.min_coverage == 200  # Accepted by argparse, rejected by run_explore
+
+    def test_min_coverage_validation_in_run_explore(self):
+        """run_explore returns error code 1 for --min-coverage outside 0-100."""
+        from api_parity.cli import run_explore
+
+        args = ExploreArgs(
+            spec=Path("nonexistent.yaml"),
+            config=Path("nonexistent.yaml"),
+            target_a="a",
+            target_b="b",
+            out=Path("./out"),
+            seed=None,
+            max_cases=None,
+            validate=False,
+            exclude=[],
+            timeout=30.0,
+            operation_timeout={},
+            stateful=True,
+            max_chains=None,
+            max_steps=6,
+            log_chains=False,
+            ensure_coverage=False,
+            min_hits_per_op=1,
+            min_coverage=200,
+        )
+        # Should fail with error code 1 before trying to load any files
+        result = run_explore(args)
+        assert result == 1
+
+    def test_min_coverage_validation_negative_in_run_explore(self):
+        """run_explore returns error code 1 for negative --min-coverage."""
+        from api_parity.cli import run_explore
+
+        args = ExploreArgs(
+            spec=Path("nonexistent.yaml"),
+            config=Path("nonexistent.yaml"),
+            target_a="a",
+            target_b="b",
+            out=Path("./out"),
+            seed=None,
+            max_cases=None,
+            validate=False,
+            exclude=[],
+            timeout=30.0,
+            operation_timeout={},
+            stateful=True,
+            max_chains=None,
+            max_steps=6,
+            log_chains=False,
+            ensure_coverage=False,
+            min_hits_per_op=1,
+            min_coverage=-1,
+        )
+        result = run_explore(args)
+        assert result == 1

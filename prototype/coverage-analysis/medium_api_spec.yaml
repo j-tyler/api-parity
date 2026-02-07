@@ -1,0 +1,658 @@
+openapi: "3.0.3"
+info:
+  title: Medium Complexity API (Coverage Analysis)
+  version: "1.0.0"
+  description: |
+    A 20-operation API designed to test chain coverage behavior.
+    Represents a realistic CRUD+workflow API with:
+    - Multiple entry points (no required path params)
+    - Linked CRUD groups (Users, Projects, Tasks)
+    - Deep chains (Tasks require Projects which require Users)
+    - Orphan operations (health, search - no links)
+    - Operations reachable only via specific links
+
+servers:
+  - url: http://localhost:9999
+
+paths:
+  # ============================================================
+  # Entry points (no required path params) with outbound links
+  # ============================================================
+  /users:
+    post:
+      operationId: createUser
+      summary: Create user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                email:
+                  type: string
+                  format: email
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+          links:
+            GetUser:
+              operationId: getUser
+              parameters:
+                user_id: "$response.body#/id"
+            UpdateUser:
+              operationId: updateUser
+              parameters:
+                user_id: "$response.body#/id"
+            DeleteUser:
+              operationId: deleteUser
+              parameters:
+                user_id: "$response.body#/id"
+            ListUserProjects:
+              operationId: listUserProjects
+              parameters:
+                user_id: "$response.body#/id"
+            CreateProject:
+              operationId: createProject
+              parameters:
+                user_id: "$response.body#/id"
+
+    get:
+      operationId: listUsers
+      summary: List users
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/User"
+
+  # ============================================================
+  # User CRUD (depth 2 from createUser)
+  # ============================================================
+  /users/{user_id}:
+    get:
+      operationId: getUser
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+          links:
+            UpdateUser:
+              operationId: updateUser
+              parameters:
+                user_id: "$response.body#/id"
+            ListUserProjects:
+              operationId: listUserProjects
+              parameters:
+                user_id: "$response.body#/id"
+            CreateProject:
+              operationId: createProject
+              parameters:
+                user_id: "$response.body#/id"
+        "404":
+          description: Not found
+
+    put:
+      operationId: updateUser
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+          links:
+            GetUser:
+              operationId: getUser
+              parameters:
+                user_id: "$response.body#/id"
+
+    delete:
+      operationId: deleteUser
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Deleted
+
+  # ============================================================
+  # Project CRUD (depth 2-3 from entry points)
+  # ============================================================
+  /users/{user_id}/projects:
+    get:
+      operationId: listUserProjects
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Project"
+
+    post:
+      operationId: createProject
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+          links:
+            GetProject:
+              operationId: getProject
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/id"
+            UpdateProject:
+              operationId: updateProject
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/id"
+            DeleteProject:
+              operationId: deleteProject
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/id"
+            CreateTask:
+              operationId: createTask
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/id"
+
+  /users/{user_id}/projects/{project_id}:
+    get:
+      operationId: getProject
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Project details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+          links:
+            UpdateProject:
+              operationId: updateProject
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/id"
+            CreateTask:
+              operationId: createTask
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/id"
+            ListTasks:
+              operationId: listTasks
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/id"
+        "404":
+          description: Not found
+
+    put:
+      operationId: updateProject
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+          links:
+            GetProject:
+              operationId: getProject
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/id"
+
+    delete:
+      operationId: deleteProject
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Deleted
+
+  # ============================================================
+  # Task CRUD (depth 3-4 from entry points)
+  # ============================================================
+  /users/{user_id}/projects/{project_id}/tasks:
+    get:
+      operationId: listTasks
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: List of tasks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Task"
+
+    post:
+      operationId: createTask
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                priority:
+                  type: string
+                  enum: [low, medium, high, critical]
+      responses:
+        "201":
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+          links:
+            GetTask:
+              operationId: getTask
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/project_id"
+                task_id: "$response.body#/id"
+            UpdateTask:
+              operationId: updateTask
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/project_id"
+                task_id: "$response.body#/id"
+            CompleteTask:
+              operationId: completeTask
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/project_id"
+                task_id: "$response.body#/id"
+
+  /users/{user_id}/projects/{project_id}/tasks/{task_id}:
+    get:
+      operationId: getTask
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Task details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+          links:
+            UpdateTask:
+              operationId: updateTask
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/project_id"
+                task_id: "$response.body#/id"
+            CompleteTask:
+              operationId: completeTask
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/project_id"
+                task_id: "$response.body#/id"
+        "404":
+          description: Not found
+
+    put:
+      operationId: updateTask
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                priority:
+                  type: string
+                  enum: [low, medium, high, critical]
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+          links:
+            GetTask:
+              operationId: getTask
+              parameters:
+                user_id: "$response.body#/owner_id"
+                project_id: "$response.body#/project_id"
+                task_id: "$response.body#/id"
+
+  /users/{user_id}/projects/{project_id}/tasks/{task_id}/complete:
+    post:
+      operationId: completeTask
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Task completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  # ============================================================
+  # Orphan operations (no links, reachable only in isolation)
+  # ============================================================
+  /health:
+    get:
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Health status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy]
+
+  /search:
+    get:
+      operationId: searchAll
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+
+  /metrics:
+    get:
+      operationId: getMetrics
+      responses:
+        "200":
+          description: System metrics
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  schemas:
+    User:
+      type: object
+      required: [id, name, email]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+
+    Project:
+      type: object
+      required: [id, owner_id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+
+    Task:
+      type: object
+      required: [id, owner_id, project_id, title]
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        status:
+          type: string
+          enum: [open, in_progress, completed]

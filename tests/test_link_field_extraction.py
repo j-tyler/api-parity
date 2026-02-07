@@ -888,3 +888,80 @@ class TestFilterParentPointers:
             "metadata/id",
             "other",
         }
+
+
+class TestGetLinkedOperationIds:
+    """Tests for CaseGenerator.get_linked_operation_ids().
+
+    Verifies that operations are correctly classified as "linked" (participating
+    in at least one OpenAPI link as source or target) vs "orphan" (no link
+    involvement, invisible to the state machine).
+    """
+
+    def test_linked_ops_from_test_api(self):
+        """test_api.yaml: createWidget has outbound links, getWidget is a target, etc."""
+        gen = CaseGenerator(Path("tests/fixtures/test_api.yaml"))
+        linked = gen.get_linked_operation_ids()
+        all_ops = gen.get_all_operation_ids()
+
+        # Operations that participate in links (from spec inspection):
+        # createWidget (source), getWidget (source+target), updateWidget (source+target),
+        # deleteWidget (target), createOrder (source), getOrder (target)
+        assert "createWidget" in linked
+        assert "getWidget" in linked
+        assert "updateWidget" in linked
+        assert "deleteWidget" in linked
+        assert "createOrder" in linked
+        assert "getOrder" in linked
+
+        # Orphans (no link involvement):
+        assert "listWidgets" not in linked
+        assert "getUserProfile" not in linked
+        assert "healthCheck" not in linked
+
+        # Sanity check: orphans + linked = all operations
+        orphans = all_ops - linked
+        assert orphans == {"listWidgets", "getUserProfile", "healthCheck"}
+
+    def test_linked_ops_from_enum_chain_spec(self):
+        """enum_chain_spec.yaml: all operations participate in links."""
+        gen = CaseGenerator(Path("tests/fixtures/enum_chain_spec.yaml"))
+        linked = gen.get_linked_operation_ids()
+        all_ops = gen.get_all_operation_ids()
+
+        # listLibraries -> getBooks -> getBookDetails: all linked
+        assert "listLibraries" in linked
+        assert "getBooks" in linked
+        assert "getBookDetails" in linked
+
+        # No orphans in this spec
+        assert all_ops == linked
+
+    def test_linked_ops_empty_spec(self):
+        """Spec with no links returns empty linked set."""
+        gen = CaseGenerator.__new__(CaseGenerator)
+        # Manually set _raw_spec for a spec with no links
+        gen._raw_spec = {
+            "paths": {
+                "/health": {
+                    "get": {
+                        "operationId": "healthCheck",
+                        "responses": {"200": {"description": "OK"}},
+                    }
+                }
+            }
+        }
+        linked = gen.get_linked_operation_ids()
+        assert linked == set()
+
+    def test_excludes_do_not_affect_linked_computation(self):
+        """get_linked_operation_ids() returns all linked ops regardless of excludes."""
+        gen = CaseGenerator(
+            Path("tests/fixtures/test_api.yaml"),
+            exclude_operations=["createWidget"],
+        )
+        linked = gen.get_linked_operation_ids()
+
+        # createWidget is still "linked" because it has outbound links in the spec.
+        # Exclusion only affects which operations are generated, not which are linked.
+        assert "createWidget" in linked

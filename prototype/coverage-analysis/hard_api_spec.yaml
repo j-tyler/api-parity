@@ -1,0 +1,455 @@
+openapi: "3.0.3"
+info:
+  title: Hard Coverage API (Stress Test)
+  version: "1.0.0"
+  description: |
+    A spec designed to stress-test chain coverage with patterns that should
+    be harder for Schemathesis to cover:
+    - Deep chain only (depth 5): opE5 only reachable via A->B->C->D->E5
+    - Single-source bottleneck: opBottleneck only linked from one rare operation
+    - Many entry points competing: 5 entry points dilute exploration
+    - Wide fan-out: one operation links to 8 targets (dilutes probability per target)
+    - Non-standard status code link: links from 202, 204
+
+servers:
+  - url: http://localhost:9999
+
+paths:
+  # ============================================================
+  # Pattern 1: Linear deep chain (depth 5)
+  # A -> B -> C -> D -> E5
+  # ============================================================
+  /chain-a:
+    post:
+      operationId: chainA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+          links:
+            Next:
+              operationId: chainB
+              parameters:
+                id: "$response.body#/id"
+
+  /chain-b/{id}:
+    get:
+      operationId: chainB
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+          links:
+            Next:
+              operationId: chainC
+              parameters:
+                id: "$response.body#/id"
+
+  /chain-c/{id}:
+    get:
+      operationId: chainC
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+          links:
+            Next:
+              operationId: chainD
+              parameters:
+                id: "$response.body#/id"
+
+  /chain-d/{id}:
+    get:
+      operationId: chainD
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+          links:
+            DeepTarget:
+              operationId: chainE5
+              parameters:
+                id: "$response.body#/id"
+
+  /chain-e5/{id}:
+    get:
+      operationId: chainE5
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Deep operation at depth 5
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+
+  # ============================================================
+  # Pattern 2: Wide fan-out (1 source -> 8 targets)
+  # Dilutes probability of reaching any specific target
+  # ============================================================
+  /fan-source:
+    post:
+      operationId: fanSource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+          links:
+            Target1:
+              operationId: fanTarget1
+              parameters:
+                id: "$response.body#/id"
+            Target2:
+              operationId: fanTarget2
+              parameters:
+                id: "$response.body#/id"
+            Target3:
+              operationId: fanTarget3
+              parameters:
+                id: "$response.body#/id"
+            Target4:
+              operationId: fanTarget4
+              parameters:
+                id: "$response.body#/id"
+            Target5:
+              operationId: fanTarget5
+              parameters:
+                id: "$response.body#/id"
+            Target6:
+              operationId: fanTarget6
+              parameters:
+                id: "$response.body#/id"
+            Target7:
+              operationId: fanTarget7
+              parameters:
+                id: "$response.body#/id"
+            Target8:
+              operationId: fanTarget8
+              parameters:
+                id: "$response.body#/id"
+
+  /fan-t1/{id}:
+    get:
+      operationId: fanTarget1
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {type: object, properties: {id: {type: string}}}
+
+  /fan-t2/{id}:
+    get:
+      operationId: fanTarget2
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {type: object, properties: {id: {type: string}}}
+
+  /fan-t3/{id}:
+    get:
+      operationId: fanTarget3
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {type: object, properties: {id: {type: string}}}
+
+  /fan-t4/{id}:
+    get:
+      operationId: fanTarget4
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {type: object, properties: {id: {type: string}}}
+
+  /fan-t5/{id}:
+    get:
+      operationId: fanTarget5
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {type: object, properties: {id: {type: string}}}
+
+  /fan-t6/{id}:
+    get:
+      operationId: fanTarget6
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {type: object, properties: {id: {type: string}}}
+
+  /fan-t7/{id}:
+    get:
+      operationId: fanTarget7
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {type: object, properties: {id: {type: string}}}
+
+  /fan-t8/{id}:
+    get:
+      operationId: fanTarget8
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: {type: object, properties: {id: {type: string}}}
+
+  # ============================================================
+  # Pattern 3: Non-standard status code links (202, 204)
+  # ============================================================
+  /async-job:
+    post:
+      operationId: startAsyncJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  minLength: 1
+      responses:
+        "202":
+          description: Accepted (async)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id]
+                properties:
+                  job_id:
+                    type: string
+                    format: uuid
+          links:
+            PollJob:
+              operationId: getJobStatus
+              parameters:
+                job_id: "$response.body#/job_id"
+
+  /async-job/{job_id}:
+    get:
+      operationId: getJobStatus
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Job status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [pending, running, completed]
+
+  # ============================================================
+  # Pattern 4: Isolated cluster (no path from main entry points)
+  # These operations link to each other but no entry point links here
+  # ============================================================
+  /isolated-cluster/start:
+    post:
+      operationId: isolatedStart
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data]
+              properties:
+                data:
+                  type: string
+                  minLength: 1
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+          links:
+            GetResult:
+              operationId: isolatedResult
+              parameters:
+                id: "$response.body#/id"
+
+  /isolated-cluster/{id}/result:
+    get:
+      operationId: isolatedResult
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  value:
+                    type: string
+
+  # ============================================================
+  # Orphans (no links at all)
+  # ============================================================
+  /health:
+    get:
+      operationId: healthCheck
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
