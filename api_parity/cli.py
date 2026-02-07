@@ -241,6 +241,8 @@ class ExploreArgs:
     max_steps: int
     log_chains: bool
     ensure_coverage: bool
+    min_hits_per_op: int
+    min_coverage: int
 
 
 @dataclass
@@ -458,6 +460,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ensure all operations are tested at least once. Runs single-request tests "
         "on any operations not covered by chains (stateful mode only)",
     )
+    explore_parser.add_argument(
+        "--min-hits-per-op",
+        type=positive_int,
+        default=1,
+        dest="min_hits_per_op",
+        help="Minimum number of unique chains each linked operation must appear in "
+        "before coverage is considered met. Higher values test each operation with "
+        "more diverse inputs. Requires --seed. (default: 1, stateful mode only)",
+    )
+    explore_parser.add_argument(
+        "--min-coverage",
+        type=int,
+        default=100,
+        dest="min_coverage",
+        help="Percentage (0-100) of linked operations that must meet --min-hits-per-op "
+        "before seed walking stops. (default: 100, stateful mode only)",
+    )
 
     # Replay subcommand
     replay_parser = subparsers.add_parser(
@@ -579,6 +598,8 @@ def parse_explore_args(namespace: argparse.Namespace) -> ExploreArgs:
         max_steps=namespace.max_steps,
         log_chains=namespace.log_chains,
         ensure_coverage=namespace.ensure_coverage,
+        min_hits_per_op=namespace.min_hits_per_op,
+        min_coverage=namespace.min_coverage,
     )
 
 
@@ -777,62 +798,266 @@ def _chain_signature(chain: "ChainCase") -> tuple[str, ...]:
 MAX_SEED_INCREMENTS = 100
 
 
+@dataclass
+class ChainGenerationResult:
+    """Result of chain generation with coverage tracking.
+
+    Returned by _generate_chains_with_seed_walking(). Contains the generated
+    chains plus metadata about how coverage was achieved, so callers can
+    report to users without re-computing anything.
+
+    Coverage is defined by two thresholds:
+    - min_hits_per_op: each linked operation must appear in this many unique chains
+    - min_coverage_pct: this percentage of linked operations must meet min_hits_per_op
+
+    Example: min_hits_per_op=5, min_coverage_pct=100 means "every linked operation
+    must appear in at least 5 unique chains."
+
+    Attributes:
+        chains: Deduplicated chains ready for execution.
+        seeds_used: Seeds that contributed at least one unique chain.
+        operations_covered: All operation IDs that appear in at least one chain step.
+        operation_hit_counts: Number of unique chains each operation appears in.
+            Only counts deduplicated chains (the ones that will be executed).
+        linked_operations: Operations that participate in links (the reachable set).
+            None if linked_operations was not provided to the generator.
+        orphan_operations: Operations with no link involvement (invisible to chains).
+            None if linked_operations was not provided.
+        min_hits_per_op: The target hits-per-operation used for this generation.
+        min_coverage_pct: The target coverage percentage used for this generation.
+        stopped_reason: Why seed walking stopped. One of:
+            "coverage_met" — coverage target achieved
+            "max_chains" — accumulated enough unique chain sequences
+            "max_seeds" — hit MAX_SEED_INCREMENTS without meeting other targets
+            "no_seed" — single pass (no seed walking)
+        seeds_tried: Total number of seeds attempted (0 if no seed walking).
+    """
+
+    chains: list["ChainCase"]
+    seeds_used: list[int]
+    operations_covered: set[str]
+    operation_hit_counts: dict[str, int]
+    linked_operations: set[str] | None
+    orphan_operations: set[str] | None
+    min_hits_per_op: int
+    min_coverage_pct: float
+    stopped_reason: str
+    seeds_tried: int
+
+    @property
+    def coverage_complete(self) -> bool:
+        """True if coverage target is met (min_coverage_pct of linked ops at min_hits_per_op)."""
+        if self.linked_operations is None:
+            return False
+        if not self.linked_operations:
+            return True
+        ops_meeting_target = sum(
+            1 for op in self.linked_operations
+            if self.operation_hit_counts.get(op, 0) >= self.min_hits_per_op
+        )
+        return (ops_meeting_target / len(self.linked_operations) * 100) >= self.min_coverage_pct
+
+    @property
+    def linked_covered_count(self) -> int:
+        """Number of linked operations covered (at least 1 hit)."""
+        if self.linked_operations is None:
+            return len(self.operations_covered)
+        return len(self.operations_covered & self.linked_operations)
+
+    @property
+    def linked_total_count(self) -> int:
+        """Total number of linked operations."""
+        if self.linked_operations is None:
+            return 0
+        return len(self.linked_operations)
+
+    @property
+    def linked_uncovered(self) -> set[str]:
+        """Linked operations not yet covered (0 hits)."""
+        if self.linked_operations is None:
+            return set()
+        return self.linked_operations - self.operations_covered
+
+    @property
+    def ops_meeting_hits_target(self) -> int:
+        """Number of linked operations that have >= min_hits_per_op hits."""
+        if self.linked_operations is None:
+            return 0
+        return sum(
+            1 for op in self.linked_operations
+            if self.operation_hit_counts.get(op, 0) >= self.min_hits_per_op
+        )
+
+    @property
+    def ops_below_hits_target(self) -> dict[str, int]:
+        """Linked operations below the hits target, with their current hit counts."""
+        if self.linked_operations is None:
+            return {}
+        return {
+            op: self.operation_hit_counts.get(op, 0)
+            for op in self.linked_operations
+            if self.operation_hit_counts.get(op, 0) < self.min_hits_per_op
+        }
+
+    @property
+    def min_linked_hits(self) -> int:
+        """Lowest hit count among linked operations (0 if any uncovered)."""
+        if not self.linked_operations:
+            return 0
+        return min(
+            self.operation_hit_counts.get(op, 0)
+            for op in self.linked_operations
+        )
+
+    @property
+    def max_linked_hits(self) -> int:
+        """Highest hit count among linked operations."""
+        if not self.linked_operations:
+            return 0
+        return max(
+            self.operation_hit_counts.get(op, 0)
+            for op in self.linked_operations
+        )
+
+
 def _generate_chains_with_seed_walking(
     generator: "CaseGenerator",
-    max_chains: int,
+    max_chains: int | None,
     max_steps: int,
     starting_seed: int | None,
-) -> tuple[list["ChainCase"], list[int]]:
-    """Generate chains with incremental seed walking.
+    linked_operations: set[str] | None = None,
+    all_operations: set[str] | None = None,
+    min_hits_per_op: int = 1,
+    min_coverage_pct: float = 100.0,
+) -> ChainGenerationResult:
+    """Generate chains with coverage-guided seed walking.
 
-    When starting_seed is provided and fewer than max_chains are generated,
-    continues with starting_seed+1, +2, etc. until max_chains is reached
-    or MAX_SEED_INCREMENTS seeds are tried.
+    Seed walking continues until one of these conditions is met (checked in order):
+    1. Coverage target met: min_coverage_pct of linked operations have >= min_hits_per_op
+       hits in unique chains
+    2. max_chains unique chain sequences accumulated (hard cap, if set)
+    3. MAX_SEED_INCREMENTS seeds tried (hard safety limit)
 
-    Seed walking ONLY activates when a seed is explicitly provided. Without
-    a seed, a single generation pass is performed and whatever chains are
-    produced are returned.
+    Coverage is the primary stopping criterion. The combination of min_hits_per_op
+    and min_coverage_pct controls how deep the exploration goes:
 
-    Chains are deduplicated by operation sequence (chain signature). Two chains
-    with the same sequence of operation IDs are considered duplicates even if
-    they have different generated parameter values.
+        min_hits_per_op=1, min_coverage_pct=100  (default)
+            Every linked operation in at least 1 chain. Typically 1-4 seeds.
+
+        min_hits_per_op=5, min_coverage_pct=100
+            Every linked operation in at least 5 unique chains. More seeds needed,
+            but each operation gets tested with diverse inputs.
+
+        min_hits_per_op=5, min_coverage_pct=80
+            80% of linked operations in at least 5 chains. Tolerates hard-to-reach
+            operations while ensuring most of the API is well-tested.
+
+    Seed walking ONLY activates when a seed is explicitly provided. Without a seed,
+    a single generation pass is performed.
 
     Args:
         generator: The CaseGenerator instance.
-        max_chains: Maximum number of unique chains to accumulate.
+        max_chains: Maximum number of unique chains to accumulate. None = no limit
+            (only coverage target and MAX_SEED_INCREMENTS apply).
         max_steps: Maximum steps per chain.
         starting_seed: The initial seed value, or None for non-deterministic.
+        linked_operations: Set of operationIds that participate in links.
+            When provided, enables coverage-guided stopping. Obtain from
+            CaseGenerator.get_linked_operation_ids().
+        all_operations: Set of ALL operationIds in the spec. Used to compute
+            orphan operations (those not in linked_operations).
+        min_hits_per_op: Minimum number of unique chains each linked operation must
+            appear in before coverage is considered met. Default 1.
+        min_coverage_pct: Percentage (0-100) of linked operations that must meet
+            min_hits_per_op. Default 100 (all linked operations).
 
     Returns:
-        Tuple of (chains, seeds_used) where:
-        - chains: List of unique ChainCase objects
-        - seeds_used: List of seeds that contributed at least one unique chain
+        ChainGenerationResult with chains, per-op hit counts, and stopping reason.
     """
     accumulated_chains: list["ChainCase"] = []
     seen_signatures: set[tuple[str, ...]] = set()
     seeds_used: list[int] = []
+    operations_covered: set[str] = set()
+    # Per-operation hit counts from deduplicated chains only.
+    # A "hit" means the operation appears in a unique chain that will be executed.
+    operation_hit_counts: dict[str, int] = {}
+
+    # Compute orphans if both sets provided
+    orphan_operations: set[str] | None = None
+    if linked_operations is not None and all_operations is not None:
+        orphan_operations = all_operations - linked_operations
+
+    def _collect_coverage(chains: list["ChainCase"]) -> None:
+        """Track which operations appear in the given chains (all, not just unique)."""
+        for chain in chains:
+            for step in chain.steps:
+                operations_covered.add(step.request_template.operation_id)
+
+    def _add_hits_from_chain(chain: "ChainCase") -> None:
+        """Increment hit counts for each operation in a newly-added unique chain."""
+        seen_ops_in_chain: set[str] = set()
+        for step in chain.steps:
+            op_id = step.request_template.operation_id
+            # Count each operation once per chain, even if it appears multiple times
+            # in the same chain (e.g., a chain that calls getUser twice)
+            if op_id not in seen_ops_in_chain:
+                seen_ops_in_chain.add(op_id)
+                operation_hit_counts[op_id] = operation_hit_counts.get(op_id, 0) + 1
+
+    def _coverage_target_met() -> bool:
+        """Check if min_coverage_pct of linked operations have >= min_hits_per_op hits."""
+        if linked_operations is None:
+            return False
+        if not linked_operations:
+            return True
+        ops_meeting_target = sum(
+            1 for op in linked_operations
+            if operation_hit_counts.get(op, 0) >= min_hits_per_op
+        )
+        return (ops_meeting_target / len(linked_operations) * 100) >= min_coverage_pct
+
+    def _make_result(stopped_reason: str, seeds_tried: int) -> ChainGenerationResult:
+        return ChainGenerationResult(
+            chains=accumulated_chains,
+            seeds_used=seeds_used,
+            operations_covered=operations_covered,
+            operation_hit_counts=dict(operation_hit_counts),
+            linked_operations=linked_operations,
+            orphan_operations=orphan_operations,
+            min_hits_per_op=min_hits_per_op,
+            min_coverage_pct=min_coverage_pct,
+            stopped_reason=stopped_reason,
+            seeds_tried=seeds_tried,
+        )
 
     # If no seed provided, do a single pass without seed walking
     if starting_seed is None:
         chains = generator.generate_chains(
-            max_chains=max_chains,
+            max_chains=max_chains or 20,
             max_steps=max_steps,
             seed=None,
         )
-        return chains, []
+        accumulated_chains.extend(chains)
+        _collect_coverage(chains)
+        for chain in chains:
+            _add_hits_from_chain(chain)
+        return _make_result("no_seed", 0)
 
-    # Seed walking: try incrementing seeds until we have enough chains
+    # Seed walking: try incrementing seeds until coverage target met
     current_seed = starting_seed
     seeds_tried = 0
+    stopped_reason = "max_seeds"
 
-    while len(accumulated_chains) < max_chains and seeds_tried < MAX_SEED_INCREMENTS:
+    while seeds_tried < MAX_SEED_INCREMENTS:
+        seeds_tried += 1
+
         chains = generator.generate_chains(
-            max_chains=max_chains,
+            max_chains=max_chains or 20,
             max_steps=max_steps,
             seed=current_seed,
         )
 
-        # Track if this seed contributed any new unique chains
+        # Deduplicate and track hits from new unique chains
         seed_contributed = False
         new_chains_this_seed = 0
 
@@ -841,26 +1066,88 @@ def _generate_chains_with_seed_walking(
             if sig not in seen_signatures:
                 seen_signatures.add(sig)
                 accumulated_chains.append(chain)
+                _add_hits_from_chain(chain)
                 seed_contributed = True
                 new_chains_this_seed += 1
 
-                # Stop early if we've reached the target
-                if len(accumulated_chains) >= max_chains:
-                    break
+        # Track binary coverage from ALL chains (including duplicates).
+        # This is separate from _add_hits_from_chain because they serve
+        # different purposes:
+        # - operations_covered (binary set): "was this op seen at all?"
+        #   Used by --ensure-coverage to know which ops need backfill.
+        #   Counts ALL chains including duplicates.
+        # - operation_hit_counts (per-op int): "how many unique chains
+        #   include this op?" Used by --min-hits-per-op depth targeting.
+        #   Only counts deduplicated chains.
+        _collect_coverage(chains)
 
         if seed_contributed:
             seeds_used.append(current_seed)
 
-        # Progress indication: report every 10 seeds tried to show activity
-        # during potentially long-running seed walking (each seed can take 10-20s)
-        if seeds_tried > 0 and seeds_tried % 10 == 0:
-            print(f"  Seed walking: tried {seeds_tried} seeds, {len(accumulated_chains)}/{max_chains} unique chains found...")
+        # Print progress showing coverage depth
+        if linked_operations:
+            total_linked = len(linked_operations)
+            ops_at_target = sum(
+                1 for op in linked_operations
+                if operation_hit_counts.get(op, 0) >= min_hits_per_op
+            )
+            if min_hits_per_op > 1:
+                # Show depth progress when user requested multiple hits
+                if seeds_tried == 1:
+                    print(f"  Seed {current_seed}: {len(accumulated_chains)} chains, "
+                          f"{ops_at_target}/{total_linked} ops at {min_hits_per_op}+ hits")
+                elif new_chains_this_seed > 0:
+                    print(f"  Seed {current_seed}: +{new_chains_this_seed} new chains, "
+                          f"{ops_at_target}/{total_linked} ops at {min_hits_per_op}+ hits")
+            else:
+                # Show simple coverage when min_hits_per_op is 1
+                covered_count = len(operations_covered & linked_operations)
+                if seeds_tried == 1:
+                    print(f"  Seed {current_seed}: {len(accumulated_chains)} chains, "
+                          f"{covered_count}/{total_linked} linked operations covered")
+                elif new_chains_this_seed > 0:
+                    print(f"  Seed {current_seed}: +{new_chains_this_seed} new chains, "
+                          f"{covered_count}/{total_linked} linked operations covered")
+        elif seeds_tried % 10 == 0:
+            print(f"  Seed walking: tried {seeds_tried} seeds, "
+                  f"{len(accumulated_chains)} unique chains found...")
+
+        # Check stopping conditions in priority order:
+        # 1. Coverage target met (primary goal)
+        if _coverage_target_met():
+            stopped_reason = "coverage_met"
+            break
+        # 2. Chain count reached (secondary limit, only if max_chains set)
+        if max_chains is not None and len(accumulated_chains) >= max_chains:
+            stopped_reason = "max_chains"
+            break
 
         current_seed += 1
-        seeds_tried += 1
 
-    # Defensive slice in case future code changes allow over-collection
-    return accumulated_chains[:max_chains], seeds_used
+    # Print final summary line for seed walking
+    if linked_operations and seeds_tried > 0:
+        total_linked = len(linked_operations)
+        if stopped_reason == "coverage_met":
+            if min_hits_per_op > 1:
+                ops_at_target = sum(
+                    1 for op in linked_operations
+                    if operation_hit_counts.get(op, 0) >= min_hits_per_op
+                )
+                print(f"  Coverage target met in {len(seeds_used)} seed(s) "
+                      f"({len(accumulated_chains)} unique chains, "
+                      f"{ops_at_target}/{total_linked} at {min_hits_per_op}+ hits)")
+            else:
+                print(f"  Full linked coverage in {len(seeds_used)} seed(s) "
+                      f"({len(accumulated_chains)} unique chains)")
+        else:
+            ops_at_target = sum(
+                1 for op in linked_operations
+                if operation_hit_counts.get(op, 0) >= min_hits_per_op
+            )
+            print(f"  Stopped ({stopped_reason}): {ops_at_target}/{total_linked} ops "
+                  f"at {min_hits_per_op}+ hits after {seeds_tried} seeds")
+
+    return _make_result(stopped_reason, seeds_tried if starting_seed is not None else 0)
 
 
 def _run_graph_chains_generated(args: GraphChainsArgs) -> int:
@@ -887,22 +1174,30 @@ def _run_graph_chains_generated(args: GraphChainsArgs) -> int:
     # Get declared links for coverage comparison
     declared_links = _extract_declared_links(generator._raw_spec, set(args.exclude))
 
-    # Generate chains with seed walking if seed is provided
+    # Compute linked operations for coverage-guided stopping
+    excluded_set = set(args.exclude)
+    linked_operations = generator.get_linked_operation_ids() - excluded_set
+    all_operations = generator.get_all_operation_ids() - excluded_set
+
+    # Generate chains with coverage-guided seed walking
     print(f"Generating chains (max_chains={args.max_chains}, max_steps={args.max_steps})...")
-    chains, seeds_used = _generate_chains_with_seed_walking(
+    gen_result = _generate_chains_with_seed_walking(
         generator=generator,
         max_chains=args.max_chains,
         max_steps=args.max_steps,
         starting_seed=args.seed,
+        linked_operations=linked_operations,
+        all_operations=all_operations,
     )
+    chains = gen_result.chains
 
     # Report seed walking if it occurred
-    if seeds_used:
-        if len(seeds_used) == 1:
-            print(f"Used seed: {seeds_used[0]}")
+    if gen_result.seeds_used:
+        if len(gen_result.seeds_used) == 1:
+            print(f"Used seed: {gen_result.seeds_used[0]}")
         else:
-            # Show seed range and count of seeds that contributed unique chains
-            print(f"Seed walking: {len(seeds_used)} seeds contributed unique chains (range: {seeds_used[0]}-{seeds_used[-1]})")
+            print(f"Seed walking: {len(gen_result.seeds_used)} seeds contributed unique chains "
+                  f"(range: {gen_result.seeds_used[0]}-{gen_result.seeds_used[-1]})")
 
     if not chains:
         print("\nNo multi-step chains generated.")
@@ -912,8 +1207,8 @@ def _run_graph_chains_generated(args: GraphChainsArgs) -> int:
     # Track which links were actually used
     used_links: set[tuple[str, str, str]] = set()  # (source_op, status_code, target_op)
 
-    # Track which operations are actually called in chains
-    operations_called: set[str] = set()
+    # Use coverage data from generation (already computed during seed walking)
+    operations_called: set[str] = set(gen_result.operations_covered)
 
     # Output chains
     print()
@@ -930,9 +1225,6 @@ def _run_graph_chains_generated(args: GraphChainsArgs) -> int:
             op_id = step.request_template.operation_id
             method = step.request_template.method
             path = step.request_template.path_template
-
-            # Track this operation was called
-            operations_called.add(op_id)
 
             print(f"  {step_num}. {op_id}: {method} {path}")
 
@@ -1305,6 +1597,11 @@ def run_explore(args: ExploreArgs) -> int:
             print("Validation failed")
             return 1
 
+    # Validate --min-coverage range
+    if args.min_coverage < 0 or args.min_coverage > 100:
+        print("Error: --min-coverage must be between 0 and 100", file=sys.stderr)
+        return 1
+
     # Warn if stateful flags used without --stateful
     if not args.stateful and args.max_chains is not None:
         print("Warning: --max-chains is ignored without --stateful", file=sys.stderr)
@@ -1312,6 +1609,18 @@ def run_explore(args: ExploreArgs) -> int:
         print("Warning: --log-chains is ignored without --stateful", file=sys.stderr)
     if not args.stateful and args.ensure_coverage:
         print("Warning: --ensure-coverage is ignored without --stateful", file=sys.stderr)
+    if not args.stateful and args.min_hits_per_op != 1:
+        print("Warning: --min-hits-per-op is ignored without --stateful", file=sys.stderr)
+    if not args.stateful and args.min_coverage != 100:
+        print("Warning: --min-coverage is ignored without --stateful", file=sys.stderr)
+
+    # Warn if coverage depth flags used without --seed (seed walking required)
+    if args.stateful and args.seed is None and args.min_hits_per_op > 1:
+        print("Warning: --min-hits-per-op > 1 requires --seed for seed walking. "
+              "Without --seed, only a single generation pass occurs.", file=sys.stderr)
+    if args.stateful and args.seed is None and args.min_coverage < 100:
+        print("Warning: --min-coverage requires --seed for seed walking. "
+              "Without --seed, only a single generation pass occurs.", file=sys.stderr)
 
     # Print run configuration
     mode = "stateful" if args.stateful else "stateless"
@@ -1321,9 +1630,15 @@ def run_explore(args: ExploreArgs) -> int:
     if args.seed is not None:
         print(f"  Seed: {args.seed}")
     if args.stateful:
-        max_chains = args.max_chains or 20
-        print(f"  Max chains: {max_chains}")
+        if args.max_chains is not None:
+            print(f"  Max chains: {args.max_chains}")
+        elif args.min_hits_per_op > 1:
+            print("  Max chains: unlimited (coverage depth target set)")
+        else:
+            print("  Max chains: 20 (default)")
         print(f"  Max steps per chain: {args.max_steps}")
+        if args.min_hits_per_op > 1 or args.min_coverage != 100:
+            print(f"  Coverage target: {args.min_coverage}% of linked ops at {args.min_hits_per_op}+ hits")
         if args.ensure_coverage:
             print("  Ensure coverage: enabled (will run single-request tests on uncovered operations)")
     elif args.max_cases is not None:
@@ -1407,6 +1722,8 @@ def run_explore(args: ExploreArgs) -> int:
                     log_chains=args.log_chains,
                     ensure_coverage=args.ensure_coverage,
                     exclude=args.exclude,
+                    min_hits_per_op=args.min_hits_per_op,
+                    min_coverage=args.min_coverage,
                 )
             else:
                 # Stateless testing
@@ -1537,38 +1854,89 @@ def _run_stateful_explore(
     log_chains: bool = False,
     ensure_coverage: bool = False,
     exclude: list[str] | None = None,
+    min_hits_per_op: int = 1,
+    min_coverage: int = 100,
 ) -> None:
-    """Execute stateful chain testing.
+    """Execute stateful chain testing with coverage-guided seed walking.
+
+    Seed walking stops when the coverage target is met (or max_chains /
+    max_seeds is hit). The coverage target is: min_coverage% of linked
+    operations must appear in at least min_hits_per_op unique chains.
 
     If ensure_coverage=True, also runs single-request tests on any operations
-    that weren't covered by the generated chains.
+    that weren't covered by the generated chains (orphans).
     """
     from api_parity.executor import RequestError
 
-    # Generate chains with seed walking if seed is provided
+    # Compute linked and all operations for coverage-guided stopping
+    excluded_set = set(exclude or [])
+    linked_operations = generator.get_linked_operation_ids() - excluded_set
+    all_operations = generator.get_all_operation_ids() - excluded_set
+
+    # Generate chains with coverage-guided seed walking.
+    # When min_hits_per_op > 1 and no explicit --max-chains, use unlimited chains
+    # so seed walking continues until the coverage depth target is met.
+    # When min_hits_per_op is 1 (default), fall back to max_chains or 20.
+    if max_chains is not None:
+        effective_max_chains = max_chains
+    elif min_hits_per_op > 1:
+        effective_max_chains = None  # Unlimited — let coverage target drive stopping
+    else:
+        effective_max_chains = 20  # Legacy default
     print("Generating chains...")
-    effective_max_chains = max_chains or 20
-    chains, seeds_used = _generate_chains_with_seed_walking(
+    gen_result = _generate_chains_with_seed_walking(
         generator=generator,
         max_chains=effective_max_chains,
         max_steps=max_steps,
         starting_seed=seed,
+        linked_operations=linked_operations,
+        all_operations=all_operations,
+        min_hits_per_op=min_hits_per_op,
+        min_coverage_pct=float(min_coverage),
     )
+    chains = gen_result.chains
 
-    # Report seed walking if it occurred
-    if seeds_used:
-        if len(seeds_used) == 1:
-            print(f"Generated {len(chains)} chains with multiple steps (seed: {seeds_used[0]})")
+    # Report generation results
+    if gen_result.seeds_used:
+        if len(gen_result.seeds_used) == 1:
+            print(f"Generated {len(chains)} chains with multiple steps (seed: {gen_result.seeds_used[0]})")
         else:
-            # Show seed range and count of seeds that contributed unique chains
             print(f"Generated {len(chains)} chains with multiple steps")
-            print(f"Seed walking: {len(seeds_used)} seeds contributed unique chains (range: {seeds_used[0]}-{seeds_used[-1]})")
+            print(f"Seed walking: {len(gen_result.seeds_used)} seeds contributed unique chains "
+                  f"(range: {gen_result.seeds_used[0]}-{gen_result.seeds_used[-1]})")
     else:
         print(f"Generated {len(chains)} chains with multiple steps")
+
+    # Print coverage summary after generation
+    if linked_operations:
+        covered = gen_result.linked_covered_count
+        total = gen_result.linked_total_count
+        pct = (covered / total * 100) if total > 0 else 100
+        print(f"Linked operation coverage: {covered}/{total} ({pct:.0f}%)")
+        if gen_result.linked_uncovered:
+            print(f"  Not covered by chains: {sorted(gen_result.linked_uncovered)}")
+        if gen_result.orphan_operations:
+            print(f"  Orphan operations (no links, need --ensure-coverage): "
+                  f"{sorted(gen_result.orphan_operations)}")
+        # Show per-operation hit depth when min_hits_per_op > 1
+        if min_hits_per_op > 1:
+            met = gen_result.ops_meeting_hits_target
+            print(f"  Depth target ({min_hits_per_op}+ hits): "
+                  f"{met}/{total} ops met target")
+            if gen_result.min_linked_hits != gen_result.max_linked_hits:
+                print(f"  Hit range: {gen_result.min_linked_hits}-{gen_result.max_linked_hits} "
+                      f"hits per linked operation")
+            below = gen_result.ops_below_hits_target
+            if below:
+                sorted_below = sorted(below.items(), key=lambda x: x[1])
+                for op, hits in sorted_below[:5]:  # Show up to 5 worst
+                    print(f"    {op}: {hits}/{min_hits_per_op} hits")
+                if len(sorted_below) > 5:
+                    print(f"    ... and {len(sorted_below) - 5} more")
     print()
 
-    # Track which operations are covered by chains (for --ensure-coverage)
-    operations_covered_by_chains: set[str] = set()
+    # Use coverage data from generation (already computed during seed walking)
+    operations_covered_by_chains: set[str] = set(gen_result.operations_covered)
 
     # Update progress reporter with total now that we know it
     if progress_reporter is not None:
@@ -1579,9 +1947,6 @@ def _run_stateful_explore(
     chain_outcomes: list[str] = []
 
     for chain in chains:
-        # Track all operations in this chain as covered
-        for step in chain.steps:
-            operations_covered_by_chains.add(step.request_template.operation_id)
         stats.total_chains += 1
 
         # Build chain description

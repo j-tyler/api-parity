@@ -376,6 +376,47 @@ class CaseGenerator:
             operation_ids.add(operation_id)
         return operation_ids
 
+    def get_linked_operation_ids(self) -> set[str]:
+        """Get operation IDs that participate in at least one OpenAPI link.
+
+        An operation is "linked" if it is the source of a link (has outbound
+        links in one of its responses) or the target of a link (another
+        operation's link references it via operationId).
+
+        Linked operations get state machine rules in Schemathesis and are
+        reachable during chain generation. Operations NOT in this set are
+        "orphans" — invisible to the state machine and only testable via
+        --ensure-coverage single-request tests.
+
+        Returns:
+            Set of operationIds that participate in at least one link.
+        """
+        link_sources: set[str] = set()
+        link_targets: set[str] = set()
+
+        paths = self._raw_spec.get("paths", {})
+        for path_template, path_item in paths.items():
+            if not isinstance(path_item, dict):
+                continue
+            for method_or_key, operation in path_item.items():
+                if not isinstance(operation, dict) or method_or_key.startswith("$"):
+                    continue
+                op_id = _get_operation_id(operation, method_or_key, path_template)
+
+                for resp in operation.get("responses", {}).values():
+                    if not isinstance(resp, dict):
+                        continue
+                    links = resp.get("links", {})
+                    if links:
+                        link_sources.add(op_id)
+                        for link_def in links.values():
+                            if isinstance(link_def, dict):
+                                target = link_def.get("operationId")
+                                if target:
+                                    link_targets.add(target)
+
+        return link_sources | link_targets
+
     def generate(
         self,
         max_cases: int | None = None,

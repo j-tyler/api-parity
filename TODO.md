@@ -4,57 +4,54 @@ Tasks for future development. Add items here when you identify work that shouldn
 
 ---
 
-## CRITICAL: Incomplete API Coverage in Chain Generation
+## Chain Coverage: Behavior and Spec Design Guidance
 
-**Status:** BLOCKING - Project does not work at its core purpose until fixed.
+**Status:** Understood. Not a blocking issue — coverage is achievable with seed walking + `--ensure-coverage`. Document what spec authors should avoid.
 
-**Problem:** The `explore` command (and `graph-chains --generated`) uses Schemathesis's state machine for chain generation, which does NOT guarantee that all API operations are tested. Testing on `archive_gateway_spec.yaml` shows:
+**Investigation Date:** 2026-02-07
 
-- **7 of 27 operations (26%) are never called** with a single seed
-- **4 operations remain unreachable** even after 20 different seeds
-- **3 operations are completely invisible** to Schemathesis (no rules generated)
+### How Chain Coverage Actually Works
 
-**Root Cause:** Schemathesis uses Hypothesis's state machine testing, which is designed for **bug hunting** (find interesting failures fast), not **coverage** (test every path). It:
+Schemathesis generates ~150-200 chains per seed regardless of the `max_chains` parameter (Hypothesis treats `max_examples` as adaptive, not a hard cap). Coverage of linked operations depends on spec structure:
 
-1. Creates rules only for operations involved in links
-2. Explores probabilistically, favoring "interesting" paths
-3. Terminates early when it thinks it's seen enough (~150 chains regardless of `max_chains`)
+| Spec complexity | Seeds for full linked coverage |
+|-----------------|-------------------------------|
+| Small (6 linked ops, well-connected) | 1 seed, every time |
+| Medium (14 linked ops, depth 3-4) | 1-4 seeds |
+| Hard (18 linked ops, depth 5 linear chain) | 5-20 seeds, high variance |
 
-**Impact:** If parts of the API surface cannot be tested, the project fails at its core mission of comparing API implementations.
+### Two Categories of Uncovered Operations
 
-**Minimum Requirement:** Every API operation must be called at least once, through at least one chain. This is mission critical.
+**1. Orphan operations (no link involvement):** These get NO state machine rules and are completely invisible to chain generation. An operation is an orphan if it is neither the source nor the target of any OpenAPI link. The ONLY solution is `--ensure-coverage`, which runs single-request tests for uncovered operations. Examples: `GET /health`, `GET /search`, list endpoints with no outbound links.
 
-**Research Findings (2026-01-19):**
+**2. Deep-chain operations (linked but at depth 5+):** These HAVE state machine rules and ARE reachable, but require Hypothesis to randomly choose the right sequence of 5+ transitions. Schemathesis's free transitions (jumping to any operation without a link) make them reachable at any depth, but coverage is probabilistic and may take many seeds. The existing seed-walking feature handles this.
 
-Searched Schemathesis GitHub issues, Hypothesis documentation, and Schemathesis configuration docs:
+### What Spec Authors Should Avoid
 
-1. **No Schemathesis option exists to guarantee coverage.** The "coverage phase" is about boundary value testing, not operation coverage. No `--ensure-all-operations` flag or similar.
+**Avoid orphan operations.** Every operation should participate in at least one link — either as a source (has outbound links) or a target (another operation links to it). Operations with zero link involvement are invisible to stateful testing.
 
-2. **Hypothesis explicitly does NOT guarantee all rules execute.** From docs: "At any given point a random applicable rule will be executed." Initialize rules are the only exception (guaranteed once).
+Common orphans and how to fix them:
 
-3. **Known issue acknowledged.** [GitHub Issue #1405](https://github.com/schemathesis/schemathesis/issues/1405) discusses this exact problem: "The current state machine-based implementation randomizes the tested rules... but this looks like something that users want to run on every endpoint every time." Issue remains open.
+| Orphan pattern | Fix |
+|----------------|-----|
+| `GET /items` (list endpoint, no links) | Add a link from a create/update response: `ListItems: {operationId: listItems}` |
+| `GET /health` (utility endpoint) | Accept as orphan; `--ensure-coverage` handles it |
+| `GET /search?q=...` (standalone query) | Add as link target from a create operation, or accept as orphan |
 
-4. **Orphan operations are invisible.** Operations without links have no rules generated. Schemathesis only creates RANDOM rules for operations that can be entry points AND have outgoing links.
+**Avoid deep linear chains without shortcuts.** If operation E is only reachable via A→B→C→D→E (depth 5), add a shortcut link from A→E or B→E to reduce depth. The `lint-spec` command's `deep-chain-depth-3` and `deep-chain-depth-4-plus` warnings identify these. Use `--ensure-coverage` as a fallback.
 
-**Confirmed: Schemathesis cannot solve this problem through configuration.**
+**Avoid assuming `max_chains` controls chain count.** Hypothesis generates ~150-200 chains per seed regardless. The parameter affects Hypothesis's adaptive algorithm but does not cap output. Don't set it low expecting fewer chains, and don't set it high expecting more.
 
-**Recommended Solution: Deterministic Path Enumeration**
+### Evidence
 
-Proof of concept shows we can enumerate all link paths from the spec:
-- 21 deterministic paths cover all 72 link transitions in archive_gateway_spec
-- Graph traversal from entry points guarantees every operation is reached
-- Use Schemathesis ONLY for data generation (strategies), not state machine exploration
+Prototyped in `prototype/coverage-analysis/` with three specs (small, medium, hard). Key files:
+- `measure_coverage.py` — Measures seeds-to-full-coverage across trials
+- `test_parameters.py` — Tests effect of max_chains and max_steps
+- `analyze_rules.py` — Confirms which operations get state machine rules
+- `medium_api_spec.yaml` — 18-operation CRUD+workflow spec (depth 4)
+- `hard_api_spec.yaml` — 19-operation spec with depth-5 chain, 8-way fan-out, non-standard status codes, isolated clusters
 
-Implementation approach:
-1. Build link graph from OpenAPI spec
-2. Find entry points (operations without required path parameters)
-3. BFS/DFS to enumerate paths covering all operations
-4. For each path, use Schemathesis strategies to generate request data
-5. Execute paths with synthetic responses (like current `_synthetic_response`)
-
-This separates concerns: deterministic path selection (guarantees coverage) + fuzzy data generation (Schemathesis's strength).
-
-**Investigation Date:** 2026-01-19
+Findings confirmed by inspecting Schemathesis's state machine rule generation: operations get rules if and only if they participate in at least one link (as source or target).
 
 ---
 
