@@ -757,8 +757,8 @@ SSE-KMS in the same request.
 
 | Header | Behavior |
 |--------|----------|
-| `If-None-Match` | Value `*`. Returns 412 if key already exists. |
-| `If-Match` | Returns 412 if current ETag does not match. |
+| `If-None-Match` | Value `*`. Returns 412 if key already exists. Requires `s3:PutObject`. |
+| `If-Match` | Returns 412 if current ETag does not match. Requires BOTH `s3:PutObject` AND `s3:GetObject` (server must read current ETag to compare). |
 
 #### Tagging and Object Lock
 
@@ -2158,16 +2158,15 @@ def evaluate_conditionals(request_headers, object_info):
 | Feature | AWS S3 | MinIO |
 |---------|--------|-------|
 | Object ACLs | Full ACL model (canned + grants) | Returns 501 Not Implemented. Use bucket policies. |
-| Object names with leading `/` | Allowed | Returns 400 `InvalidObjectNamePrefixSlash` |
-| Object names with `..` or `.` | Normalized | Returns 400 `InvalidResourceName` |
-| Directory conflicts | No concept of directories | Returns 400 `ErrObjectExistsAsDirectory` when key conflicts with directory-like prefix |
+| Object names with leading `/` | Allowed | Returns 400 `XMinioInvalidObjectName` |
+| Object names with `..` or `.` | Allowed as literal key characters (rejects only if path would escape root) | Returns 400 `XMinioInvalidResourceName` |
+| Directory conflicts | No concept of directories | Returns 400 `XMinioObjectExistsAsDirectory` when key conflicts with directory-like prefix |
 | Max single PUT size | 5 GB | 5 TB |
 | Max multipart total size | 5 TB | 50 TB |
 | Max part size | 5 GB | 5 TB |
 | Max object versions | Unlimited | 10,000 (configurable via `MINIO_API_OBJECT_MAX_VERSIONS`) |
 | Max parts per ListParts page | 1,000 | 10,000 |
 | Object key length | 1,024 bytes | 1,024 characters (diverges on multi-byte UTF-8) |
-| `If-Match` on PutObject | Not supported | Supported (MinIO extension) |
 | ListBuckets pagination | Supported | Not supported (all in one response) |
 | Content-Type detection | Client-provided or SDK detection | Extension-based only; defaults to `application/octet-stream` |
 | Bucket location | Per-bucket | Server-wide (all buckets in same region) |
@@ -2199,18 +2198,19 @@ requests (reserved for internal metadata).
 
 ### 7.3 MinIO-Specific Error Codes
 
-These error codes do NOT exist in AWS S3:
+These XML `<Code>` values do NOT exist in AWS S3. They appear in MinIO
+error response bodies.
 
-| Code | HTTP Status | When |
-|------|-------------|------|
-| `ErrStorageFull` | 507 | Disk below free space threshold |
-| `ErrObjectExistsAsDirectory` | 400 | Object name conflicts with directory prefix |
-| `ErrInvalidObjectNamePrefixSlash` | 400 | Key starts with `/` |
-| `ErrInvalidResourceName` | 400 | Path has `..` or `.` components |
-| `ErrServerNotInitialized` | 503 | Server still starting |
-| `ErrBucketMetadataNotInitialized` | 503 | Metadata system not ready |
-| `ErrClientDisconnected` | 499 | Client dropped connection (nginx convention) |
-| `ErrObjectTampered` | 206 | Object integrity check failed |
+| XML Code | HTTP Status | When |
+|----------|-------------|------|
+| `XMinioStorageFull` | 507 | Disk below free space threshold |
+| `XMinioObjectExistsAsDirectory` | 400 | Object name conflicts with directory prefix |
+| `XMinioInvalidObjectName` | 400 | Key starts with `/` |
+| `XMinioInvalidResourceName` | 400 | Path has `..` or `.` components |
+| `XMinioServerNotInitialized` | 503 | Server still starting |
+| `XMinioBucketMetadataNotInitialized` | 503 | Metadata system not ready |
+| `ClientDisconnected` | 499 | Client dropped connection (nginx convention) |
+| `XMinioObjectTampered` | 206 | Object integrity check failed |
 
 ### 7.4 MinIO Extensions
 
@@ -2221,7 +2221,7 @@ These error codes do NOT exist in AWS S3:
 | `?events` | Real-time event streaming (bucket and root) |
 | Snowball auto-extract | Upload ZIP/TAR; auto-extract into individual objects |
 | `?lambdaArn` | Object Lambda ARN-based routing |
-| Conditional `If-Match` on PUT | Supported (AWS only supports `If-None-Match`) |
+| Conditional `If-Match` on PUT | MinIO supported this before AWS added it in November 2024 |
 
 ### 7.5 MinIO Implemented S3 Operations
 
@@ -2264,9 +2264,7 @@ and MinIO:
    omits it; extension-only MIME detection.
 7. **Non-standard HTTP status codes** — 499 (client disconnect), 507 (storage
    full), 206 (tampered object).
-8. **Conditional write extension** — `If-Match` on PUT succeeds where AWS
-   would reject.
-9. **Extra query parameter extensions** — `?metadata=true`, `?lambdaArn`,
+8. **Extra query parameter extensions** — `?metadata=true`, `?lambdaArn`,
    `?events` are MinIO-only.
-10. **Key length counting** — MinIO counts 1,024 characters while AWS counts
+9. **Key length counting** — MinIO counts 1,024 characters while AWS counts
     1,024 bytes, causing divergence on multi-byte UTF-8 keys.
