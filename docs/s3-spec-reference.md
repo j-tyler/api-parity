@@ -694,3 +694,432 @@ Returns `EU`, not `eu-west-1`. The value mirrors what was provided at creation.
 
 - Region is server-wide, not per-bucket. All buckets in same "region".
 - Returns empty element for default region (matches us-east-1 behavior).
+
+---
+
+## 3. Object Operations
+
+### 3.1 PutObject
+
+**Request:** `PUT /{bucket}/{key}`
+
+**Request Body:** Raw binary object data.
+
+**Request Headers:**
+
+#### Content Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Content-Length` | Yes (unless chunked) | Size of body in bytes |
+| `Content-Type` | No | MIME type. Default: `application/octet-stream` |
+| `Content-MD5` | No | Base64-encoded 128-bit MD5 digest. S3 validates and rejects with `400 BadDigest` on mismatch. Required for Object Lock retention uploads. |
+| `Content-Encoding` | No | e.g., `gzip` |
+| `Content-Disposition` | No | e.g., `attachment; filename="file.txt"` |
+| `Content-Language` | No | e.g., `en-US` |
+| `Cache-Control` | No | e.g., `max-age=3600` |
+| `Expires` | No | RFC 7234 expiration |
+| `Expect` | No | `100-continue`. Server sends `100 Continue` before client sends body, allowing early error detection without transmitting full body. |
+
+#### User Metadata
+
+| Header | Description |
+|--------|-------------|
+| `x-amz-meta-{name}` | Arbitrary user metadata. Total limit 2 KB. Names lowercased by S3. |
+
+#### Storage and ACL
+
+| Header | Values |
+|--------|--------|
+| `x-amz-storage-class` | `STANDARD` (default), `REDUCED_REDUNDANCY`, `STANDARD_IA`, `ONEZONE_IA`, `INTELLIGENT_TIERING`, `GLACIER`, `DEEP_ARCHIVE`, `GLACIER_IR`, `EXPRESS_ONEZONE`, `OUTPOSTS`, `SNOW` |
+| `x-amz-acl` | `private`, `public-read`, `public-read-write`, `authenticated-read`, `bucket-owner-read`, `bucket-owner-full-control` |
+| `x-amz-grant-read` | Grantee string |
+| `x-amz-grant-read-acp` | Grantee string |
+| `x-amz-grant-write-acp` | Grantee string |
+| `x-amz-grant-full-control` | Grantee string |
+
+#### Server-Side Encryption
+
+| Header | Description |
+|--------|-------------|
+| `x-amz-server-side-encryption` | `AES256` (SSE-S3), `aws:kms` (SSE-KMS), or `aws:kms:dsse` |
+| `x-amz-server-side-encryption-aws-kms-key-id` | KMS key ARN. Defaults to `aws/s3` managed key if omitted with `aws:kms`. |
+| `x-amz-server-side-encryption-context` | Base64-encoded JSON KMS encryption context |
+| `x-amz-server-side-encryption-bucket-key-enabled` | `true`/`false`. Use S3 Bucket Key to reduce KMS calls. |
+| `x-amz-server-side-encryption-customer-algorithm` | Must be `AES256` (SSE-C) |
+| `x-amz-server-side-encryption-customer-key` | Base64-encoded 256-bit key (SSE-C) |
+| `x-amz-server-side-encryption-customer-key-MD5` | Base64-encoded MD5 of the key (SSE-C) |
+
+SSE-C requires all three customer headers together. Cannot mix SSE-C with
+SSE-KMS in the same request.
+
+#### Conditional Writes
+
+| Header | Behavior |
+|--------|----------|
+| `If-None-Match` | Value `*`. Returns 412 if key already exists. |
+| `If-Match` | Returns 412 if current ETag does not match. |
+
+#### Tagging and Object Lock
+
+| Header | Description |
+|--------|-------------|
+| `x-amz-tagging` | URL-encoded tags: `key1=val1&key2=val2` |
+| `x-amz-object-lock-mode` | `GOVERNANCE` or `COMPLIANCE` |
+| `x-amz-object-lock-retain-until-date` | ISO 8601 |
+| `x-amz-object-lock-legal-hold` | `ON` or `OFF` |
+
+#### Checksums (provide at most one)
+
+| Header | Algorithm |
+|--------|-----------|
+| `x-amz-checksum-crc32` | Base64 CRC32 |
+| `x-amz-checksum-crc32c` | Base64 CRC32C |
+| `x-amz-checksum-sha1` | Base64 SHA-1 |
+| `x-amz-checksum-sha256` | Base64 SHA-256 |
+| `x-amz-sdk-checksum-algorithm` | Declares which: `CRC32`, `CRC32C`, `SHA1`, `SHA256` |
+
+#### Other
+
+| Header | Description |
+|--------|-------------|
+| `x-amz-website-redirect-location` | Redirect URL for website hosting |
+| `x-amz-request-payer` | `requester` |
+| `x-amz-expected-bucket-owner` | Account ID |
+
+**Response:** `200 OK`
+
+**Response Headers:**
+
+| Header | Description |
+|--------|-------------|
+| `ETag` | Quoted hex MD5 for unencrypted single-part. See ETag calculation section. |
+| `x-amz-version-id` | Version ID if versioning enabled |
+| `x-amz-server-side-encryption` | Echo of encryption algorithm |
+| `x-amz-server-side-encryption-aws-kms-key-id` | Echo of KMS key |
+| `x-amz-server-side-encryption-customer-algorithm` | Echo: `AES256` |
+| `x-amz-server-side-encryption-customer-key-MD5` | Echo of key MD5 |
+| `x-amz-expiration` | Lifecycle expiry if a rule applies |
+| `x-amz-request-charged` | `requester` if Requester Pays |
+
+**Status Codes:**
+
+| Code | Meaning |
+|------|---------|
+| 200 OK | Object stored successfully |
+| 400 Bad Request | Invalid params, `BadDigest`, invalid encryption |
+| 403 Forbidden | Access denied, bucket owner mismatch |
+| 409 ConditionalRequestConflict | Race condition on conditional write |
+| 412 Precondition Failed | `If-Match`/`If-None-Match` condition not met |
+
+**Behavior Rules:**
+
+1. **Atomicity:** S3 never stores partial objects. A 200 means the entire
+   object is durably stored.
+2. **Last-writer-wins:** Without versioning, concurrent PUTs result in one
+   winner (nondeterministic). With versioning, all writes are separate versions.
+3. **`Expect: 100-continue`:** Server MUST either send `100 Continue` or a
+   final error response; it must not silently wait.
+4. **Content-MD5 validation:** Base64-encoded (NOT hex). Mismatch → `400 BadDigest`.
+5. **ETag for unencrypted single-part:** `"` + hex(MD5(object_bytes)) + `"`.
+   Quotes are part of the value.
+6. **Empty objects valid.** Content-Length 0 creates a zero-byte object.
+7. **Max single PUT:** 5 GB. Use multipart for larger.
+
+---
+
+### 3.2 GetObject
+
+**Request:** `GET /{bucket}/{key}`
+
+**Request Body:** None.
+
+**Response Body:** Raw binary object bytes (or partial for range requests).
+
+**Query Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `versionId` | Retrieve specific version |
+| `partNumber` | Retrieve specific part of multipart object (1-10000) |
+| `response-content-type` | Override `Content-Type` in response |
+| `response-content-disposition` | Override `Content-Disposition` |
+| `response-content-encoding` | Override `Content-Encoding` |
+| `response-content-language` | Override `Content-Language` |
+| `response-cache-control` | Override `Cache-Control` |
+| `response-expires` | Override `Expires` |
+
+`response-*` overrides: Only work on `200 OK`, only with signed requests.
+Silently ignored on 206, 304, errors, and anonymous requests.
+
+**Request Headers:**
+
+| Header | Description |
+|--------|-------------|
+| `If-Match` | Return only if ETag matches. Otherwise 412. |
+| `If-None-Match` | Return only if ETag differs. Otherwise 304. |
+| `If-Modified-Since` | Return only if modified after date. Otherwise 304. |
+| `If-Unmodified-Since` | Return only if NOT modified after date. Otherwise 412. |
+| `Range` | `bytes=start-end` (inclusive both). `bytes=start-`. `bytes=-N` (last N bytes). |
+| `x-amz-checksum-mode` | `ENABLED` to include stored checksums in response headers |
+| SSE-C headers | Required if object stored with SSE-C |
+
+S3 supports only a single byte range per request (no multi-range). Invalid
+range → `416 Range Not Satisfiable`.
+
+**Response Headers:**
+
+| Header | Description |
+|--------|-------------|
+| `Content-Length` | Bytes in body. For range: range length, not total. |
+| `Content-Type` | MIME type (or `response-content-type` override) |
+| `Content-Range` | `bytes 0-9/443` (only on 206) |
+| `Accept-Ranges` | Always `bytes` |
+| `ETag` | Quoted entity tag |
+| `Last-Modified` | RFC 7231 timestamp |
+| `x-amz-version-id` | Present if versioning is/was enabled |
+| `x-amz-delete-marker` | `true` if current version is delete marker (status 404) |
+| `x-amz-storage-class` | Not returned for STANDARD; absent = STANDARD |
+| `x-amz-tagging-count` | Number of tags |
+| `x-amz-mp-parts-count` | Only with `partNumber` query param |
+| `x-amz-restore` | Restore status for archived objects |
+| All `x-amz-meta-*` | User-defined metadata |
+| All `x-amz-server-side-encryption-*` | Encryption details |
+| All `x-amz-object-lock-*` | Object Lock details |
+| All `x-amz-checksum-*` | Checksums (when checksum mode enabled) |
+
+**Status Codes:**
+
+| Code | Meaning |
+|------|---------|
+| 200 OK | Full object returned |
+| 206 Partial Content | Range request satisfied |
+| 304 Not Modified | Conditional: ETag matched `If-None-Match`, or not modified since |
+| 403 Forbidden | Access denied. Also `InvalidObjectState` for archived objects. Also returned instead of 404 when caller lacks `s3:ListBucket` (prevents key enumeration). |
+| 404 Not Found | Object does not exist (only when caller has `s3:ListBucket`). Also for delete markers with `x-amz-delete-marker: true`. |
+| 405 Method Not Allowed | GET on specific `versionId` that is a delete marker |
+| 412 Precondition Failed | `If-Match` or `If-Unmodified-Since` condition not met |
+| 416 Range Not Satisfiable | Range exceeds object size. `Content-Range: bytes */total_size`. |
+
+**Behavior Rules:**
+
+1. **Range → 206, not 200.** `Content-Length` = range size. `Content-Range`
+   always included.
+2. **Only single ranges.** Multi-range requests are invalid.
+3. **`response-*` overrides only on 200.** Not on 206, 304, or errors.
+4. **403 vs 404:** Without `s3:ListBucket`, missing objects return 403 to
+   prevent key enumeration.
+5. **Archived objects:** Glacier/Deep Archive → `403 InvalidObjectState`.
+   Must `RestoreObject` first.
+6. **Delete markers with versioning:**
+   - GET without versionId, current = delete marker: `404` with
+     `x-amz-delete-marker: true`.
+   - GET with versionId pointing to delete marker: `405 Method Not Allowed`.
+7. **`partNumber`:** Returns single part of multipart object. Response
+   includes `x-amz-mp-parts-count` and `Content-Range`. Status 206.
+8. **`x-amz-storage-class` absent = STANDARD.**
+
+---
+
+### 3.3 HeadObject
+
+**Request:** `HEAD /{bucket}/{key}`
+
+Same query parameters and request headers as GetObject. Same response headers
+as GetObject. **No response body ever.**
+
+**Key Differences from GetObject:**
+
+1. **No body on ANY status.** Not even error bodies. Cannot distinguish
+   different 403 causes.
+2. **All metadata returned:** All `x-amz-meta-*` headers are returned. Primary
+   use case: retrieve metadata without downloading.
+3. **Archived objects return 200 with metadata** (unlike GetObject which
+   returns 403). Includes `x-amz-restore` status for checking restore progress.
+4. **Range on HEAD:** Affects `Content-Length` (reports range size). Valid
+   range → 206. Unsatisfiable → 416.
+5. **`Content-Length` always reflects what body WOULD contain.** Full object
+   size for non-range, range size for range request.
+6. **Conditional logic identical** to GetObject with same precedence rules.
+
+**Status Codes:** Same as GetObject: 200, 304, 403, 404, 405, 412, 416.
+
+---
+
+### 3.4 DeleteObject
+
+**Request:** `DELETE /{bucket}/{key}`
+
+**Query Parameters:** `versionId` (optional — delete specific version permanently).
+
+**Request Body:** None.
+
+**Request Headers:**
+
+| Header | Description |
+|--------|-------------|
+| `x-amz-mfa` | `{serial-number} {auth-code}` (space-separated). Required for permanent version delete when MFA Delete enabled. Must use HTTPS. |
+| `x-amz-bypass-governance-retention` | `true` to bypass Governance-mode Object Lock. Requires `s3:BypassGovernanceRetention`. Does not bypass Compliance mode. |
+| `x-amz-expected-bucket-owner` | Account ID |
+| `If-Match` | ETag conditional. 412 if mismatch. `*` matches any existing object. |
+
+**Response:** `204 No Content`
+
+**Response Headers:**
+
+| Header | Description |
+|--------|-------------|
+| `x-amz-delete-marker` | `true` if operation created or deleted a delete marker |
+| `x-amz-version-id` | Version ID of created delete marker or permanently deleted version |
+| `x-amz-request-charged` | `requester` |
+
+**CRITICAL: Non-existent objects return `204`, NOT `404`.** DeleteObject is
+idempotent by design.
+
+**Versioning Behavior Matrix:**
+
+| Bucket State | No versionId | With versionId |
+|-------------|-------------|----------------|
+| **Unversioned** | Object permanently deleted. 204. | N/A |
+| **Versioned, object exists** | Delete marker created (previous versions kept). 204 + `x-amz-delete-marker: true` + `x-amz-version-id: {marker-id}`. | Specific version permanently deleted. 204 + `x-amz-version-id: {id}`. |
+| **Versioned, object doesn't exist** | Delete marker still created. 204 + `x-amz-delete-marker: true`. | No-op. 204. |
+| **Versioned, versionId is delete marker** | N/A | Delete marker removed ("undelete"). 204 + `x-amz-delete-marker: true` + `x-amz-version-id: {marker-id}`. |
+| **Suspended, no versionId** | Null version replaced with delete marker. 204 + `x-amz-delete-marker: true`. | N/A |
+
+**Object Lock Interactions:**
+
+- **Compliance mode:** Cannot delete until retention expires. Returns 403.
+- **Governance mode:** Can delete with `x-amz-bypass-governance-retention: true`
+  and proper permission.
+- **Legal hold:** Cannot delete while ON, regardless of mode.
+- **Delete markers** are not subject to Object Lock.
+
+---
+
+### 3.5 CopyObject
+
+**Request:** `PUT /{bucket}/{key}` with `x-amz-copy-source` header.
+
+Same HTTP verb as PutObject — the presence of `x-amz-copy-source` distinguishes
+a copy from an upload.
+
+**No request body.** Source data specified via header.
+
+**Request Headers:**
+
+#### Required
+
+| Header | Format | Description |
+|--------|--------|-------------|
+| `x-amz-copy-source` | `/{source-bucket}/{source-key}` | URL-encoded path. To copy specific version: `/{bucket}/{key}?versionId={id}`. Leading `/` required. |
+
+#### Metadata Directive
+
+| Header | Values | Default | Description |
+|--------|--------|---------|-------------|
+| `x-amz-metadata-directive` | `COPY`, `REPLACE` | `COPY` | `COPY`: metadata from source. `REPLACE`: metadata from this request only. |
+| `x-amz-tagging-directive` | `COPY`, `REPLACE` | `COPY` | Same logic for tags. |
+
+**Metadata directive nuances:**
+
+- `COPY` mode: Content-Type, Cache-Control, Content-Disposition,
+  Content-Encoding, Content-Language, Expires, and all `x-amz-meta-*` copied
+  from source. Request headers for these are **ignored**.
+- `REPLACE` mode: Only values from request headers used. Source metadata
+  discarded entirely. Omitting a header = destination lacks it.
+- `x-amz-storage-class` **always** honored from request regardless of directive.
+- `x-amz-website-redirect-location` **never** copied even in COPY mode.
+- ACLs **never** copied. Destination defaults to `private`.
+- No merging in REPLACE mode.
+
+#### Conditional Copy Headers (evaluated against SOURCE)
+
+| Header | Behavior |
+|--------|----------|
+| `x-amz-copy-source-if-match` | Copy only if source ETag matches. Otherwise 412. |
+| `x-amz-copy-source-if-none-match` | Copy only if source ETag differs. Otherwise 412. |
+| `x-amz-copy-source-if-modified-since` | Copy only if source modified after date. Otherwise 412. |
+| `x-amz-copy-source-if-unmodified-since` | Copy only if source NOT modified after date. Otherwise 412. |
+
+#### Conditional Headers (evaluated against DESTINATION)
+
+| Header | Behavior |
+|--------|----------|
+| `If-Match` | Copy only if destination ETag matches. 412 on mismatch. |
+| `If-None-Match` | `*` only. Copy only if destination key doesn't exist. 412 if exists. |
+
+#### SSE-C Source Decryption (required if source stored with SSE-C)
+
+| Header | Description |
+|--------|-------------|
+| `x-amz-copy-source-server-side-encryption-customer-algorithm` | `AES256` |
+| `x-amz-copy-source-server-side-encryption-customer-key` | Base64 key for SOURCE |
+| `x-amz-copy-source-server-side-encryption-customer-key-MD5` | Base64 MD5 of SOURCE key |
+
+Enables encryption key rotation: decrypt source with old key, re-encrypt
+destination with new key, in a single CopyObject call.
+
+All PutObject headers for destination encryption, ACL, storage class, tags,
+Object Lock also accepted.
+
+**Response:** `200 OK` with XML body:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<CopyObjectResult>
+  <ETag>"9b2cf535f27731c974343645a3985328"</ETag>
+  <LastModified>2009-10-12T17:50:30.000Z</LastModified>
+</CopyObjectResult>
+```
+
+| Element | Type | Description |
+|---------|------|-------------|
+| `ETag` | String | Quoted hex hash of the new object |
+| `LastModified` | Timestamp | ISO 8601 creation time of the copy |
+
+Checksum elements (`ChecksumCRC32`, `ChecksumSHA256`, etc.) included if
+source had checksums.
+
+**Response Headers:** `x-amz-version-id` (destination), `x-amz-copy-source-version-id`
+(source), encryption echoes, `x-amz-expiration`.
+
+**CRITICAL: `200 OK` can contain an error in the body.** Under load or during
+internal timeouts, S3 may return HTTP 200 with an `<Error>` XML body instead
+of `<CopyObjectResult>`:
+
+```xml
+<Error>
+  <Code>InternalError</Code>
+  <Message>We encountered an internal error. Please try again.</Message>
+  <RequestId>...</RequestId>
+  <HostId>...</HostId>
+</Error>
+```
+
+Implementations MUST check whether root XML element is `<Error>` or
+`<CopyObjectResult>`.
+
+**Status Codes:**
+
+| Code | Meaning |
+|------|---------|
+| 200 OK | Copy succeeded (but parse body — may contain error!) |
+| 400 Bad Request | Invalid directive, storage class, encryption |
+| 403 Forbidden | Access denied. `ObjectNotInActiveTierError` if source archived. |
+| 404 Not Found | Source object or bucket does not exist |
+| 409 ConditionalRequestConflict | Race condition |
+| 412 Precondition Failed | Any conditional header not met |
+
+**Behavior Rules:**
+
+1. **Size limit: 5 GB.** Use multipart with UploadPartCopy for larger.
+2. **Copy-to-self is common.** Same bucket+key with `REPLACE` is the standard
+   way to update metadata, change Content-Type, rotate encryption keys, or
+   change storage class.
+3. **Multipart source → single-part destination.** Copying a multipart object
+   via CopyObject produces a single-part object with a new standard MD5 ETag.
+4. **Archived objects cannot be copied.** Returns `403 ObjectNotInActiveTierError`.
+5. **Version-specific copy:** `?versionId=xxx` in `x-amz-copy-source` copies
+   specific version. Source is not affected.
+6. **Cross-account:** Needs `s3:GetObject` on source, `s3:PutObject` on
+   destination.
