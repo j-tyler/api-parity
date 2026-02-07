@@ -1990,3 +1990,283 @@ client that decoding is needed.
 7. **StorageClass values:** `STANDARD`, `STANDARD_IA`, `ONEZONE_IA`, `GLACIER`,
    `DEEP_ARCHIVE`, `INTELLIGENT_TIERING`, `REDUCED_REDUNDANCY`, `GLACIER_IR`.
 8. **Version ordering:** Within same key, newest first (reverse chronological).
+
+---
+
+## 6. Implementation Reference
+
+### 6.1 ETag Calculation (Single-Part)
+
+For unencrypted single-part uploads:
+
+```python
+import hashlib
+etag = '"' + hashlib.md5(object_bytes).hexdigest() + '"'
+# Empty object: '"d41d8cd98f00b204e9800998ecf8427e"'
+```
+
+The quotes are part of the ETag string value.
+
+### 6.2 Multipart ETag Calculation
+
+```python
+import hashlib
+
+def compute_multipart_etag(part_data_list):
+    """part_data_list: list of bytes, one per part, in part-number order."""
+    md5_digests = b""
+    for part_data in part_data_list:
+        md5_digests += hashlib.md5(part_data).digest()  # 16 raw bytes each
+    composite_md5 = hashlib.md5(md5_digests).hexdigest()
+    return f'"{composite_md5}-{len(part_data_list)}"'
+```
+
+**Worked example with 3 parts:**
+
+```
+Part 1 MD5 (hex): a54357aff0632cce46d942af68356b38 → 16 raw bytes
+Part 2 MD5 (hex): 0c78aef83f66abc1fa1e8477f296d394 → 16 raw bytes
+Part 3 MD5 (hex): acbd18db4cc2f85cedef654fccc4a4d8 → 16 raw bytes
+
+Concatenate: 48 bytes (16 × 3)
+MD5(48 bytes) = 3858f62230ac3c915f300c664312c11f
+
+Final ETag: "3858f62230ac3c915f300c664312c11f-3"
+```
+
+Key observations:
+
+- The `-N` suffix distinguishes multipart from single-part ETags.
+- N = number of parts in CompleteMultipartUpload request (not total uploaded).
+- Individual part ETags use hex MD5; the composite uses raw binary MD5 bytes.
+- For SSE-C/KMS, individual part ETags may not be simple MD5s, but the
+  `-N` convention still applies.
+
+### 6.3 Conditional Request Evaluation Algorithm
+
+```python
+def evaluate_conditionals(request_headers, object_info):
+    """Returns HTTP status code: 200, 206, 304, or 412."""
+    skip_unmodified_since = False
+    skip_modified_since = False
+
+    # Step 1: If-Match (strongest precondition)
+    if "If-Match" in request_headers:
+        if object_info.etag != request_headers["If-Match"]:
+            return 412  # Precondition Failed
+        skip_unmodified_since = True  # If-Match passed → skip If-Unmodified-Since
+
+    # Step 2: If-Unmodified-Since (only if no If-Match)
+    if "If-Unmodified-Since" in request_headers and not skip_unmodified_since:
+        if object_info.last_modified > parse_date(request_headers["If-Unmodified-Since"]):
+            return 412  # Precondition Failed
+
+    # Step 3: If-None-Match
+    if "If-None-Match" in request_headers:
+        if object_info.etag == request_headers["If-None-Match"]:
+            return 304  # Not Modified (for GET/HEAD)
+        skip_modified_since = True  # If-None-Match did not match → skip If-Modified-Since
+
+    # Step 4: If-Modified-Since (only if no If-None-Match)
+    if "If-Modified-Since" in request_headers and not skip_modified_since:
+        if object_info.last_modified <= parse_date(request_headers["If-Modified-Since"]):
+            return 304  # Not Modified
+
+    # All conditions passed
+    return 200  # or 206 for range requests
+```
+
+### 6.4 Operation Routing Table
+
+| Operation | Method | Path | Query | Distinguisher |
+|-----------|--------|------|-------|---------------|
+| CreateBucket | PUT | `/{bucket}` | - | No key, no sub-resource query |
+| DeleteBucket | DELETE | `/{bucket}` | - | No key |
+| HeadBucket | HEAD | `/{bucket}` | - | No key |
+| ListBuckets | GET | `/` | - | Root path |
+| GetBucketLocation | GET | `/{bucket}` | `?location` | |
+| PutObject | PUT | `/{bucket}/{key}` | - | No `x-amz-copy-source` header |
+| GetObject | GET | `/{bucket}/{key}` | - | Key in path |
+| HeadObject | HEAD | `/{bucket}/{key}` | - | Key in path |
+| DeleteObject | DELETE | `/{bucket}/{key}` | - | No `?uploadId` |
+| CopyObject | PUT | `/{bucket}/{key}` | - | Has `x-amz-copy-source` header |
+| CreateMultipartUpload | POST | `/{bucket}/{key}` | `?uploads` | Bare `uploads` flag |
+| UploadPart | PUT | `/{bucket}/{key}` | `?partNumber=N&uploadId=ID` | No `x-amz-copy-source` |
+| UploadPartCopy | PUT | `/{bucket}/{key}` | `?partNumber=N&uploadId=ID` | Has `x-amz-copy-source` |
+| CompleteMultipartUpload | POST | `/{bucket}/{key}` | `?uploadId=ID` | POST with uploadId |
+| AbortMultipartUpload | DELETE | `/{bucket}/{key}` | `?uploadId=ID` | DELETE with uploadId |
+| ListParts | GET | `/{bucket}/{key}` | `?uploadId=ID` | GET with key + uploadId |
+| ListMultipartUploads | GET | `/{bucket}` | `?uploads` | GET at bucket level, bare `uploads` |
+| ListObjectsV1 | GET | `/{bucket}` | - | No `list-type`, no sub-resource |
+| ListObjectsV2 | GET | `/{bucket}` | `?list-type=2` | |
+| DeleteObjects | POST | `/{bucket}` | `?delete` | |
+| ListObjectVersions | GET | `/{bucket}` | `?versions` | |
+
+### 6.5 Size Limits
+
+| Limit | Value |
+|-------|-------|
+| Max single PUT object | 5 GB (5,368,709,120 bytes) |
+| Max multipart total object | 5 TB |
+| Min multipart part size (except last) | 5 MB (5,242,880 bytes) |
+| Max multipart part size | 5 GB (5,368,709,120 bytes) |
+| Max parts per upload | 10,000 |
+| Part number range | 1-10,000 |
+| Max objects per list response | 1,000 |
+| Max parts per ListParts response | 1,000 |
+| Max uploads per ListMultipartUploads | 1,000 |
+| Max objects per DeleteObjects | 1,000 |
+| Max object key length | 1,024 bytes (UTF-8) |
+| Max user metadata total | 2 KB |
+| Max request headers total | 8 KB |
+| Max bucket name length | 63 characters |
+| Min bucket name length | 3 characters |
+| Default max buckets per account | 100 |
+
+### 6.6 Success Status Codes by Operation
+
+| Operation | Success Status |
+|-----------|---------------|
+| CreateBucket | 200 OK (not 201) |
+| DeleteBucket | 204 No Content |
+| HeadBucket | 200 OK |
+| ListBuckets | 200 OK |
+| GetBucketLocation | 200 OK |
+| PutObject | 200 OK |
+| GetObject | 200 OK (full) or 206 (range) |
+| HeadObject | 200 OK or 206 (range) |
+| DeleteObject | 204 No Content (always, even if nonexistent) |
+| CopyObject | 200 OK (but may contain error in body!) |
+| CreateMultipartUpload | 200 OK |
+| UploadPart | 200 OK |
+| UploadPartCopy | 200 OK |
+| CompleteMultipartUpload | 200 OK (but may contain error in body!) |
+| AbortMultipartUpload | 204 No Content |
+| ListParts | 200 OK |
+| ListMultipartUploads | 200 OK |
+| ListObjectsV1 | 200 OK |
+| ListObjectsV2 | 200 OK |
+| DeleteObjects | 200 OK (always, even if all objects fail) |
+| ListObjectVersions | 200 OK |
+
+---
+
+## 7. MinIO Deviations from AWS S3
+
+### 7.1 Behavioral Differences
+
+| Feature | AWS S3 | MinIO |
+|---------|--------|-------|
+| Object ACLs | Full ACL model (canned + grants) | Returns 501 Not Implemented. Use bucket policies. |
+| Object names with leading `/` | Allowed | Returns 400 `InvalidObjectNamePrefixSlash` |
+| Object names with `..` or `.` | Normalized | Returns 400 `InvalidResourceName` |
+| Directory conflicts | No concept of directories | Returns 400 `ErrObjectExistsAsDirectory` when key conflicts with directory-like prefix |
+| Max single PUT size | 5 GB | 5 TB |
+| Max multipart total size | 5 TB | 50 TB |
+| Max part size | 5 GB | 5 TB |
+| Max object versions | Unlimited | 10,000 (configurable via `MINIO_API_OBJECT_MAX_VERSIONS`) |
+| Max parts per ListParts page | 1,000 | 10,000 |
+| Object key length | 1,024 bytes | 1,024 characters (diverges on multi-byte UTF-8) |
+| `If-Match` on PutObject | Not supported | Supported (MinIO extension) |
+| ListBuckets pagination | Supported | Not supported (all in one response) |
+| Content-Type detection | Client-provided or SDK detection | Extension-based only; defaults to `application/octet-stream` |
+| Bucket location | Per-bucket | Server-wide (all buckets in same region) |
+| ACL headers on PutObject | Processed | Returns 501 |
+| HeadBucket `x-amz-bucket-region` | Always returned | Not returned |
+| Max buckets | 100 default (can increase) | 500,000 soft limit |
+
+### 7.2 MinIO-Specific Headers
+
+**Request headers:**
+
+| Header | Purpose |
+|--------|---------|
+| `x-minio-force-delete` | Force-delete bucket (needs `ForceDeleteBucketAction`) |
+| `x-minio-force-create` | Force-create bucket bypassing constraints |
+| `x-minio-source-mtime` | Preserve modification time during copy/replication |
+| `x-minio-source-etag` | Preserve ETag during copy/replication |
+| `X-Amz-Meta-Snowball-Auto-Extract` | Auto-extract ZIP/TAR on upload |
+
+**Response headers:**
+
+| Header | Purpose |
+|--------|---------|
+| `x-minio-deployment-id` | Unique deployment identifier |
+| `x-minio-server-status` | Server operational state |
+
+**Blocked headers:** `X-Minio-Internal-*` headers are blocked from client
+requests (reserved for internal metadata).
+
+### 7.3 MinIO-Specific Error Codes
+
+These error codes do NOT exist in AWS S3:
+
+| Code | HTTP Status | When |
+|------|-------------|------|
+| `ErrStorageFull` | 507 | Disk below free space threshold |
+| `ErrObjectExistsAsDirectory` | 400 | Object name conflicts with directory prefix |
+| `ErrInvalidObjectNamePrefixSlash` | 400 | Key starts with `/` |
+| `ErrInvalidResourceName` | 400 | Path has `..` or `.` components |
+| `ErrServerNotInitialized` | 503 | Server still starting |
+| `ErrBucketMetadataNotInitialized` | 503 | Metadata system not ready |
+| `ErrClientDisconnected` | 499 | Client dropped connection (nginx convention) |
+| `ErrObjectTampered` | 206 | Object integrity check failed |
+
+### 7.4 MinIO Extensions
+
+| Feature | Description |
+|---------|-------------|
+| `?list-type=2&metadata=true` | ListObjectsV2 with inline object metadata |
+| `?versions&metadata=true` | ListObjectVersions with inline metadata |
+| `?events` | Real-time event streaming (bucket and root) |
+| Snowball auto-extract | Upload ZIP/TAR; auto-extract into individual objects |
+| `?lambdaArn` | Object Lambda ARN-based routing |
+| Conditional `If-Match` on PUT | Supported (AWS only supports `If-None-Match`) |
+
+### 7.5 MinIO Implemented S3 Operations
+
+**Object operations:** HeadObject, GetObject, PutObject, DeleteObject,
+CopyObject, GetObjectAttributes, GetObjectTagging, PutObjectTagging,
+DeleteObjectTagging, GetObjectRetention, PutObjectRetention,
+GetObjectLegalHold, PutObjectLegalHold, SelectObjectContent,
+PostRestoreObject, full multipart lifecycle.
+
+**Bucket operations:** CreateBucket, HeadBucket, DeleteBucket, ListBuckets,
+ListObjectsV1, ListObjectsV2, ListObjectVersions, GetBucketLocation,
+GetBucketPolicy, PutBucketPolicy, DeleteBucketPolicy, GetBucketLifecycle,
+PutBucketLifecycle, DeleteBucketLifecycle, GetBucketEncryption,
+PutBucketEncryption, DeleteBucketEncryption, GetBucketObjectLockConfig,
+PutBucketObjectLockConfig, GetBucketReplication, PutBucketReplication,
+DeleteBucketReplication, GetBucketVersioning, PutBucketVersioning,
+GetBucketNotification, PutBucketNotification, GetBucketTagging,
+PutBucketTagging, DeleteBucketTagging, GetBucketCors, PutBucketCors,
+DeleteBucketCors, DeleteMultipleObjects, ListMultipartUploads,
+PostPolicyBucket.
+
+**Explicitly not implemented:** Object ACLs (stub only), Bucket Website,
+Bucket Analytics, Bucket Metrics, Bucket Logging, Bucket Inventory,
+Transfer Acceleration, Intelligent-Tiering configuration, Object Torrent,
+Ownership Controls, PublicAccessBlock.
+
+### 7.6 High-Impact Deviations for Compatibility Testing
+
+These are most likely to surface during differential fuzzing between AWS S3
+and MinIO:
+
+1. **Object name restrictions** — MinIO rejects leading `/` and path traversal
+   (`..`, `.`) that AWS S3 accepts.
+2. **ACL operations** — MinIO returns 501 for any ACL-related header or API call.
+3. **Directory conflict errors** — MinIO has directory-like prefix concept
+   that AWS lacks.
+4. **Size limits differ** — 5 TB vs 5 GB for single PUT, 50 TB vs 5 TB total.
+5. **Extra response headers** — `x-minio-*` headers in responses.
+6. **Content-Type edge cases** — Empty `Content-Encoding` header where AWS
+   omits it; extension-only MIME detection.
+7. **Non-standard HTTP status codes** — 499 (client disconnect), 507 (storage
+   full), 206 (tampered object).
+8. **Conditional write extension** — `If-Match` on PUT succeeds where AWS
+   would reject.
+9. **Extra query parameter extensions** — `?metadata=true`, `?lambdaArn`,
+   `?events` are MinIO-only.
+10. **Key length counting** — MinIO counts 1,024 characters while AWS counts
+    1,024 bytes, causing divergence on multi-byte UTF-8 keys.
