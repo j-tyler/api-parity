@@ -1527,3 +1527,466 @@ time ascending within same key.
 - With both, uploads for exact `key-marker` key included only if upload ID >
   `upload-id-marker`.
 - Max 1000 per response.
+
+---
+
+## 5. List Operations
+
+### 5.1 ListObjectsV1
+
+**Status:** Deprecated by AWS. V2 recommended for new applications, but V1
+widely used by existing clients and must be supported.
+
+**Request:** `GET /{bucket}` (no `list-type` parameter)
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prefix` | string | - | Only return keys beginning with this string |
+| `delimiter` | string | - | Character to group keys into CommonPrefixes |
+| `marker` | string | - | Start after this key (exclusive). For pagination. |
+| `max-keys` | integer | 1000 | Maximum keys to return (0-1000) |
+| `encoding-type` | string | - | `url` — percent-encode keys in response |
+
+**Request Headers:**
+
+| Header | Description |
+|--------|-------------|
+| `x-amz-request-payer` | `requester` |
+| `x-amz-expected-bucket-owner` | Account ID |
+| `x-amz-optional-object-attributes` | `RestoreStatus` |
+
+**Response:** `200 OK`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>bucket-name</Name>
+  <Prefix></Prefix>
+  <Marker></Marker>
+  <MaxKeys>1000</MaxKeys>
+  <IsTruncated>false</IsTruncated>
+  <NextMarker>last-key</NextMarker>
+  <Delimiter>/</Delimiter>
+  <EncodingType>url</EncodingType>
+  <Contents>
+    <Key>object-key</Key>
+    <LastModified>2009-10-12T17:50:30.000Z</LastModified>
+    <ETag>"fba9dede5f27731c9771645a39863328"</ETag>
+    <Size>434234</Size>
+    <StorageClass>STANDARD</StorageClass>
+    <Owner>
+      <ID>canonical-user-id</ID>
+      <DisplayName>display-name</DisplayName>
+    </Owner>
+  </Contents>
+  <CommonPrefixes>
+    <Prefix>photos/</Prefix>
+  </CommonPrefixes>
+</ListBucketResult>
+```
+
+| Element | Presence | Description |
+|---------|----------|-------------|
+| `Name` | Always | Bucket name |
+| `Prefix` | Always | Echo (empty string if not specified) |
+| `Marker` | Always | Echo (empty string if not specified) |
+| `MaxKeys` | Always | Echo of requested max-keys |
+| `IsTruncated` | Always | `true` if more results exist |
+| `NextMarker` | Conditional | **Only when delimiter IS set AND IsTruncated=true** |
+| `Delimiter` | Conditional | Only if delimiter was specified |
+| `EncodingType` | Conditional | Only if encoding-type=url requested |
+| `Contents` | 0..N | One per matching object |
+| `Contents/Key` | Always in Contents | Object key name |
+| `Contents/LastModified` | Always in Contents | ISO 8601 with ms |
+| `Contents/ETag` | Always in Contents | Quoted entity tag |
+| `Contents/Size` | Always in Contents | Size in bytes |
+| `Contents/StorageClass` | Always in Contents | Storage class |
+| `Contents/Owner` | Always in V1 | Owner ID and DisplayName |
+| `CommonPrefixes` | 0..N | One per grouped prefix |
+| `CommonPrefixes/Prefix` | Always in CommonPrefixes | The grouped prefix string |
+
+**V1 Pagination Rules:**
+
+1. When delimiter IS set AND truncated: Response includes `NextMarker`. Use
+   as next `marker`.
+2. When delimiter NOT set (or not truncated): `NextMarker` **absent**. Client
+   must use the `Key` of the **last** `Contents` element as next `marker`.
+3. Results in lexicographic (UTF-8 byte) order by key.
+4. Both `Contents` and `CommonPrefixes` count against `max-keys`.
+5. `CommonPrefixes` only included if lexicographically greater than `marker`.
+
+**Error Codes:**
+
+| Code | Status | Cause |
+|------|--------|-------|
+| `NoSuchBucket` | 404 | Bucket does not exist |
+| `AccessDenied` | 403 | Insufficient permissions |
+
+**Permission:** `s3:ListBucket`.
+
+---
+
+### 5.2 ListObjectsV2
+
+**Request:** `GET /{bucket}?list-type=2`
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `list-type` | string | (required) | Must be `2` |
+| `prefix` | string | - | Filter by key prefix |
+| `delimiter` | string | - | Group keys into CommonPrefixes |
+| `start-after` | string | - | Start after this key (first page only; ignored when `continuation-token` present) |
+| `continuation-token` | string | - | Opaque pagination token from previous response |
+| `max-keys` | integer | 1000 | Max keys (0-1000) |
+| `encoding-type` | string | - | `url` |
+| `fetch-owner` | boolean | false | Include `Owner` in Contents |
+
+**Response:** `200 OK`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>bucket-name</Name>
+  <Prefix></Prefix>
+  <MaxKeys>1000</MaxKeys>
+  <KeyCount>2</KeyCount>
+  <IsTruncated>false</IsTruncated>
+  <ContinuationToken>prev-token</ContinuationToken>
+  <NextContinuationToken>next-token</NextContinuationToken>
+  <StartAfter>start-key</StartAfter>
+  <Contents>
+    <Key>object-key</Key>
+    <LastModified>2009-10-12T17:50:30.000Z</LastModified>
+    <ETag>"fba9dede5f27731c9771645a39863328"</ETag>
+    <Size>434234</Size>
+    <StorageClass>STANDARD</StorageClass>
+    <Owner>
+      <ID>canonical-user-id</ID>
+      <DisplayName>display-name</DisplayName>
+    </Owner>
+  </Contents>
+  <CommonPrefixes>
+    <Prefix>photos/</Prefix>
+  </CommonPrefixes>
+</ListBucketResult>
+```
+
+| Element | Presence | Description |
+|---------|----------|-------------|
+| `KeyCount` | Always | Actual entries in THIS page (Contents + CommonPrefixes) |
+| `ContinuationToken` | If token was sent | Echo of request token |
+| `NextContinuationToken` | Only when IsTruncated=true | **Always present when truncated** |
+| `StartAfter` | If start-after was sent | Echo of request value |
+| `Owner` | Only if fetch-owner=true | Owner in Contents |
+
+**V2 Improvements Over V1:**
+
+| Aspect | V1 | V2 |
+|--------|----|----|
+| Pagination param | `marker` (actual key) | `continuation-token` (opaque) |
+| Pagination response | `NextMarker` (only with delimiter+truncated) | `NextContinuationToken` (always when truncated) |
+| Start position | `marker` | `start-after` (first page only) |
+| Owner | Always included | Only if `fetch-owner=true` |
+| Entry count | Not present | `KeyCount` |
+
+**V2 Pagination Rules:**
+
+1. `continuation-token` is **opaque**. Do not parse. Server generates; client
+   passes back verbatim.
+2. When `continuation-token` present, `start-after` is **ignored**.
+3. `NextContinuationToken` only present when `IsTruncated=true`. Always present
+   when truncated (not conditional on delimiter like V1).
+4. `KeyCount` = actual entries this page, not total across all pages.
+5. Results in lexicographic UTF-8 byte order.
+
+**Error Codes and Permission:** Same as V1.
+
+---
+
+### 5.3 DeleteObjects (Batch)
+
+**Request:** `POST /{bucket}?delete`
+
+**Request Headers:**
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Content-MD5` | **Yes** (general purpose buckets) | Base64 MD5 of XML body. Mismatch → 400 BadDigest. |
+| `Content-Type` | Yes | `application/xml` or `text/xml` |
+| `x-amz-mfa` | Conditional | `{serial} {code}` (space-separated). Required for MFA-Delete-enabled buckets. Missing/invalid → entire request fails 403. |
+| `x-amz-bypass-governance-retention` | No | `true` to delete Governance-locked objects |
+
+**Content-MD5 Computation:**
+
+1. Compute MD5 hash of raw XML body (UTF-8 bytes) → 16 binary bytes.
+2. Base64-encode the 16 bytes.
+3. Set header: `Content-MD5: <base64>`.
+
+**Request Body:**
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Quiet>false</Quiet>
+  <Object>
+    <Key>key1</Key>
+    <VersionId>version-id</VersionId>
+  </Object>
+  <Object>
+    <Key>key2</Key>
+  </Object>
+</Delete>
+```
+
+| Element | Required | Description |
+|---------|----------|-------------|
+| `Delete` | Root | Container with xmlns |
+| `Quiet` | No | Default `false`. When `true`, `Deleted` elements omitted (only `Error` elements returned). |
+| `Object` | Yes (1-1000) | Up to 1000 objects per request |
+| `Object/Key` | Yes | Object key name |
+| `Object/VersionId` | No | Specific version to delete |
+
+**Response:** `200 OK` — **ALWAYS 200, even if every single object fails.**
+Per-object errors are in the XML body.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Deleted>
+    <Key>key1</Key>
+    <VersionId>version-id</VersionId>
+    <DeleteMarker>true</DeleteMarker>
+    <DeleteMarkerVersionId>marker-version-id</DeleteMarkerVersionId>
+  </Deleted>
+  <Error>
+    <Key>key2</Key>
+    <Code>AccessDenied</Code>
+    <Message>Access Denied</Message>
+    <VersionId>version-id</VersionId>
+  </Error>
+</DeleteResult>
+```
+
+**Quiet Mode:**
+
+| `Quiet` | `Deleted` elements | `Error` elements |
+|---------|-------------------|-----------------|
+| `false` (default, verbose) | Included for every success | Included for every failure |
+| `true` | Omitted entirely | Still included for every failure |
+
+In quiet mode with all successes, response body is empty `<DeleteResult/>`.
+
+**Versioning Behavior:**
+
+| Scenario | Result |
+|----------|--------|
+| Non-versioned, key exists | Permanently removed. `<Deleted>` with `<Key>`. |
+| Versioned, no VersionId | Delete marker created. `<Deleted>` with `<DeleteMarker>true</DeleteMarker>` + `<DeleteMarkerVersionId>`. |
+| Versioned, with VersionId | Specific version permanently removed. |
+| Deleting a delete marker | Marker removed ("undelete"). `<DeleteMarker>true</DeleteMarker>`. |
+| **Key does not exist** | **Treated as success.** `<Deleted>` element returned. |
+
+**Critical Behavior:**
+
+1. HTTP 200 even when all objects fail. Check `<Error>` elements.
+2. Deleting nonexistent keys succeeds — returns `<Deleted>`, not `<Error>`.
+3. `Content-MD5` mandatory on general purpose buckets.
+4. Max 1000 objects per request.
+5. MFA Delete: missing/invalid token → entire request fails 403.
+
+**Permissions:** `s3:DeleteObject` for unversioned, `s3:DeleteObjectVersion`
+for versioned deletes.
+
+---
+
+### 5.4 ListObjectVersions
+
+**Request:** `GET /{bucket}?versions`
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prefix` | string | - | Filter by key prefix |
+| `delimiter` | string | - | Group keys |
+| `key-marker` | string | - | Start after this key |
+| `version-id-marker` | string | - | With `key-marker`, start after this version. **Ignored without `key-marker`.** |
+| `max-keys` | integer | 1000 | Max entries (0-1000) |
+| `encoding-type` | string | - | `url` |
+
+**Response:** `200 OK`
+
+Root element: **`ListVersionsResult`** (different from `ListBucketResult`).
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>bucket-name</Name>
+  <Prefix></Prefix>
+  <KeyMarker></KeyMarker>
+  <VersionIdMarker></VersionIdMarker>
+  <NextKeyMarker>next-key</NextKeyMarker>
+  <NextVersionIdMarker>next-version</NextVersionIdMarker>
+  <MaxKeys>1000</MaxKeys>
+  <IsTruncated>false</IsTruncated>
+
+  <Version>
+    <Key>object-key</Key>
+    <VersionId>version-id</VersionId>
+    <IsLatest>true</IsLatest>
+    <LastModified>2009-10-12T17:50:30.000Z</LastModified>
+    <ETag>"fba9dede5f27731c9771645a39863328"</ETag>
+    <Size>434234</Size>
+    <StorageClass>STANDARD</StorageClass>
+    <Owner>
+      <ID>canonical-user-id</ID>
+      <DisplayName>display-name</DisplayName>
+    </Owner>
+  </Version>
+
+  <DeleteMarker>
+    <Key>object-key</Key>
+    <VersionId>marker-version-id</VersionId>
+    <IsLatest>false</IsLatest>
+    <LastModified>2009-10-12T17:50:30.000Z</LastModified>
+    <Owner>
+      <ID>canonical-user-id</ID>
+      <DisplayName>display-name</DisplayName>
+    </Owner>
+  </DeleteMarker>
+
+  <CommonPrefixes>
+    <Prefix>photos/</Prefix>
+  </CommonPrefixes>
+</ListVersionsResult>
+```
+
+**Key Differences from ListObjects:**
+
+| Aspect | ListObjects | ListObjectVersions |
+|--------|------------|-------------------|
+| Root element | `ListBucketResult` | `ListVersionsResult` |
+| Object entries | `Contents` | `Version` (0..N) + `DeleteMarker` (0..N) |
+| Pagination | Single marker or token | Two markers: `key-marker` + `version-id-marker` |
+| Version metadata | Not present | `VersionId`, `IsLatest` |
+| DeleteMarker elements | Not present | Separate elements (no ETag, Size, StorageClass) |
+| Owner | Conditional | Always included |
+| Permission | `s3:ListBucket` | `s3:ListBucketVersions` |
+
+**DeleteMarker elements have NO ETag, Size, or StorageClass.** They are
+lightweight markers, not real objects.
+
+**Ordering:**
+
+1. Across keys: Lexicographic (UTF-8 byte) order by key name.
+2. Within same key: Reverse chronological (most recent version first).
+3. `Version` and `DeleteMarker` for same key interleaved in time-descending
+   order.
+4. Exactly one `Version` or `DeleteMarker` per key has `IsLatest=true`.
+
+**Pagination:**
+
+1. When truncated, use both `NextKeyMarker` AND `NextVersionIdMarker`.
+2. `version-id-marker` without `key-marker` is ignored.
+3. `key-marker` alone: starts at first version of next key.
+4. Both markers: starts after specific version.
+
+---
+
+### 5.5 Delimiter/Prefix Virtual Directory Logic
+
+This algorithm is identical across ListObjectsV1, V2, ListObjectVersions, and
+ListMultipartUploads. It creates the illusion of hierarchical directories in
+S3's flat key-value namespace.
+
+**Algorithm:**
+
+Given prefix P and delimiter D:
+
+1. Start with all keys beginning with P.
+2. For each key, find the **first** occurrence of D **after** P.
+3. If D found: extract substring from key start through D (inclusive) →
+   CommonPrefixes (deduplicated; each unique prefix = 1 entry against max-keys).
+4. If D not found: key is a direct result → Contents.
+
+**Worked Examples:**
+
+Keys in bucket:
+```
+sample.jpg
+photos/2006/January/pic.jpg
+photos/2006/February/pic2.jpg
+photos/2006/February/pic3.jpg
+```
+
+**Example A:** `prefix=""`, `delimiter="/"`
+
+| Key | First `/` | Result |
+|-----|-----------|--------|
+| `sample.jpg` | Not found | Contents: `sample.jpg` |
+| `photos/2006/January/pic.jpg` | Position 6 | CommonPrefixes: `photos/` |
+| `photos/2006/February/pic2.jpg` | Position 6 | CommonPrefixes: `photos/` (dedup) |
+
+Result: Contents=`sample.jpg`, CommonPrefixes=`photos/`. Count: 2.
+
+**Example B:** `prefix="photos/2006/"`, `delimiter="/"`
+
+| Key (after prefix match) | Remainder | First `/` in remainder | Result |
+|--------------------------|-----------|----------------------|--------|
+| `photos/2006/January/pic.jpg` | `January/pic.jpg` | Position 7 | CommonPrefixes: `photos/2006/January/` |
+| `photos/2006/February/pic2.jpg` | `February/pic2.jpg` | Position 8 | CommonPrefixes: `photos/2006/February/` |
+| `photos/2006/February/pic3.jpg` | `February/pic3.jpg` | Position 8 | CommonPrefixes: `photos/2006/February/` (dedup) |
+
+Result: Contents=(none), CommonPrefixes=`photos/2006/January/`, `photos/2006/February/`. Count: 2.
+
+**Example C:** `prefix="photos/2006/February/"`, `delimiter="/"`
+
+All matching keys' remainders (`pic2.jpg`, `pic3.jpg`) contain no `/`.
+
+Result: Contents=`photos/2006/February/pic2.jpg`, `photos/2006/February/pic3.jpg`. Count: 2.
+
+**Edge Cases:**
+
+- Prefix only, no delimiter: All matching keys returned as Contents. No
+  CommonPrefixes. Flat listing.
+- Delimiter only, no prefix: Algorithm operates on entire key. `delimiter=/`
+  gives "top-level directories."
+- CommonPrefixes interact with pagination markers — only included if
+  lexicographically after the marker value.
+
+### 5.6 encoding-type=url Behavior
+
+When `encoding-type=url` specified, certain XML element values are
+percent-encoded using UTF-8.
+
+**Why:** XML 1.0 cannot represent certain byte values (0x00-0x08, 0x0B, 0x0C,
+0x0E-0x1F). S3 allows any byte sequence as a key name. URL-encoding avoids
+unparseable XML.
+
+**Elements that ARE encoded:** `Key`, `Prefix`, `Delimiter`, `Marker`,
+`NextMarker`, `StartAfter`, `KeyMarker`, `NextKeyMarker`.
+
+**Elements NOT encoded:** `ContinuationToken`, `NextContinuationToken`,
+`VersionId`, `ETag`, `StorageClass`, `Owner/*`, `Name`.
+
+**Response signal:** `<EncodingType>url</EncodingType>` included to signal
+client that decoding is needed.
+
+### 5.7 Implementation Notes for List Operations
+
+1. **V1 NextMarker quirk:** Only include `NextMarker` when delimiter IS set
+   AND truncated. Strict S3 omits it without delimiter.
+2. **V2 continuation tokens are opaque.** Can encode whatever internal state
+   needed (e.g., base64 of last key).
+3. **KeyCount in V2** is entries in this page, not total across all pages.
+4. **Empty parameters:** When `prefix`, `marker`, etc. not provided, include
+   in response with empty string values (e.g., `<Prefix></Prefix>`).
+5. **ETag format:** Always quoted in Contents/Version elements.
+6. **LastModified format:** ISO 8601 with millisecond precision: `2009-10-12T17:50:30.000Z`.
+7. **StorageClass values:** `STANDARD`, `STANDARD_IA`, `ONEZONE_IA`, `GLACIER`,
+   `DEEP_ARCHIVE`, `INTELLIGENT_TIERING`, `REDUCED_REDUNDANCY`, `GLACIER_IR`.
+8. **Version ordering:** Within same key, newest first (reverse chronological).
