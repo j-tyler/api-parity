@@ -25,6 +25,7 @@ from api_parity.models import (
     ResponseCase,
     TargetConfig,
 )
+from api_parity.xml_body import dict_to_xml, xml_to_dict
 
 
 class ExecutorError(Exception):
@@ -521,8 +522,31 @@ class Executor:
         if request.body is not None:
             if request.media_type and "json" in request.media_type.lower():
                 json_body = request.body
+            elif request.media_type and "xml" in request.media_type.lower():
+                # Convert dict body to XML bytes. The body stays as a dict in
+                # RequestCase (inspectable in artifacts); XML serialization
+                # happens only at send time.  See DESIGN.md "XML Body Conversion".
+                # NOTE: Substring match "xml" can false-positive on media types
+                # like application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+                # (ZIP, not XML). Same limitation as the existing "json" in check.
+                # Acceptable because api-parity targets REST APIs, not file upload services.
+                if isinstance(request.body, dict):
+                    try:
+                        content = dict_to_xml(request.body)
+                    except ValueError:
+                        # Body dict doesn't have a single root element — fall
+                        # back to string representation.  This happens when the
+                        # OpenAPI schema defines multiple top-level properties
+                        # without a wrapper element.
+                        content = str(request.body).encode("utf-8")
+                elif isinstance(request.body, str):
+                    content = request.body.encode("utf-8")
+                elif isinstance(request.body, bytes):
+                    content = request.body
+                else:
+                    content = str(request.body).encode("utf-8")
             else:
-                # Encode as string for non-JSON
+                # Encode as string for non-JSON, non-XML
                 if isinstance(request.body, str):
                     content = request.body.encode("utf-8")
                 elif isinstance(request.body, bytes):
@@ -598,7 +622,12 @@ class Executor:
                 headers[key_lower] = []
             headers[key_lower].append(value)
 
-        # Parse body based on content-type: JSON -> parsed (dict/list/etc), text -> str, binary -> base64
+        # Parse body based on content-type:
+        #   JSON         -> parsed dict/list/scalar
+        #   XML          -> parsed dict via xml_to_dict (see DESIGN.md "XML Body Conversion")
+        #   text/*       -> str
+        #   everything else -> base64
+        # XML branch MUST come before text/* because text/xml is a valid content-type.
         body: Any = None
         body_base64: str | None = None
 
@@ -610,6 +639,12 @@ class Executor:
                     body = response.json()
                 except Exception:
                     # Not valid JSON despite content-type
+                    body_base64 = base64.b64encode(response.content).decode("ascii")
+            elif "xml" in content_type.lower():
+                try:
+                    body = xml_to_dict(response.content)
+                except Exception:
+                    # Not valid XML despite content-type — fall back to base64
                     body_base64 = base64.b64encode(response.content).decode("ascii")
             elif content_type.startswith("text/"):
                 try:
