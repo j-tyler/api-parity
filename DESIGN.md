@@ -442,6 +442,25 @@ Controlling Hypothesis randomness for dynamic test functions requires setting `_
 
 ---
 
+# XML Body Conversion
+
+Keywords: xml json response request serialization s3
+Date: 20260208
+
+APIs like S3 return XML responses and accept XML request bodies. The comparison pipeline (comparator, CEL evaluator, artifact writer, bundle loader) operates entirely on Python dicts. Rather than adding a parallel XML comparison path, we convert at the executor boundary: XML→dict for responses, dict→XML for requests. Everything between stays unchanged.
+
+**Response parsing:** When `content-type` contains "xml" (matches both `application/xml` and `text/xml`), the response body is parsed into a dict via `xml_to_dict()` in `api_parity/xml_body.py`. The XML branch in the executor is ordered before the `text/*` branch because `text/xml` would otherwise be captured as a raw string.
+
+**Request serialization:** When `media_type` contains "xml" and the body is a dict, the executor converts it to XML bytes via `dict_to_xml()` at send time. The body stays as a structured dict in `RequestCase` (inspectable in artifacts, diffable). On replay, the same dict is re-serialized.
+
+**Single-vs-list ambiguity:** In XML, repeated sibling elements (`<Item>a</Item><Item>b</Item>`) naturally become a list. But a single element (`<Item>a</Item>`) is indistinguishable from a non-repeating scalar. Without extra information, `xml_to_dict` uses a heuristic: multiple siblings → list, single → scalar. The `force_list` parameter allows specifying tags that should always be lists. For parity testing this heuristic is acceptable because both targets receive the same request and should return the same number of elements, so both sides get the same conversion.
+
+**OpenAPI XML annotations are ignored.** OpenAPI 3.x supports XML-specific annotations on schema properties: `xml:name` (rename element), `xml:attribute` (serialize as attribute), `xml:wrapped` (add wrapper element around arrays), `xml:prefix` and `xml:namespace`. Our `dict_to_xml` ignores all of these. Why: Schemathesis generates `case.body` as a Python dict based on the JSON Schema portion of the spec. By the time api-parity sees the body, the XML annotations are lost — they exist in the spec metadata, not in the generated data. To respect them, we would need to look up each operation's request body schema from the parsed OpenAPI spec, walk the schema tree alongside the generated dict, and apply transformations during serialization. This is significant complexity for a feature that only matters when the API's XML element names diverge from its JSON Schema property names. S3 and similar APIs use matching names, so the simple conversion works. APIs that rely heavily on `xml:name` or `xml:attribute` to restructure elements would produce incorrect request bodies.
+
+**Implementation:** stdlib `xml.etree.ElementTree` only (C-accelerated, no third-party dependency). Two pure functions in `api_parity/xml_body.py`, two `elif` branches in `executor.py`.
+
+---
+
 # Session-Scoped Test Fixtures
 
 Keywords: pytest fixtures session performance

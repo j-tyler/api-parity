@@ -228,6 +228,15 @@ Without these links, api-parity can still call `getOrder` and `deleteOrder`, but
 | [OpenAPI Links](docs/openapi-links.md) | Enable stateful chain testing |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and fixes |
 
+## XML API Support
+
+APIs that return XML responses (e.g., S3-compatible APIs) are supported. XML response bodies are automatically parsed into dicts when the `content-type` header contains "xml". Dict request bodies are serialized to XML when `media_type` contains "xml". The entire comparison pipeline (JSONPath rules, CEL expressions, artifact storage) works identically for XML and JSON APIs.
+
+**Limitations:**
+
+- **Single-vs-list ambiguity.** A single XML child element (e.g., one `<Contents>`) converts to a scalar dict value, not a one-element list. Multiple siblings with the same tag become a list. The `xml_to_dict` function supports a `force_list` parameter to override this, but it is not yet exposed through user configuration. Both targets get the same conversion, so parity comparison is unaffected.
+- **OpenAPI XML annotations ignored.** `xml:name`, `xml:attribute`, `xml:wrapped`, `xml:prefix`, and `xml:namespace` annotations in the OpenAPI spec are not respected during request body serialization. Element names are taken directly from dict keys (which come from JSON Schema property names). This works for APIs like S3 where XML element names match JSON Schema property names. APIs that rely on these annotations to rename or restructure elements will produce incorrect request bodies. See [DESIGN.md](DESIGN.md) "XML Body Conversion" for full rationale.
+
 ## Technical Reference
 
 | Document | Description |

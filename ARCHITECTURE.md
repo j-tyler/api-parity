@@ -147,6 +147,14 @@ class Executor:
 
 Requests execute serially (A first, then B)—no concurrency, which would introduce non-determinism. For chains, each target maintains its own extracted variables (if A's POST returns `id: "abc"` and B's returns `id: "xyz"`, subsequent steps use respective IDs).
 
+**Content-type dispatch:** The executor routes request and response bodies based on content-type:
+- `"json" in content_type` → JSON (request: httpx `json=` param; response: `response.json()`)
+- `"xml" in content_type` → XML (request: `dict_to_xml()`; response: `xml_to_dict()`) — see `api_parity/xml_body.py`
+- `content_type.startswith("text/")` → text (response stored as string)
+- everything else → binary (base64-encoded)
+
+XML branch is ordered before `text/*` because `text/xml` is a valid content-type.
+
 **Error handling:**
 - Connection errors/timeouts: skip test case, increment error count, continue run
 - CEL evaluation errors: record as mismatch with `rule: "error: ..."`, continue run
@@ -334,7 +342,7 @@ class RequestCase:
 class ResponseCase:
     status_code: int
     headers: dict[str, list[str]]   # List values for multi-value headers
-    body: Any | None                # Parsed JSON or None
+    body: Any | None                # Parsed JSON, XML-converted dict, or text string
     body_base64: str | None         # Binary body as base64
     elapsed_seconds: float
     error: str | None               # Connection/timeout error
