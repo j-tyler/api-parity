@@ -2,6 +2,10 @@
 
 Instructions for Claude when working in this repository.
 
+## CRITICAL: Do What the User Asked
+
+Read the user's prompt carefully. Do exactly what they asked — nothing more, nothing less. Do not launch exploratory research, read every file in the repo, or spin up subagents unless the user's request requires it. If the answer is simple, give a simple answer. If the task is a one-line edit, make a one-line edit. Wasting compute on unrequested work is a failure mode.
+
 ## Repository Overview
 
 `api-parity` — Differential fuzzing tool for comparing API implementations against an OpenAPI specification. Python (primary), Go (CEL evaluator subprocess).
