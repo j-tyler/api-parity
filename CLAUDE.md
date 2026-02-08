@@ -80,7 +80,7 @@ When something about the environment or project trips you up, add it to CLAUDE.m
 
 ---
 
-## CRITICAL: Keep Docs in Sync
+## Keep Docs in Sync
 
 **This is a CRITICAL severity requirement. Outdated documentation creates wrong code.**
 
@@ -90,21 +90,13 @@ Each agent session starts with fresh context. Agents read ARCHITECTURE.md and DE
 2. The agent will trust the docs and not verify against actual implementation
 3. Wrong assumptions compound into architectural drift
 
-**Example of documentation drift causing bugs:**
-- ARCHITECTURE.md shows `Executor.__init__(target_a, target_b, timeout)`
-- Implementation adds `link_fields` parameter
-- Next agent reads ARCHITECTURE.md, writes code without `link_fields`
-- Chain execution silently fails to extract variables
-
 This is not a "nice to have"—it's as critical as writing correct code.
 
 **WHY and INTENT matter more than WHAT:**
 
 In the docs and in the code, WHY and INTENT are often more important than WHAT. Make sure the WHY and INTENT will be clear to LLM Agents with no prior context to changes you have made.
 
-The next agent can read code to see what it does. What they cannot see is WHY it was designed that way. Without the reasoning:
-- Agent sees "spec is parsed twice" and "fixes" it by removing the second parse
-- Agent doesn't know Schemathesis doesn't expose raw spec, so the "fix" breaks link extraction
+The next agent can read code to see what it does. What they cannot see is WHY it was designed that way. This can cause them to get confused and break non-obvious code.
 
 **Where to put WHY:**
 - **Inline comments** — Local implementation choices affecting one file
@@ -142,7 +134,7 @@ Write error messages that state what went wrong, relevant variable context, and 
 
 **7. Comments That State Intent**
 
-Comments should explain why code exists and what it expects, not just what it does. The next agent reading this code will not have your current context window to reference. Write comments like a colleague explaining context you'd need before modifying something. Think of the clarity you'd find in well-documented open source projects like SQLite.
+Comments should explain why code exists and what it expects, not just what it does. The next agent reading this code will not have your current context window to reference. Write comments like a colleague explaining context you'd need before modifying something.
 
 **8. Colocate What Changes Together**
 
