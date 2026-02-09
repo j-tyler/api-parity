@@ -314,6 +314,11 @@ class SchemaValidator:
         # Resolve $ref in schema
         schema = self._resolve_schema_refs(schema)
 
+        # Convert OpenAPI 3.0 "nullable: true" to JSON Schema "type: [T, 'null']".
+        # Draft4Validator is a pure JSON Schema validator that ignores the nullable
+        # keyword, causing false violations when a field is null but spec allows it.
+        schema = self._resolve_nullable(schema)
+
         # Determine if additionalProperties allows extra fields
         allows_extra = self._allows_additional_properties(schema)
 
@@ -420,6 +425,66 @@ class SchemaValidator:
                 result[key] = self._resolve_schema_refs(value, visited)
             else:
                 result[key] = value
+
+        return result
+
+    def _resolve_nullable(self, schema: Any) -> Any:
+        """Convert OpenAPI 3.0 nullable: true into JSON Schema type arrays.
+
+        OpenAPI 3.0 uses "nullable: true" to indicate a field can be null, but this
+        is an OpenAPI extension — not a JSON Schema keyword. Draft4Validator ignores it,
+        causing false "None is not of type 'X'" violations for valid null values.
+
+        This method recursively walks the schema and converts:
+            {"type": "string", "nullable": true}  ->  {"type": ["string", "null"]}
+        Removes the "nullable" key after conversion.
+
+        Args:
+            schema: Schema (or sub-schema) to process.
+
+        Returns:
+            Schema with nullable converted to JSON Schema type unions.
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        result = {}
+        for key, value in schema.items():
+            if key == "properties" and isinstance(value, dict):
+                result[key] = {
+                    prop: self._resolve_nullable(prop_schema)
+                    for prop, prop_schema in value.items()
+                }
+            elif key == "items" and isinstance(value, dict):
+                result[key] = self._resolve_nullable(value)
+            elif key in ("allOf", "anyOf", "oneOf") and isinstance(value, list):
+                result[key] = [self._resolve_nullable(item) for item in value]
+            elif key == "additionalProperties" and isinstance(value, dict):
+                result[key] = self._resolve_nullable(value)
+            else:
+                result[key] = value
+
+        # Convert nullable: true into JSON Schema equivalent.
+        # Two cases:
+        # 1. nullable + type: {"type": "string", "nullable": true}
+        #    -> {"type": ["string", "null"]}
+        # 2. nullable without type (composition): {"nullable": true, "allOf": [...]}
+        #    -> {"anyOf": [{allOf: [...]}, {"type": "null"}]}
+        #    This happens when nullable wraps a $ref or composition keyword.
+        if result.get("nullable") is True:
+            if "type" in result:
+                existing_type = result["type"]
+                if isinstance(existing_type, list):
+                    if "null" not in existing_type:
+                        result["type"] = existing_type + ["null"]
+                else:
+                    result["type"] = [existing_type, "null"]
+            else:
+                # No direct type key — wrap in anyOf with a null branch so
+                # Draft4Validator can match null against the type: null alternative.
+                non_nullable = {k: v for k, v in result.items() if k != "nullable"}
+                return {"anyOf": [non_nullable, {"type": "null"}]}
+            del result["nullable"]
 
         return result
 
