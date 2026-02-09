@@ -132,8 +132,10 @@ api-parity explore \
 | `--max-steps INT` | No | Max steps per chain (default: 6) |
 | `--log-chains` | No | Write chains to chains.txt |
 | `--ensure-coverage` | No | Test all operations (stateful mode) |
+| `--min-hits-per-op INT` | No | Min unique chains per linked operation (default: 1, stateful mode) |
+| `--min-coverage INT` | No | % of linked ops that must meet min-hits-per-op (default: 100, stateful mode) |
 
-**Seed walking:** When `--seed N` and `--max-chains M` are both specified, if seed N produces fewer than M unique chains, the system automatically tries seeds N+1, N+2, etc. (up to 100 attempts) until M chains are accumulated.
+**Seed walking:** When `--seed` is provided in stateful mode, the CLI walks seeds (seed, seed+1, seed+2, ...) to accumulate chains. Stopping is coverage-guided: seed walking continues until `--min-coverage`% of linked operations appear in at least `--min-hits-per-op` unique chains. If `--max-chains` is also set, it acts as a secondary limit. Hard safety limit: 100 seed attempts.
 
 ### `api-parity replay`
 
