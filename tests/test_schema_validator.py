@@ -435,6 +435,280 @@ paths:
         assert "$.dog_breed" not in extra_fields
 
 
+class TestNullableHandling:
+    """Tests for OpenAPI 3.0 nullable: true handling.
+
+    Regression tests for: Draft4Validator does not understand the OpenAPI 3.0
+    "nullable: true" keyword, causing false schema violations when a field
+    is validly null per the spec.
+    """
+
+    @pytest.fixture
+    def nullable_spec_path(self, tmp_path):
+        """Create a spec with nullable fields in various locations."""
+        spec_content = """
+openapi: "3.0.3"
+info:
+  title: Test API with nullable fields
+  version: "1.0"
+paths:
+  /accounts:
+    get:
+      operationId: getAccounts
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, name]
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  replicationPolicy:
+                    type: string
+                    nullable: true
+                  cacheTtlInSecond:
+                    type: integer
+                    nullable: true
+                  migrationConfig:
+                    type: object
+                    nullable: true
+                    properties:
+                      source:
+                        type: string
+  /nested:
+    get:
+      operationId: getNested
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outer:
+                    type: object
+                    properties:
+                      inner_nullable:
+                        type: string
+                        nullable: true
+                      inner_required:
+                        type: string
+  /array-items:
+    get:
+      operationId: getArrayItems
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        value:
+                          type: number
+                          nullable: true
+  /composed:
+    get:
+      operationId: getComposed
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      base_field:
+                        type: string
+                  - type: object
+                    properties:
+                      nullable_field:
+                        type: string
+                        nullable: true
+  /nullable-composition:
+    get:
+      operationId: getNullableComposition
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  config:
+                    nullable: true
+                    allOf:
+                      - type: object
+                        properties:
+                          key:
+                            type: string
+"""
+        spec_path = tmp_path / "nullable_spec.yaml"
+        spec_path.write_text(spec_content)
+        return spec_path
+
+    def test_null_value_in_nullable_string_field_passes(self, nullable_spec_path):
+        """Null value in a nullable: true string field should not be a violation."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {
+            "id": "acc-1",
+            "name": "Test",
+            "replicationPolicy": None,
+        }
+        result = validator.validate_response(body, "getAccounts", 200)
+        assert result.valid is True, (
+            f"Expected valid but got violations: {[v.message for v in result.violations]}"
+        )
+
+    def test_null_value_in_nullable_integer_field_passes(self, nullable_spec_path):
+        """Null value in a nullable: true integer field should not be a violation."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {
+            "id": "acc-1",
+            "name": "Test",
+            "cacheTtlInSecond": None,
+        }
+        result = validator.validate_response(body, "getAccounts", 200)
+        assert result.valid is True, (
+            f"Expected valid but got violations: {[v.message for v in result.violations]}"
+        )
+
+    def test_null_value_in_nullable_object_field_passes(self, nullable_spec_path):
+        """Null value in a nullable: true object field should not be a violation."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {
+            "id": "acc-1",
+            "name": "Test",
+            "migrationConfig": None,
+        }
+        result = validator.validate_response(body, "getAccounts", 200)
+        assert result.valid is True, (
+            f"Expected valid but got violations: {[v.message for v in result.violations]}"
+        )
+
+    def test_all_nullable_fields_null_passes(self, nullable_spec_path):
+        """All nullable fields set to null at once should pass validation."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {
+            "id": "acc-1",
+            "name": "Test",
+            "replicationPolicy": None,
+            "cacheTtlInSecond": None,
+            "migrationConfig": None,
+        }
+        result = validator.validate_response(body, "getAccounts", 200)
+        assert result.valid is True, (
+            f"Expected valid but got violations: {[v.message for v in result.violations]}"
+        )
+
+    def test_wrong_type_in_nullable_field_still_fails(self, nullable_spec_path):
+        """A non-null wrong type in a nullable field should still be a violation."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {
+            "id": "acc-1",
+            "name": "Test",
+            "replicationPolicy": 12345,  # should be string or null, not int
+        }
+        result = validator.validate_response(body, "getAccounts", 200)
+        assert result.valid is False
+        assert any(v.violation_type == "wrong_type" for v in result.violations)
+
+    def test_non_null_valid_value_in_nullable_field_passes(self, nullable_spec_path):
+        """A valid non-null value in a nullable field should pass."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {
+            "id": "acc-1",
+            "name": "Test",
+            "replicationPolicy": "some-policy",
+            "cacheTtlInSecond": 300,
+        }
+        result = validator.validate_response(body, "getAccounts", 200)
+        assert result.valid is True
+
+    def test_nullable_in_nested_object(self, nullable_spec_path):
+        """Nullable field inside a nested object should accept null."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {
+            "outer": {
+                "inner_nullable": None,
+                "inner_required": "present",
+            }
+        }
+        result = validator.validate_response(body, "getNested", 200)
+        assert result.valid is True, (
+            f"Expected valid but got violations: {[v.message for v in result.violations]}"
+        )
+
+    def test_nullable_in_array_items(self, nullable_spec_path):
+        """Nullable field inside array items should accept null."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {
+            "items": [
+                {"value": 1.5},
+                {"value": None},
+                {"value": 3.0},
+            ]
+        }
+        result = validator.validate_response(body, "getArrayItems", 200)
+        assert result.valid is True, (
+            f"Expected valid but got violations: {[v.message for v in result.violations]}"
+        )
+
+    def test_nullable_in_allof_composition(self, nullable_spec_path):
+        """Nullable field inside allOf composition should accept null."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {
+            "base_field": "hello",
+            "nullable_field": None,
+        }
+        result = validator.validate_response(body, "getComposed", 200)
+        assert result.valid is True, (
+            f"Expected valid but got violations: {[v.message for v in result.violations]}"
+        )
+
+    def test_nullable_composition_property_accepts_null(self, nullable_spec_path):
+        """Property with nullable: true + allOf (no direct type) should accept null.
+
+        Regression: nullable without a 'type' key (e.g., nullable wrapping a $ref
+        or allOf) was not converted, causing false 'None is not of type object'.
+        """
+        validator = SchemaValidator(nullable_spec_path)
+        body = {"config": None}
+        result = validator.validate_response(body, "getNullableComposition", 200)
+        assert result.valid is True, (
+            f"Expected valid but got violations: {[v.message for v in result.violations]}"
+        )
+
+    def test_nullable_composition_property_accepts_valid_object(self, nullable_spec_path):
+        """Property with nullable: true + allOf should still accept a valid object."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {"config": {"key": "value"}}
+        result = validator.validate_response(body, "getNullableComposition", 200)
+        assert result.valid is True, (
+            f"Expected valid but got violations: {[v.message for v in result.violations]}"
+        )
+
+    def test_nullable_composition_property_rejects_wrong_type(self, nullable_spec_path):
+        """Property with nullable: true + allOf should reject a wrong type."""
+        validator = SchemaValidator(nullable_spec_path)
+        body = {"config": "not an object"}
+        result = validator.validate_response(body, "getNullableComposition", 200)
+        assert result.valid is False
+
+
 class TestEdgeCases:
     """Edge case tests for schema validation."""
 

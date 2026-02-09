@@ -467,3 +467,23 @@ Keywords: pytest fixtures session performance
 Date: 20260112
 
 `fixture_dual_mock_servers` is session-scoped (servers start once per session, not per test). ~50% faster. Acceptable because integration tests check CLI output strings, not server state. Widget accumulation doesn't affect correctness.
+
+---
+
+# Schema Validator: Preprocessing OpenAPI nullable into JSON Schema
+
+Keywords: nullable schema validator Draft4Validator preprocessing
+Date: 20260209
+
+OpenAPI 3.0 uses `nullable: true` to express that a field can be null, but this is an OpenAPI extension — not a JSON Schema keyword. `Draft4Validator` (from `jsonschema`) ignores it, causing false "None is not of type 'X'" violations.
+
+**Approach chosen:** Pre-process the resolved schema before handing it to `Draft4Validator`. A `_resolve_nullable()` method recursively walks the schema and converts `nullable: true` into the JSON Schema equivalent. This runs in `_extract_response_schema()` after `$ref` resolution.
+
+Two conversion cases:
+1. `nullable` + `type`: `{"type": "string", "nullable": true}` → `{"type": ["string", "null"]}`
+2. `nullable` without `type` (composition): `{"nullable": true, "allOf": [...]}` → `{"anyOf": [{allOf: [...]}, {"type": "null"}]}`
+
+**Alternatives rejected:**
+- `openapi-schema-validator` library: Adds a new dependency for one keyword. The rest of `Draft4Validator` works fine for our needs.
+- Subclassing `Draft4Validator` with custom `TYPE_CHECKER`: More invasive, harder to reason about, and the type checker approach doesn't handle the composition case cleanly.
+- Patching at runtime: Fragile, version-dependent on `jsonschema` internals.
