@@ -104,13 +104,18 @@ api-parity replay \
 | `--target-a NAME` | First target name (required) |
 | `--target-b NAME` | Second target name (required) |
 | `--out PATH` | Output directory (required) |
-| `--seed INT` | Random seed for reproducibility. With `--stateful` and `--max-chains`, enables seed walking (tries incrementing seeds until enough unique chains are found) |
+| `--seed INT` | Random seed for reproducibility. With `--stateful`, enables coverage-guided seed walking |
 | `--max-cases INT` | Limit number of test cases |
 | `--stateful` | Enable chain testing via OpenAPI links |
 | `--max-chains INT` | Max chains in stateful mode (default: 20) |
 | `--max-steps INT` | Max steps per chain (default: 6) |
-| `--ensure-coverage` | Guarantee all operations tested (chains are probabilistic; this adds single-request tests for any operations chains missed) |
+| `--min-hits-per-op INT` | Min unique chains per linked operation (default: 1, stateful mode) |
+| `--min-coverage INT` | % of linked ops that must meet min-hits-per-op (default: 100, stateful mode) |
+| `--ensure-coverage` | Guarantee all operations tested (adds single-request tests for ops chains missed) |
+| `--log-chains` | Write executed chains to chains.txt (stateful mode) |
 | `--exclude OPID` | Exclude operation (repeatable) |
+| `--timeout SECONDS` | Default timeout per API call (default: 30) |
+| `--operation-timeout OPID:SEC` | Per-operation timeout (repeatable) |
 | `--validate` | Validate config without executing |
 
 ### replay

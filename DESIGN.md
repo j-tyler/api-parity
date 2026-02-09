@@ -429,7 +429,7 @@ Key design choices:
 Keywords: seed walking chains reproducibility
 Date: 20260119
 
-When `--seed N` and `--max-chains M` specified, if seed N produces fewer than M chains, try N+1, N+2, etc. (up to 100 attempts). Chains deduplicated by operation sequence. Still reproducible—starting seed determines entire sequence.
+When `--seed` is provided in stateful mode, if seed N doesn't meet the coverage target, try N+1, N+2, etc. (up to 100 attempts). Stopping is coverage-guided: controlled by `--min-hits-per-op` and `--min-coverage` (see "Coverage Depth: Per-Operation Hit Targeting"). `--max-chains` acts as a secondary limit if set. Chains deduplicated by operation sequence. Still reproducible—starting seed determines entire sequence.
 
 ---
 
