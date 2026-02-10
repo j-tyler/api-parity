@@ -206,7 +206,7 @@ Build the binary: `go build -o cel-evaluator ./cmd/cel-evaluator`
 
 Request:
 ```json
-{"id": "req-1", "expression": "a == b", "data": {"a": 1, "b": 1}}
+{"id": "req-1", "expr": "a == b", "data": {"a": 1, "b": 1}}
 ```
 
 Response:

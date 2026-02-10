@@ -487,3 +487,20 @@ Two conversion cases:
 - `openapi-schema-validator` library: Adds a new dependency for one keyword. The rest of `Draft4Validator` works fine for our needs.
 - Subclassing `Draft4Validator` with custom `TYPE_CHECKER`: More invasive, harder to reason about, and the type checker approach doesn't handle the composition case cleanly.
 - Patching at runtime: Fragile, version-dependent on `jsonschema` internals.
+
+---
+
+# CEL Evaluator: Compiled Program Cache
+
+Keywords: cel cache compiled program wildcard jsonpath oom crash
+Date: 20260210
+
+Wildcard JSONPath field_rules (e.g., `$.accounts[*].containers[*].fieldName`) expand to thousands of individual CEL evaluations — one per matched element. Before caching, the Go evaluator created a new `cel.Env`, compiled the expression, and built a `cel.Program` for every single evaluation. With 3000+ rapid sequential evaluations, this caused heavy GC pressure that could OOM-kill the Go process on large responses.
+
+**Fix:** The Go evaluator caches compiled `cel.Program` objects keyed by `(expression, sorted variable names)`. For wildcard expansions, all evaluations use the same expression with the same variables (`a`, `b`), so the program is compiled once and reused for all subsequent matches. Cache is capped at 256 entries as a safety bound.
+
+**Thread safety:** The timeout goroutine in `evaluate()` means a timed-out goroutine could still be reading the cache while the next request's goroutine accesses it. Uses `sync.RWMutex` for concurrent reads with exclusive writes.
+
+**Alternatives considered:**
+- Native Python evaluation for predefined comparisons: Eliminates subprocess overhead entirely but creates two code paths for the same logic with risk of semantic divergence between Python and CEL evaluation.
+- Batch protocol (send multiple evaluations per message): Reduces IPC round-trips but adds protocol complexity and doesn't address the compilation overhead.
