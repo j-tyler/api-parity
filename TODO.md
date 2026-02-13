@@ -91,6 +91,17 @@ Validates responses against the OpenAPI schema before comparison. See DESIGN.md 
 
 ---
 
+## Presence Modes Documentation Incomplete
+
+`docs/comparison-rules.md` "Presence Modes" section (line 108) has two problems:
+
+1. **Wrong default**: Says `required (default)` but code default is `parity` (`models.py:172`). Difference: when both targets lack a field, `parity` passes but `required` fails.
+2. **Missing modes**: Only lists `required` and `optional`. Does not document `parity` or `forbidden` modes at all.
+
+The table should list all four modes with correct default indicated.
+
+---
+
 ## Implementation Notes from Validation
 
 Notes to remember when implementing (validated during Schemathesis prototype). API patterns and code examples are in DESIGN.md "Schemathesis as Generator (Validated)".

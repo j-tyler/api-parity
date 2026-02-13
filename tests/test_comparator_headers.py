@@ -118,6 +118,74 @@ class TestHeaderPresence:
         assert "presence:forbidden" in result.details["headers"].differences[0].rule
 
 
+class TestHeaderIgnorePredefined:
+    """Tests for 'ignore' predefined suppressing presence checks.
+
+    The 'ignore' predefined defaults presence to OPTIONAL when no explicit
+    presence is set. This means presence differences don't trigger mismatches,
+    which is important for headers that proxies strip (Connection,
+    Transfer-Encoding, etc.).
+    """
+
+    def test_ignore_one_missing_passes(self, comparator, mock_cel):
+        """Header with ignore passes when one target lacks it (the proxy scenario)."""
+        response_a = make_response_case(headers={"connection": ["close"]})
+        response_b = make_response_case(headers={})
+        rules = OperationRules(
+            headers={"connection": FieldRule(predefined="ignore")},
+        )
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["headers"].match is True
+        # CEL should not be called since one is missing (skip_value_comparison)
+        mock_cel.evaluate.assert_not_called()
+
+    def test_ignore_both_present_passes(self, comparator, mock_cel):
+        """Header with ignore passes when both targets have it."""
+        response_a = make_response_case(headers={"connection": ["keep-alive"]})
+        response_b = make_response_case(headers={"connection": ["close"]})
+        rules = OperationRules(
+            headers={"connection": FieldRule(predefined="ignore")},
+        )
+        mock_cel.evaluate.return_value = True
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["headers"].match is True
+
+    def test_ignore_both_missing_passes(self, comparator, mock_cel):
+        """Header with ignore passes when both targets lack it."""
+        response_a = make_response_case(headers={})
+        response_b = make_response_case(headers={})
+        rules = OperationRules(
+            headers={"connection": FieldRule(predefined="ignore")},
+        )
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["headers"].match is True
+        mock_cel.evaluate.assert_not_called()
+
+    def test_ignore_with_explicit_parity_checks_presence(self, comparator):
+        """Explicit presence=parity + ignore still enforces presence parity."""
+        response_a = make_response_case(headers={"connection": ["close"]})
+        response_b = make_response_case(headers={})
+        rules = OperationRules(
+            headers={
+                "connection": FieldRule(
+                    presence=PresenceMode.PARITY, predefined="ignore"
+                )
+            },
+        )
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.match is False
+        assert result.mismatch_type == MismatchType.HEADERS
+        assert "presence:parity" in result.details["headers"].differences[0].rule
+
+
 class TestMultipleHeaderRules:
     """Tests for multiple header rules."""
 

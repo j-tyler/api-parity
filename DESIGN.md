@@ -504,3 +504,18 @@ Wildcard JSONPath field_rules (e.g., `$.accounts[*].containers[*].fieldName`) ex
 **Alternatives considered:**
 - Native Python evaluation for predefined comparisons: Eliminates subprocess overhead entirely but creates two code paths for the same logic with risk of semantic divergence between Python and CEL evaluation.
 - Batch protocol (send multiple evaluations per message): Reduces IPC round-trips but adds protocol complexity and doesn't address the compilation overhead.
+
+---
+
+# Ignore Predefined Defaults Presence to Optional
+
+Keywords: ignore predefined presence optional parity headers proxy hop-by-hop
+Date: 20260213
+
+When `predefined: "ignore"` is used without an explicit `presence` mode, the FieldRule model validator defaults presence to `OPTIONAL` instead of the normal `PARITY`. This makes "ignore" mean "completely skip this field" — neither value nor presence differences trigger mismatches.
+
+**Problem:** With the default `PARITY` presence, `{"predefined": "ignore"}` would still fail with `presence:parity` when one target had the field and the other didn't. This was surprising because "ignore" semantically means "don't look at this field at all." Real-world impact: proxies strip hop-by-hop headers like `Connection` and `Transfer-Encoding`, causing false positive mismatches even when the header was configured as ignored.
+
+**Implementation:** The `FieldRule.check_rule_logic` model validator uses `self.model_fields_set` to detect whether `presence` was explicitly provided by the user. If `predefined == "ignore"` and presence was not explicitly set, it overrides the default to `OPTIONAL`. This preserves the orthogonal design — users can still write `{"presence": "required", "predefined": "ignore"}` to enforce presence while ignoring values.
+
+**Why model layer, not comparator:** Special-casing "ignore" in the comparator would have required changes in both `_compare_headers` and `_compare_single_field`, and would have silently overridden explicit presence modes. Handling it in the model keeps the comparator simple (it just reads `rule.presence`) and lets users override via explicit presence.

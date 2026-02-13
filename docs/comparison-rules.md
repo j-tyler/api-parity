@@ -62,7 +62,7 @@ Write arbitrary CEL:
 | Name | Parameters | Description |
 |------|------------|-------------|
 | **Core** |
-| `ignore` | — | Always passes (`true`) |
+| `ignore` | — | Field completely skipped (presence defaults to optional) |
 | `exact_match` | — | Values equal (`a == b`) |
 | **Format Validation** |
 | `uuid_format` | — | Both match UUID regex |

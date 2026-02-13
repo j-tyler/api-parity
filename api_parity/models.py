@@ -198,6 +198,19 @@ class FieldRule(BaseModel):
                     f"(got predefined={self.predefined!r}, expr={self.expr!r})"
                 )
 
+        # "ignore" means "don't look at this field at all." When no explicit
+        # presence mode was specified, default to OPTIONAL so that presence
+        # differences don't trigger mismatches. Without this, a rule like
+        # {"predefined": "ignore"} would still fail with presence:parity when
+        # one target has the field and the other doesn't (e.g., proxy stripping
+        # hop-by-hop headers like Connection).
+        #
+        # Users can still combine ignore with an explicit presence mode:
+        #   {"presence": "required", "predefined": "ignore"}
+        # means "both must have the field, but I don't care about the value."
+        if self.predefined == "ignore" and "presence" not in self.model_fields_set:
+            self.presence = PresenceMode.OPTIONAL
+
         return self
 
 

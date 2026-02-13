@@ -4,7 +4,7 @@
 
   "predefined": {
     "ignore": {
-      "description": "Always passes. Field is not compared.",
+      "description": "Field is completely skipped. Defaults presence to optional so neither value nor presence differences trigger mismatches. Combine with explicit presence to override (e.g., presence=required means both must have the field, but values are not compared).",
       "params": [],
       "expr": "true"
     },
