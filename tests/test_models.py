@@ -254,6 +254,26 @@ class TestFieldRule:
         restored = FieldRule.model_validate_json(json_str)
         assert restored == rule
 
+    def test_ignore_defaults_to_optional_presence(self):
+        """predefined='ignore' without explicit presence defaults to OPTIONAL."""
+        rule = FieldRule(predefined="ignore")
+        assert rule.presence == PresenceMode.OPTIONAL
+
+    def test_ignore_with_explicit_parity_keeps_parity(self):
+        """predefined='ignore' with explicit presence=parity keeps PARITY."""
+        rule = FieldRule(predefined="ignore", presence=PresenceMode.PARITY)
+        assert rule.presence == PresenceMode.PARITY
+
+    def test_ignore_with_explicit_required_keeps_required(self):
+        """predefined='ignore' with explicit presence=required keeps REQUIRED."""
+        rule = FieldRule(predefined="ignore", presence=PresenceMode.REQUIRED)
+        assert rule.presence == PresenceMode.REQUIRED
+
+    def test_non_ignore_predefined_keeps_parity_default(self):
+        """Non-ignore predefined keeps the default PARITY presence."""
+        rule = FieldRule(predefined="exact_match")
+        assert rule.presence == PresenceMode.PARITY
+
 
 # =============================================================================
 # MismatchMetadata Tests

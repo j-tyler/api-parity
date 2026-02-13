@@ -202,6 +202,63 @@ class TestPresenceModes:
         assert result.details["body"].match is True
 
 
+class TestIgnorePresenceDefault:
+    """Tests for 'ignore' predefined defaulting presence to OPTIONAL.
+
+    When predefined='ignore' is used without explicit presence, presence
+    defaults to OPTIONAL so the field is completely skipped.
+    """
+
+    def test_ignore_body_field_one_missing_passes(self, comparator, mock_cel):
+        """Body field with ignore passes when one target lacks it."""
+        response_a = make_response_case(body={"request_id": "abc-123"})
+        response_b = make_response_case(body={})
+        rules = OperationRules(
+            body=BodyRules(
+                field_rules={"$.request_id": FieldRule(predefined="ignore")}
+            ),
+        )
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["body"].match is True
+        mock_cel.evaluate.assert_not_called()
+
+    def test_ignore_body_field_both_present_passes(self, comparator, mock_cel):
+        """Body field with ignore passes when both present."""
+        response_a = make_response_case(body={"request_id": "abc-123"})
+        response_b = make_response_case(body={"request_id": "xyz-789"})
+        rules = OperationRules(
+            body=BodyRules(
+                field_rules={"$.request_id": FieldRule(predefined="ignore")}
+            ),
+        )
+        mock_cel.evaluate.return_value = True
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.details["body"].match is True
+
+    def test_ignore_with_explicit_parity_checks_presence(self, comparator):
+        """Explicit presence=parity + ignore still enforces presence parity."""
+        response_a = make_response_case(body={"request_id": "abc-123"})
+        response_b = make_response_case(body={})
+        rules = OperationRules(
+            body=BodyRules(
+                field_rules={
+                    "$.request_id": FieldRule(
+                        presence=PresenceMode.PARITY, predefined="ignore"
+                    )
+                }
+            ),
+        )
+
+        result = comparator.compare(response_a, response_b, rules)
+
+        assert result.match is False
+        assert "presence:parity" in result.details["body"].differences[0].rule
+
+
 class TestBodyComparison:
     """Tests for body comparison."""
 
