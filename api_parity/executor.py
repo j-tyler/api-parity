@@ -9,6 +9,7 @@ See ARCHITECTURE.md "Executor" for specifications.
 from __future__ import annotations
 
 import base64
+import re
 import ssl
 import time
 from threading import Lock
@@ -16,7 +17,7 @@ from typing import Any, Callable
 
 import httpx
 
-from api_parity.case_generator import LinkFields, extract_by_jsonpointer
+from api_parity.case_generator import LinkFields, _MISSING, extract_by_jsonpointer
 from api_parity.models import (
     ChainCase,
     ChainExecution,
@@ -34,6 +35,20 @@ class ExecutorError(Exception):
 
 class RequestError(ExecutorError):
     """Raised when a request fails (connection error, timeout, etc.)."""
+
+
+# Patterns for resolving OpenAPI runtime expressions in link parameters.
+# Used during chain execution to map link_source.parameters expressions
+# (e.g., "$response.body#/id") to extracted variable keys or request data.
+# See OpenAPI 3.0 spec section "Runtime Expressions".
+_LINK_EXPR_RESPONSE_BODY = re.compile(r'\$response\.body#/(.+)$')
+_LINK_EXPR_RESPONSE_HEADER = re.compile(
+    r'\$response\.header\.([A-Za-z0-9\-_]+)(?:\[(\d+)\])?$', re.IGNORECASE
+)
+_LINK_EXPR_REQUEST_PATH = re.compile(r'\$request\.path\.([A-Za-z0-9\-_]+)$')
+_LINK_EXPR_REQUEST_HEADER = re.compile(
+    r'\$request\.header\.([A-Za-z0-9\-_]+)$', re.IGNORECASE
+)
 
 
 def _sanitize_header_value(value: str) -> str:
@@ -241,11 +256,38 @@ class Executor:
         steps_b: list[ChainStepExecution] = []
         extracted_vars_a: dict[str, Any] = {}
         extracted_vars_b: dict[str, Any] = {}
+        # Per-target request history for $request.path/header resolution
+        prev_request_a: RequestCase | None = None
+        prev_request_b: RequestCase | None = None
 
         for step in chain.steps:
+            # Resolve OpenAPI link expressions if this step has link_source.
+            # This maps parameter names to actual values from prior responses
+            # (e.g., widget_id → the real ID from a POST response body).
+            template_a = step.request_template
+            template_b = step.request_template
+
+            if step.link_source is not None and step.link_source.get("parameters"):
+                overrides_a = self._resolve_link_overrides(
+                    step.link_source, extracted_vars_a, prev_request_a
+                )
+                overrides_b = self._resolve_link_overrides(
+                    step.link_source, extracted_vars_b, prev_request_b
+                )
+
+                # If resolution failed for BOTH targets, the source step
+                # returned errors and no variables were extracted. Continuing
+                # would send garbage fuzz values to both targets, producing
+                # spurious mismatches from different error responses.
+                if not overrides_a and not overrides_b:
+                    break
+
+                template_a = self._apply_link_overrides(template_a, overrides_a)
+                template_b = self._apply_link_overrides(template_b, overrides_b)
+
             # Each target gets request populated with its own extracted variables
-            request_a = self._apply_variables(step.request_template, extracted_vars_a)
-            request_b = self._apply_variables(step.request_template, extracted_vars_b)
+            request_a = self._apply_variables(template_a, extracted_vars_a)
+            request_b = self._apply_variables(template_b, extracted_vars_b)
 
             timeout = self._get_timeout(request_a.operation_id)
 
@@ -276,6 +318,10 @@ class Executor:
                 response=response_b,
                 extracted=extracted_b,
             ))
+
+            # Track requests for $request.path/header resolution in future steps
+            prev_request_a = request_a
+            prev_request_b = request_b
 
             # Check if caller wants to stop (mismatch detected)
             if on_step is not None and not on_step(response_a, response_b):
@@ -421,7 +467,7 @@ class Executor:
             # First pass: extract all values under full pointer paths
             for field_pointer in self._link_fields.body_pointers:
                 value = extract_by_jsonpointer(response.body, field_pointer)
-                if value is not None:
+                if value is not _MISSING:
                     extracted[field_pointer] = value
 
             # Add shortcut aliases: "userId" -> value (from "data/user/userId")
@@ -461,6 +507,184 @@ class Executor:
                             extracted[f"header/{header_name}/{index}"] = header_values[index]
 
         return extracted
+
+    @staticmethod
+    def _resolve_link_expression(
+        expression: str,
+        extracted_vars: dict[str, Any],
+        prev_request: RequestCase | None,
+    ) -> Any:
+        """Resolve an OpenAPI runtime expression to a concrete value.
+
+        OpenAPI link parameters map target operation parameter names to runtime
+        expressions that reference data from the source step's request/response.
+        This method resolves those expressions to actual values using the
+        extracted variables dict (keyed by _extract_variables) or the prior
+        step's request data.
+
+        Supported expressions:
+            $response.body#/path     → extracted_vars["path"]
+            $response.header.Name    → first element of extracted_vars["header/{name}"]
+            $response.header.Name[i] → extracted_vars["header/{name}/{i}"]
+            $request.path.paramName  → prev_request.path_parameters["paramName"]
+            $request.header.Name     → prev_request.headers["{name}"][0]
+
+        Args:
+            expression: OpenAPI runtime expression (e.g., "$response.body#/id").
+            extracted_vars: Variables extracted from prior step responses.
+            prev_request: The request sent in the prior step (for $request expressions).
+
+        Returns:
+            Resolved value (may be None for JSON null), or _MISSING if the
+            expression cannot be resolved (e.g., the source step returned an
+            error and no variables were extracted).
+        """
+        # $response.body#/path
+        match = _LINK_EXPR_RESPONSE_BODY.match(expression)
+        if match:
+            json_pointer = match.group(1)
+            value = extracted_vars.get(json_pointer, _MISSING)
+            if value is not _MISSING:
+                return value
+            # Try last segment shortcut (e.g., "userId" alias for "data/user/userId")
+            last_segment = json_pointer.split("/")[-1]
+            if last_segment != json_pointer:
+                return extracted_vars.get(last_segment, _MISSING)
+            return _MISSING
+
+        # $response.header.Name or $response.header.Name[index]
+        match = _LINK_EXPR_RESPONSE_HEADER.match(expression)
+        if match:
+            header_name = match.group(1).lower()
+            index_str = match.group(2)
+            if index_str is not None:
+                # Specific index: header/{name}/{index}
+                key = f"header/{header_name}/{index_str}"
+                value = extracted_vars.get(key, _MISSING)
+                if value is not _MISSING:
+                    return value
+            # Full header list: header/{name}
+            key = f"header/{header_name}"
+            value = extracted_vars.get(key, _MISSING)
+            if value is not _MISSING:
+                if isinstance(value, list) and value:
+                    # Use the requested index if specified, otherwise first element.
+                    # This fixes the fallback path: when the indexed key (e.g.,
+                    # "header/set-cookie/2") is missing from extracted_vars but the
+                    # full list exists, we must use the requested index — not always [0].
+                    idx = int(index_str) if index_str is not None else 0
+                    return value[idx] if idx < len(value) else _MISSING
+                return value
+            return _MISSING
+
+        # $request.path.paramName
+        match = _LINK_EXPR_REQUEST_PATH.match(expression)
+        if match and prev_request is not None:
+            param_name = match.group(1)
+            return prev_request.path_parameters.get(param_name, _MISSING)
+
+        # $request.header.Name
+        match = _LINK_EXPR_REQUEST_HEADER.match(expression)
+        if match and prev_request is not None:
+            header_name = match.group(1).lower()
+            header_values = prev_request.headers.get(header_name, [])
+            if header_values:
+                return header_values[0]
+            return _MISSING
+
+        return _MISSING
+
+    def _resolve_link_overrides(
+        self,
+        link_source: dict[str, Any],
+        extracted_vars: dict[str, Any],
+        prev_request: RequestCase | None,
+    ) -> dict[str, Any]:
+        """Resolve all link parameter expressions to concrete values.
+
+        Reads link_source["parameters"] (a dict mapping target operation
+        parameter names to OpenAPI runtime expressions) and resolves each
+        expression to an actual value from extracted variables or prior request.
+
+        Args:
+            link_source: The step's link_source dict containing "parameters".
+            extracted_vars: Variables extracted from prior step responses.
+            prev_request: The request from the prior step (for $request expressions).
+
+        Returns:
+            Dict mapping parameter names to resolved values. Only includes
+            parameters that could be successfully resolved (expression matched
+            and the referenced data was present).
+        """
+        overrides: dict[str, Any] = {}
+
+        parameters = link_source.get("parameters")
+        if not isinstance(parameters, dict):
+            return overrides
+
+        for param_name, expression in parameters.items():
+            if not isinstance(expression, str):
+                continue
+            value = self._resolve_link_expression(
+                expression, extracted_vars, prev_request
+            )
+            if value is not _MISSING:
+                overrides[param_name] = value
+
+        return overrides
+
+    def _apply_link_overrides(
+        self,
+        template: RequestCase,
+        overrides: dict[str, Any],
+    ) -> RequestCase:
+        """Override request template parameters with link-resolved values.
+
+        Replaces fuzz-generated parameter values with real data extracted from
+        prior step responses. This is the key step that makes stateful chains
+        work: instead of sending random UUIDs as path parameters, we send the
+        actual resource IDs from prior create/update responses.
+
+        For path parameters, leading slashes are stripped because Location
+        headers often return paths like "/resourceId" — the leading slash is
+        the URL separator, not part of the value, and causes double-slashes
+        in rendered paths like "//resourceId/subResource".
+
+        Args:
+            template: Request template with fuzz-generated values.
+            overrides: Dict mapping parameter names to resolved values.
+
+        Returns:
+            New RequestCase with parameters overridden and path re-rendered.
+        """
+        if not overrides:
+            return template
+
+        request_dict = template.model_dump()
+
+        for param_name, value in overrides.items():
+            str_value = self._variable_to_string(value)
+
+            if param_name in request_dict.get("path_parameters", {}):
+                # Strip leading slashes from path parameter values.
+                request_dict["path_parameters"][param_name] = str_value.lstrip("/")
+            elif param_name in request_dict.get("query", {}):
+                request_dict["query"][param_name] = [str_value]
+            else:
+                # Check headers (case-insensitive)
+                lower_param = param_name.lower()
+                for hdr_key in list(request_dict.get("headers", {})):
+                    if hdr_key.lower() == lower_param:
+                        request_dict["headers"][hdr_key] = [str_value]
+                        break
+
+        # Re-render path with updated parameters
+        rendered_path = request_dict["path_template"]
+        for key, param_value in request_dict.get("path_parameters", {}).items():
+            rendered_path = rendered_path.replace(f"{{{key}}}", str(param_value))
+        request_dict["rendered_path"] = rendered_path
+
+        return RequestCase.model_validate(request_dict)
 
     def _get_timeout(self, operation_id: str) -> float:
         """Get timeout for an operation."""

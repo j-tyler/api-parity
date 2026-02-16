@@ -102,6 +102,20 @@ The table should list all four modes with correct default indicated.
 
 ---
 
+## Link Resolution: Known Limitations
+
+Identified during implementation review of OpenAPI link expression resolution (2026-02-16). None are blocking — they affect rare edge cases or uncommon spec patterns. Tracked here so they aren't forgotten.
+
+1. **`prev_request` only tracks immediately prior step** — `$request.path.X` and `$request.header.X` resolve against the previous step's request, not the step identified by `link_source.source_operation`. If a 3-step chain links step 2 back to step 0, `$request` expressions resolve against step 1 instead. `$response` expressions are unaffected (extracted_vars accumulates across all steps). Fix: maintain a dict keyed by operation_id or step_index.
+
+2. **`$request.query.X` expressions not implemented** — The OpenAPI runtime expression `$request.query.paramName` is valid but has no regex pattern or handler. Such expressions silently return None, causing the fuzz value to be used. Fix: add `_LINK_EXPR_REQUEST_QUERY` pattern and handler.
+
+3. **Body parameter overrides silently dropped** — `_apply_link_overrides` only overrides path, query, and header parameters. If a link parameter targets a requestBody field, the override is discarded with no diagnostic. Fix: add body field override support or emit a warning log.
+
+4. **Unsupported expression types return None silently** — Expressions like `$response.body#/` (root pointer), `$url`, or `$method` return None with no logging. The caller has no way to distinguish "expression resolved to nothing" from "expression type not supported." Fix: add debug-level logging for unrecognized expressions.
+
+---
+
 ## Implementation Notes from Validation
 
 Notes to remember when implementing (validated during Schemathesis prototype). API patterns and code examples are in DESIGN.md "Schemathesis as Generator (Validated)".
