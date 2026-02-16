@@ -147,6 +147,8 @@ class Executor:
 
 Requests execute serially (A first, then B)—no concurrency, which would introduce non-determinism. For chains, each target maintains its own extracted variables (if A's POST returns `id: "abc"` and B's returns `id: "xyz"`, subsequent steps use respective IDs).
 
+**Link expression resolution:** For linked steps (those with `link_source.parameters`), the executor resolves OpenAPI runtime expressions (`$response.body#/path`, `$response.header.X`, `$request.path.X`, `$request.header.X`) to actual values from prior step responses/requests, then overrides the fuzz-generated parameter values in the request template. This happens before `_apply_variables()`. Each target tracks the prior step's request for `$request` expression resolution. The chain breaks early when resolution fails for both targets (no extracted variables — source step returned errors).
+
 **Content-type dispatch:** The executor routes request and response bodies based on content-type:
 - `"json" in content_type` → JSON (request: httpx `json=` param; response: `response.json()`)
 - `"xml" in content_type` → XML (request: `dict_to_xml()`; response: `xml_to_dict()`) — see `api_parity/xml_body.py`
@@ -326,11 +328,12 @@ class RequestCase:
     case_id: str                    # Unique identifier
     operation_id: str               # From OpenAPI spec
     method: str                     # GET, POST, etc.
-    path: str                       # Path template: /widgets/{id}
-    rendered_path: str              # Computed: /widgets/abc123
+    path_template: str              # Path template: /widgets/{id}
     path_parameters: dict[str, Any]
-    query: dict[str, list[Any]]     # Query params (list values!)
+    rendered_path: str              # Computed: /widgets/abc123
+    query: dict[str, list[str]]     # Query params (list values!)
     headers: dict[str, list[str]]   # Headers (list values!)
+    cookies: dict[str, str]
     body: Any | None                # JSON body
     body_base64: str | None         # Binary body (mutually exclusive)
     media_type: str | None          # Content-Type
@@ -344,8 +347,8 @@ class ResponseCase:
     headers: dict[str, list[str]]   # List values for multi-value headers
     body: Any | None                # Parsed JSON, XML-converted dict, or text string
     body_base64: str | None         # Binary body as base64
-    elapsed_seconds: float
-    error: str | None               # Connection/timeout error
+    elapsed_ms: float               # Response time in milliseconds
+    http_version: str               # Protocol version (default "1.1")
 ```
 
 ### ChainCase / ChainExecution
@@ -356,18 +359,18 @@ class ChainCase:
     steps: list[ChainStep]          # Template steps
 
 class ChainStep:
-    request: RequestCase
-    link_source: str | None         # e.g., "$response.body#/id"
+    step_index: int
+    request_template: RequestCase
+    link_source: dict[str, Any] | None  # e.g., {"parameters": {"widget_id": "$response.body#/id"}, ...}
 
 class ChainExecution:
-    chain_id: str
     steps: list[ChainStepExecution]
-    stopped_at_step: int | None     # If chain stopped early
 
 class ChainStepExecution:
+    step_index: int                 # Matches ChainStep.step_index
     request: RequestCase            # Actual request sent
     response: ResponseCase
-    extracted_values: dict          # Values extracted for next step
+    extracted: dict[str, Any]       # Values extracted for next step
 ```
 
 **Key design notes:**

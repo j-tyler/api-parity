@@ -519,3 +519,23 @@ When `predefined: "ignore"` is used without an explicit `presence` mode, the Fie
 **Implementation:** The `FieldRule.check_rule_logic` model validator uses `self.model_fields_set` to detect whether `presence` was explicitly provided by the user. If `predefined == "ignore"` and presence was not explicitly set, it overrides the default to `OPTIONAL`. This preserves the orthogonal design — users can still write `{"presence": "required", "predefined": "ignore"}` to enforce presence while ignoring values.
 
 **Why model layer, not comparator:** Special-casing "ignore" in the comparator would have required changes in both `_compare_headers` and `_compare_single_field`, and would have silently overridden explicit presence modes. Handling it in the model keeps the comparator simple (it just reads `rule.presence`) and lets users override via explicit presence.
+
+---
+
+# OpenAPI Link Expression Resolution in Chain Execution
+
+Keywords: links chain execution resolution runtime expressions stateful
+Date: 20260216
+
+**Problem:** `execute_chain()` did not resolve OpenAPI link expressions from `link_source.parameters` into actual values from prior step responses. `_apply_variables()` tried to match extracted variable keys (like `"id"` or `"header/location"`) against fuzz-generated parameter values (random UUIDs from Schemathesis) using `{placeholder}` substring and exact-match patterns. Neither matched, so every linked step used garbage fuzz values instead of real response data. Both targets rejected the garbage with different errors, producing spurious mismatches on every stateful run.
+
+**Solution:** Added link-aware resolution to `execute_chain()`. Before executing a linked step:
+
+1. `_resolve_link_expression()` parses OpenAPI runtime expressions (`$response.body#/path`, `$response.header.X`, `$request.path.X`, `$request.header.X`) and maps them to extracted variable keys or prior request data.
+2. `_resolve_link_overrides()` processes all parameters in `link_source["parameters"]` and produces a dict of `{param_name: resolved_value}`.
+3. `_apply_link_overrides()` overrides the fuzz-generated path parameter, query parameter, or header values in the request template with the resolved values, then re-renders the path.
+4. Leading slashes are stripped from path parameter values (Location headers return `/resourceId` — the slash is the URL separator, not part of the value).
+5. Each target tracks the prior step's request for `$request.path/header` resolution.
+6. The chain breaks when link resolution fails for BOTH targets (source step returned errors, no variables extracted — continuing would produce noise).
+
+**Why not fix `_apply_variables` instead:** `_apply_variables` matches by pattern (`{var_name}` in value) or identity (value == var_name). Neither works when the value is a random UUID and the variable key is `"id"` — there's no syntactic relationship. The fix requires semantic knowledge from `link_source.parameters` to map parameter names to expressions to extracted variable keys. This is a fundamentally different operation from placeholder substitution.

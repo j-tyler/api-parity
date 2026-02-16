@@ -200,6 +200,13 @@ def extract_link_fields_from_spec(spec: dict) -> LinkFields:
     return link_fields
 
 
+# Sentinel for "path not found" in extract_by_jsonpointer.
+# Distinguishes "path exists with value None (JSON null)" from "path doesn't
+# exist." Without this, JSON null values are silently dropped during variable
+# extraction, causing the chain to substitute fuzz values instead of null.
+_MISSING = object()
+
+
 def _decode_jsonpointer_segment(segment: str) -> str:
     """Decode RFC 6901 escape sequences in a JSONPointer segment.
 
@@ -216,8 +223,7 @@ def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
     """Extract a value from nested data using a JSONPointer path.
 
     Follows RFC 6901 JSONPointer semantics with slash-separated path segments.
-    Returns None for any invalid path rather than raising - callers handle
-    missing values gracefully during variable extraction.
+    Returns _MISSING for any invalid/absent path rather than raising.
 
     Escape sequences per RFC 6901:
     - ~0 decodes to ~ (tilde)
@@ -228,7 +234,9 @@ def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
         pointer: JSONPointer path without leading slash (e.g., "id" or "data/items/0/id").
 
     Returns:
-        The extracted value, or None if path doesn't exist.
+        The extracted value (may be None for JSON null), or _MISSING if
+        path doesn't exist. Callers must check ``value is not _MISSING``
+        to distinguish JSON null from absent paths.
     """
     if not pointer:
         return data
@@ -240,18 +248,21 @@ def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
         # Decode RFC 6901 escape sequences
         part = _decode_jsonpointer_segment(part)
 
+        if current is _MISSING:
+            return _MISSING
         if current is None:
-            return None
+            # JSON null value mid-traversal — path doesn't continue
+            return _MISSING
         if isinstance(current, dict):
-            current = current.get(part)
+            current = current.get(part, _MISSING)
         elif isinstance(current, list):
             try:
                 index = int(part)
-                current = current[index] if 0 <= index < len(current) else None
+                current = current[index] if 0 <= index < len(current) else _MISSING
             except (ValueError, IndexError):
-                return None
+                return _MISSING
         else:
-            return None
+            return _MISSING
 
     return current
 

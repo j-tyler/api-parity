@@ -13,6 +13,7 @@ from api_parity.case_generator import (
     CaseGenerator,
     HeaderRef,
     LinkFields,
+    _MISSING,
     extract_link_fields_from_spec,
     extract_by_jsonpointer,
     _get_operation_id,
@@ -429,20 +430,36 @@ class TestExtractByJsonpointer:
         assert extract_by_jsonpointer(data, "items/0/id") == "first"
         assert extract_by_jsonpointer(data, "items/1/id") == "second"
 
-    def test_returns_none_for_missing_field(self):
-        """Missing field returns None."""
+    def test_returns_missing_for_missing_field(self):
+        """Missing field returns _MISSING sentinel."""
         data = {"other": "value"}
-        assert extract_by_jsonpointer(data, "missing") is None
+        assert extract_by_jsonpointer(data, "missing") is _MISSING
 
-    def test_returns_none_for_missing_nested(self):
-        """Missing nested path returns None."""
+    def test_returns_missing_for_missing_nested(self):
+        """Missing nested path returns _MISSING sentinel."""
         data = {"data": {"other": "value"}}
-        assert extract_by_jsonpointer(data, "data/missing/field") is None
+        assert extract_by_jsonpointer(data, "data/missing/field") is _MISSING
 
-    def test_returns_none_for_invalid_array_index(self):
-        """Invalid array index returns None."""
+    def test_returns_missing_for_invalid_array_index(self):
+        """Invalid array index returns _MISSING sentinel."""
         data = {"items": [{"id": "only"}]}
-        assert extract_by_jsonpointer(data, "items/5/id") is None
+        assert extract_by_jsonpointer(data, "items/5/id") is _MISSING
+
+    def test_returns_none_for_json_null_value(self):
+        """JSON null value is returned as None, distinct from _MISSING.
+
+        This is the key distinction: {"id": null} should extract None,
+        while {"other": "x"} with pointer "id" should return _MISSING.
+        """
+        data = {"id": None}
+        result = extract_by_jsonpointer(data, "id")
+        assert result is None
+        assert result is not _MISSING
+
+    def test_returns_missing_for_null_mid_traversal(self):
+        """Null value mid-traversal returns _MISSING (can't continue path)."""
+        data = {"data": None}
+        assert extract_by_jsonpointer(data, "data/field") is _MISSING
 
     def test_empty_pointer_returns_data(self):
         """Empty pointer returns the data itself."""
