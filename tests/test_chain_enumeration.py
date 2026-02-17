@@ -142,6 +142,34 @@ class TestEnumeratePossibleChainSignatures:
 
         assert result is None
 
+    def test_dense_graph_terminates_quickly(self):
+        """Dense graph hits safety cap within bounded iterations, not a hang.
+
+        Each DFS iteration produces a unique chain tuple, so the signature
+        cap directly bounds iterations. With 28 nodes, 164 edges, and
+        max_steps=6, the function should return None (cap hit) in well
+        under 1 second. This validates that there is no combinatorial
+        blowup between iterations and stored signatures.
+        """
+        import random
+        import time
+
+        rng = random.Random(42)
+        nodes = [f"op{i}" for i in range(28)]
+        edges_set: set[tuple[str, str]] = set()
+        while len(edges_set) < 164:
+            a, b = rng.sample(nodes, 2)
+            edges_set.add((a, b))
+
+        start = time.monotonic()
+        result = _enumerate_possible_chain_signatures(
+            list(edges_set), set(nodes), max_steps=6
+        )
+        elapsed = time.monotonic() - start
+
+        assert result is None  # Cap hit
+        assert elapsed < 1.0  # Bounded, not hanging
+
     def test_empty_edges(self):
         """No edges produces no signatures."""
         sigs = _enumerate_possible_chain_signatures([], {"A", "B"}, max_steps=6)
