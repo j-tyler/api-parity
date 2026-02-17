@@ -122,7 +122,6 @@ api-parity explore \
 | `--target-b NAME` | Yes | Second target name |
 | `--out PATH` | Yes | Output directory |
 | `--seed INT` | No | Random seed for reproducibility |
-| `--max-cases INT` | No | Limit test cases |
 | `--validate` | No | Validate without executing |
 | `--exclude OPID` | No | Exclude operation (repeatable) |
 | `--timeout SECONDS` | No | Default timeout (default: 30) |

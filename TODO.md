@@ -124,3 +124,17 @@ Notes to remember when implementing (validated during Schemathesis prototype). A
 2. **Duplicate chain sequences** — Hypothesis may generate duplicate operation sequences. Consider deduplication or increased `max_examples`.
 
 ---
+
+## JsonPath Error on Non-ASCII Characters in JSON Keys
+
+**Status:** Bug. Causes integration test failures when Schemathesis generates test data containing non-ASCII characters in JSON field names.
+
+**Discovery Date:** 2026-02-16
+
+When `_expand_jsonpath()` in `comparator.py` receives a JSON body with non-ASCII field names (e.g., containing `\x99`), `jsonpath_ng.parse()` raises `JsonPathLexerError`. This crashes the comparison and causes the entire test run to fail with exit code 1.
+
+Previously masked by `--max-cases 1` in integration tests (fewer cases = less chance of triggering). After removing `--max-cases`, the default case count exposes this more reliably.
+
+**Fix:** Wrap `jsonpath_parse(path)` in a try/except for `JsonPathLexerError`, skip the comparison for that path, and record it as a comparison error rather than crashing.
+
+---

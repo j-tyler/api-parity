@@ -26,7 +26,6 @@ class TestExploreArgs:
         assert args.target_b == "staging"
         assert args.out == Path("./artifacts")
         assert args.seed is None
-        assert args.max_cases is None
         assert args.validate is False
         assert args.exclude == []
         assert args.timeout == DEFAULT_TIMEOUT
@@ -47,21 +46,6 @@ class TestExploreArgs:
         assert isinstance(args, ExploreArgs)
         assert args.seed == 42
 
-    def test_with_max_cases(self):
-        """Test explore with optional --max-cases argument."""
-        args = parse_args([
-            "explore",
-            "--spec", "openapi.yaml",
-            "--config", "runtime.yaml",
-            "--target-a", "prod",
-            "--target-b", "stage",
-            "--out", "./out",
-            "--max-cases", "1000",
-        ])
-
-        assert isinstance(args, ExploreArgs)
-        assert args.max_cases == 1000
-
     def test_with_all_optional_args(self):
         """Test explore with all optional arguments."""
         args = parse_args([
@@ -72,12 +56,10 @@ class TestExploreArgs:
             "--target-b", "b",
             "--out", "./out",
             "--seed", "123",
-            "--max-cases", "500",
         ])
 
         assert isinstance(args, ExploreArgs)
         assert args.seed == 123
-        assert args.max_cases == 500
 
     def test_missing_spec(self):
         """Test explore fails without --spec."""
@@ -153,20 +135,6 @@ class TestExploreArgs:
             ])
         assert exc_info.value.code == 2
 
-    def test_invalid_max_cases_type(self):
-        """Test explore fails with non-integer --max-cases."""
-        with pytest.raises(SystemExit) as exc_info:
-            parse_args([
-                "explore",
-                "--spec", "openapi.yaml",
-                "--config", "runtime.yaml",
-                "--target-a", "prod",
-                "--target-b", "stage",
-                "--out", "./out",
-                "--max-cases", "abc",
-            ])
-        assert exc_info.value.code == 2
-
     def test_path_with_spaces(self):
         """Test paths with spaces are handled correctly."""
         args = parse_args([
@@ -206,7 +174,6 @@ class TestExploreArgs:
             "--target-a", "production",
             "--config", "runtime.yaml",
             "--spec", "openapi.yaml",
-            "--max-cases", "50",
         ])
 
         assert isinstance(args, ExploreArgs)
@@ -216,7 +183,6 @@ class TestExploreArgs:
         assert args.target_b == "staging"
         assert args.out == Path("./artifacts")
         assert args.seed == 99
-        assert args.max_cases == 50
 
     def test_parse_explore_args_converts_correctly(self):
         """Test parse_explore_args converts namespace to dataclass."""
@@ -229,7 +195,6 @@ class TestExploreArgs:
             target_b="b",
             out=Path("./out"),
             seed=42,
-            max_cases=100,
             validate=False,
             exclude=["getUser"],
             timeout=60.0,
@@ -267,7 +232,6 @@ class TestExploreArgs:
             target_b="b",
             out=Path("./out"),
             seed=None,
-            max_cases=None,
             validate=False,
             exclude=[],
             timeout=30.0,
@@ -298,7 +262,6 @@ class TestExploreArgs:
             target_b="b",
             out=Path("./out"),
             seed=None,
-            max_cases=None,
             validate=False,
             exclude=[],
             timeout=30.0,
@@ -332,7 +295,6 @@ class TestExploreArgs:
             target_b="b",
             out=Path("./out"),
             seed=None,
-            max_cases=None,
             validate=False,
             exclude=["excludedOp1", "excludedOp2"],
             timeout=30.0,
@@ -361,7 +323,6 @@ class TestExploreArgs:
             target_b="b",
             out=Path("./out"),
             seed=42,
-            max_cases=None,
             validate=False,
             exclude=[],
             timeout=30.0,
@@ -404,12 +365,10 @@ class TestValidateMode:
             "--target-b", "b",
             "--out", "./out",
             "--seed", "42",
-            "--max-cases", "100",
             "--validate",
         ])
         assert args.validate is True
         assert args.seed == 42
-        assert args.max_cases == 100
 
     def test_validate_flag_position_independent(self):
         """Test --validate can appear anywhere in args."""
@@ -1235,7 +1194,6 @@ class TestGenerateChainsWithSeedWalking:
             target_b="b",
             out=Path("./out"),
             seed=None,
-            max_cases=None,
             validate=False,
             exclude=[],
             timeout=30.0,
@@ -1263,7 +1221,6 @@ class TestGenerateChainsWithSeedWalking:
             target_b="b",
             out=Path("./out"),
             seed=None,
-            max_cases=None,
             validate=False,
             exclude=[],
             timeout=30.0,

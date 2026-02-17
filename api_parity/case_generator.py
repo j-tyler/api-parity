@@ -428,6 +428,47 @@ class CaseGenerator:
 
         return link_sources | link_targets
 
+    def get_link_edges(self) -> list[tuple[str, str]]:
+        """Get directed edges (source_op, target_op) from declared OpenAPI links.
+
+        Returns all structurally possible link transitions, ignoring status codes
+        (since different seeds can produce different status codes, all declared
+        links are structurally reachable).
+
+        Returns:
+            List of (source_operation_id, target_operation_id) tuples.
+            Duplicates are possible if multiple links connect the same pair
+            (different status codes or link names), but they represent the
+            same structural edge for chain enumeration purposes.
+        """
+        edges: list[tuple[str, str]] = []
+
+        paths = self._raw_spec.get("paths", {})
+        for path_template, path_item in paths.items():
+            if not isinstance(path_item, dict):
+                continue
+            for method_or_key, operation in path_item.items():
+                if not isinstance(operation, dict) or method_or_key.startswith("$"):
+                    continue
+                op_id = _get_operation_id(operation, method_or_key, path_template)
+
+                # Skip excluded operations
+                if op_id in self._exclude:
+                    continue
+
+                for resp in operation.get("responses", {}).values():
+                    if not isinstance(resp, dict):
+                        continue
+                    links = resp.get("links", {})
+                    for link_def in links.values():
+                        if not isinstance(link_def, dict):
+                            continue
+                        target = link_def.get("operationId")
+                        if target and target not in self._exclude:
+                            edges.append((op_id, target))
+
+        return edges
+
     def generate(
         self,
         max_cases: int | None = None,

@@ -82,19 +82,6 @@ class TestEdgeCases:
         ])
         assert args.seed == -1
 
-    def test_one_max_cases(self):
-        """Test max-cases=1 is accepted (minimum valid value)."""
-        args = parse_args([
-            "explore",
-            "--spec", "spec.yaml",
-            "--config", "config.yaml",
-            "--target-a", "a",
-            "--target-b", "b",
-            "--out", "./out",
-            "--max-cases", "1",
-        ])
-        assert args.max_cases == 1
-
     def test_target_names_with_special_chars(self):
         """Test target names can contain special characters."""
         args = parse_args([
@@ -120,20 +107,6 @@ class TestEdgeCases:
         ])
         assert args.target_a == "same"
         assert args.target_b == "same"
-
-    def test_large_max_cases(self):
-        """Test large max-cases value is accepted."""
-        args = parse_args([
-            "explore",
-            "--spec", "spec.yaml",
-            "--config", "config.yaml",
-            "--target-a", "a",
-            "--target-b", "b",
-            "--out", "./out",
-            "--max-cases", "999999999",
-        ])
-        assert args.max_cases == 999999999
-
 
 class TestOperationTimeoutParsing:
     def test_parse_valid_operation_timeout(self):
@@ -282,36 +255,6 @@ class TestTimeoutValidation:
                 "--in", "./in",
                 "--out", "./out",
                 "--timeout", "0",
-            ])
-        assert exc_info.value.code == 2
-
-
-class TestMaxCasesValidation:
-    def test_max_cases_zero_rejected(self):
-        """Test --max-cases 0 is rejected."""
-        with pytest.raises(SystemExit) as exc_info:
-            parse_args([
-                "explore",
-                "--spec", "spec.yaml",
-                "--config", "config.yaml",
-                "--target-a", "a",
-                "--target-b", "b",
-                "--out", "./out",
-                "--max-cases", "0",
-            ])
-        assert exc_info.value.code == 2
-
-    def test_max_cases_negative_rejected(self):
-        """Test --max-cases -5 is rejected."""
-        with pytest.raises(SystemExit) as exc_info:
-            parse_args([
-                "explore",
-                "--spec", "spec.yaml",
-                "--config", "config.yaml",
-                "--target-a", "a",
-                "--target-b", "b",
-                "--out", "./out",
-                "--max-cases", "-5",
             ])
         assert exc_info.value.code == 2
 

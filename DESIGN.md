@@ -539,3 +539,29 @@ Date: 20260216
 6. The chain breaks when link resolution fails for BOTH targets (source step returned errors, no variables extracted — continuing would produce noise).
 
 **Why not fix `_apply_variables` instead:** `_apply_variables` matches by pattern (`{var_name}` in value) or identity (value == var_name). Neither works when the value is a random UUID and the variable key is `"id"` — there's no syntactic relationship. The fix requires semantic knowledge from `link_source.parameters` to map parameter names to expressions to extracted variable keys. This is a fundamentally different operation from placeholder substitution.
+
+---
+
+# Per-Operation Achievable Hits for Smart Coverage Stopping
+
+Keywords: seed walking coverage achievable hits effective target chain enumeration
+Date: 20260216
+
+When `--min-hits-per-op` is set (e.g., 5), some operations may structurally only appear in fewer unique chain signatures than requested. For example, if the link graph only allows operation X to appear in 2 distinct chain structures, no amount of seed walking can produce 5 unique chains containing X.
+
+**Solution:** Before seed walking, enumerate all possible chain signatures from the link graph and count how many include each operation (the "max achievable hits"). Use `min(achievable, requested)` as the effective per-operation target. This prevents seed walking from grinding through 100 seeds for unreachable targets.
+
+**Safety cap:** Enumeration uses a DFS that can explode on dense graphs. A safety cap (50,000 signatures) aborts enumeration and falls back to the flat `min_hits_per_op` for all operations. This is acceptable because dense graphs tend to have many chain signatures per operation, so the flat target is usually achievable.
+
+**Chain structure allows revisiting operations:** In the link graph, the next operation can be reached from ANY previous step in the chain (not just the immediately preceding step). This means chains like (A, B, B) are valid if A links to B. The enumeration accounts for this.
+
+---
+
+# Removal of --max-cases CLI Option
+
+Keywords: max-cases remove CLI simplification
+Date: 20260216
+
+Removed `--max-cases` from the explore CLI. Coverage controls (`--min-hits-per-op`, `--min-coverage`, `--ensure-coverage`, `--max-chains`, `--max-steps`) are the intended way to control exploration depth. `--max-cases` was an early debugging lever that conflicted with coverage-guided stopping semantics.
+
+`CaseGenerator.generate(max_cases=...)` is preserved as an internal parameter since it's used by the `--ensure-coverage` backfill logic and is useful for internal callers. Only the CLI exposure was removed.

@@ -105,7 +105,6 @@ api-parity replay \
 | `--target-b NAME` | Second target name (required) |
 | `--out PATH` | Output directory (required) |
 | `--seed INT` | Random seed for reproducibility. With `--stateful`, enables coverage-guided seed walking |
-| `--max-cases INT` | Limit number of test cases |
 | `--stateful` | Enable chain testing via OpenAPI links |
 | `--max-chains INT` | Max chains in stateful mode (default: 20) |
 | `--max-steps INT` | Max steps per chain (default: 6) |
