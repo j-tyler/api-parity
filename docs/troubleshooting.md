@@ -365,15 +365,6 @@ api-parity explore --validate \
   --out ./artifacts
 ```
 
-### Limit cases for debugging
-
-```bash
-api-parity explore \
-  --max-cases 10 \
-  --seed 42 \
-  ...
-```
-
 ### Check discovered operations
 
 ```bash

@@ -230,7 +230,6 @@ class ExploreArgs:
     target_b: str
     out: Path
     seed: int | None
-    max_cases: int | None
     validate: bool
     exclude: list[str]
     timeout: float
@@ -386,13 +385,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Random seed for reproducible test generation",
-    )
-    explore_parser.add_argument(
-        "--max-cases",
-        type=positive_int,
-        default=None,
-        dest="max_cases",
-        help="Maximum number of test cases to generate (must be positive)",
     )
     explore_parser.add_argument(
         "--validate",
@@ -588,7 +580,6 @@ def parse_explore_args(namespace: argparse.Namespace) -> ExploreArgs:
         target_b=namespace.target_b,
         out=namespace.out,
         seed=namespace.seed,
-        max_cases=namespace.max_cases,
         validate=namespace.validate,
         exclude=namespace.exclude or [],
         timeout=namespace.timeout,
@@ -792,6 +783,102 @@ def _chain_signature(chain: "ChainCase") -> tuple[str, ...]:
     return tuple(step.request_template.operation_id for step in chain.steps)
 
 
+def _enumerate_possible_chain_signatures(
+    edges: list[tuple[str, str]],
+    linked_ops: set[str],
+    max_steps: int,
+    max_signatures: int = 50_000,
+) -> set[tuple[str, ...]] | None:
+    """Enumerate all possible unique chain signatures from the link graph.
+
+    A chain signature is a tuple of operation IDs representing a valid
+    multi-step sequence through the link graph. At each step, the next
+    operation must be reachable via a declared link from ANY previous
+    step in the chain (not just the immediately preceding step).
+
+    Args:
+        edges: Directed edges (source_op, target_op) from declared links.
+        linked_ops: Set of operation IDs that participate in links.
+        max_steps: Maximum chain length.
+        max_signatures: Safety cap to prevent runaway enumeration on dense
+            graphs. If exceeded, returns None (caller falls back to current
+            behavior without per-op capping).
+
+    Returns:
+        Set of chain signature tuples (length >= 2), or None if the
+        safety cap was hit (graph too dense for enumeration).
+    """
+    # Build adjacency dict from deduplicated edges
+    adj: dict[str, set[str]] = {}
+    for source, target in set(edges):
+        if source not in adj:
+            adj[source] = set()
+        adj[source].add(target)
+
+    signatures: set[tuple[str, ...]] = set()
+
+    # DFS from every linked operation as the start
+    for start_op in linked_ops:
+        # Stack holds (current_chain_tuple, set_of_ops_in_chain)
+        stack: list[tuple[tuple[str, ...], frozenset[str]]] = [
+            ((start_op,), frozenset({start_op}))
+        ]
+
+        while stack:
+            chain, ops_in_chain = stack.pop()
+
+            if len(chain) >= 2:
+                signatures.add(chain)
+                if len(signatures) > max_signatures:
+                    return None  # Safety cap hit
+
+            if len(chain) >= max_steps:
+                continue
+
+            # Available next operations = union of adj[op] for all ops in chain
+            next_ops: set[str] = set()
+            for op in ops_in_chain:
+                if op in adj:
+                    next_ops.update(adj[op])
+
+            for next_op in next_ops:
+                new_chain = chain + (next_op,)
+                new_ops = ops_in_chain | frozenset({next_op})
+                stack.append((new_chain, new_ops))
+
+    return signatures
+
+
+def _compute_max_achievable_hits(
+    edges: list[tuple[str, str]],
+    linked_ops: set[str],
+    max_steps: int,
+) -> dict[str, int] | None:
+    """Compute per-operation maximum achievable unique chain hits.
+
+    For each linked operation, counts how many structurally distinct chain
+    signatures (from the link graph) include that operation. This is the
+    theoretical maximum number of unique chain hits the operation can
+    accumulate, regardless of how many seeds are tried.
+
+    Returns:
+        Dict mapping operation_id -> max achievable hits, or None if the
+        link graph is too dense to enumerate (caller falls back to flat
+        min_hits_per_op with no per-op capping).
+    """
+    signatures = _enumerate_possible_chain_signatures(edges, linked_ops, max_steps)
+    if signatures is None:
+        return None
+
+    counts: dict[str, int] = {}
+    for sig in signatures:
+        # Count each unique operation in this signature once
+        for op in set(sig):
+            counts[op] = counts.get(op, 0) + 1
+
+    return counts
+
+
 # Maximum seed increments to prevent infinite loops when few chains are available.
 # With 100 seeds tried, we give ample opportunity to find chains while avoiding
 # runaway execution if the spec genuinely has fewer chains than requested.
@@ -831,6 +918,13 @@ class ChainGenerationResult:
             "max_seeds" — hit MAX_SEED_INCREMENTS without meeting other targets
             "no_seed" — single pass (no seed walking)
         seeds_tried: Total number of seeds attempted (0 if no seed walking).
+        max_achievable_hits: Per-operation maximum structurally achievable
+            unique chain hits, computed from the link graph. None if the graph
+            was too dense to enumerate (safety cap hit).
+        effective_targets: Per-operation effective target: min(achievable, requested)
+            for each linked operation. When max_achievable_hits is None, all ops
+            use the flat min_hits_per_op. Properties like coverage_complete and
+            ops_below_hits_target use these per-op targets instead of the flat value.
     """
 
     chains: list["ChainCase"]
@@ -843,17 +937,19 @@ class ChainGenerationResult:
     min_coverage_pct: float
     stopped_reason: str
     seeds_tried: int
+    max_achievable_hits: dict[str, int] | None  # None if enumeration capped out
+    effective_targets: dict[str, int]  # Per-operation effective target (min of achievable vs requested)
 
     @property
     def coverage_complete(self) -> bool:
-        """True if coverage target is met (min_coverage_pct of linked ops at min_hits_per_op)."""
+        """True if coverage target is met (min_coverage_pct of linked ops at effective target)."""
         if self.linked_operations is None:
             return False
         if not self.linked_operations:
             return True
         ops_meeting_target = sum(
             1 for op in self.linked_operations
-            if self.operation_hit_counts.get(op, 0) >= self.min_hits_per_op
+            if self.operation_hit_counts.get(op, 0) >= self.effective_targets.get(op, self.min_hits_per_op)
         )
         return (ops_meeting_target / len(self.linked_operations) * 100) >= self.min_coverage_pct
 
@@ -880,23 +976,23 @@ class ChainGenerationResult:
 
     @property
     def ops_meeting_hits_target(self) -> int:
-        """Number of linked operations that have >= min_hits_per_op hits."""
+        """Number of linked operations that have >= effective target hits."""
         if self.linked_operations is None:
             return 0
         return sum(
             1 for op in self.linked_operations
-            if self.operation_hit_counts.get(op, 0) >= self.min_hits_per_op
+            if self.operation_hit_counts.get(op, 0) >= self.effective_targets.get(op, self.min_hits_per_op)
         )
 
     @property
     def ops_below_hits_target(self) -> dict[str, int]:
-        """Linked operations below the hits target, with their current hit counts."""
+        """Linked operations below their effective target, with their current hit counts."""
         if self.linked_operations is None:
             return {}
         return {
             op: self.operation_hit_counts.get(op, 0)
             for op in self.linked_operations
-            if self.operation_hit_counts.get(op, 0) < self.min_hits_per_op
+            if self.operation_hit_counts.get(op, 0) < self.effective_targets.get(op, self.min_hits_per_op)
         }
 
     @property
@@ -929,6 +1025,7 @@ def _generate_chains_with_seed_walking(
     all_operations: set[str] | None = None,
     min_hits_per_op: int = 1,
     min_coverage_pct: float = 100.0,
+    max_achievable_hits: dict[str, int] | None = None,
 ) -> ChainGenerationResult:
     """Generate chains with coverage-guided seed walking.
 
@@ -987,6 +1084,23 @@ def _generate_chains_with_seed_walking(
     if linked_operations is not None and all_operations is not None:
         orphan_operations = all_operations - linked_operations
 
+    # Compute per-operation effective targets: min(achievable, requested).
+    # When max_achievable_hits is None (enumeration capped out or not computed),
+    # all operations use the flat min_hits_per_op as their target.
+    # When max_achievable_hits IS computed, operations not in the dict have
+    # 0 achievable hits (they don't appear in any chain signature), so their
+    # effective target is 0 — they're immediately "met" and won't block stopping.
+    def _effective_target(op: str) -> int:
+        if max_achievable_hits is not None:
+            return min(max_achievable_hits.get(op, 0), min_hits_per_op)
+        return min_hits_per_op
+
+    def _build_effective_targets() -> dict[str, int]:
+        """Build the effective_targets dict for all linked operations."""
+        if linked_operations is None:
+            return {}
+        return {op: _effective_target(op) for op in linked_operations}
+
     def _collect_coverage(chains: list["ChainCase"]) -> None:
         """Track which operations appear in the given chains (all, not just unique)."""
         for chain in chains:
@@ -1005,14 +1119,14 @@ def _generate_chains_with_seed_walking(
                 operation_hit_counts[op_id] = operation_hit_counts.get(op_id, 0) + 1
 
     def _coverage_target_met() -> bool:
-        """Check if min_coverage_pct of linked operations have >= min_hits_per_op hits."""
+        """Check if min_coverage_pct of linked operations have >= effective target hits."""
         if linked_operations is None:
             return False
         if not linked_operations:
             return True
         ops_meeting_target = sum(
             1 for op in linked_operations
-            if operation_hit_counts.get(op, 0) >= min_hits_per_op
+            if operation_hit_counts.get(op, 0) >= _effective_target(op)
         )
         return (ops_meeting_target / len(linked_operations) * 100) >= min_coverage_pct
 
@@ -1028,6 +1142,8 @@ def _generate_chains_with_seed_walking(
             min_coverage_pct=min_coverage_pct,
             stopped_reason=stopped_reason,
             seeds_tried=seeds_tried,
+            max_achievable_hits=max_achievable_hits,
+            effective_targets=_build_effective_targets(),
         )
 
     # If no seed provided, do a single pass without seed walking
@@ -1089,16 +1205,28 @@ def _generate_chains_with_seed_walking(
             total_linked = len(linked_operations)
             ops_at_target = sum(
                 1 for op in linked_operations
-                if operation_hit_counts.get(op, 0) >= min_hits_per_op
+                if operation_hit_counts.get(op, 0) >= _effective_target(op)
             )
             if min_hits_per_op > 1:
-                # Show depth progress when user requested multiple hits
+                # Show depth progress when user requested multiple hits.
+                # When per-op capping is active, note how many ops are capped
+                # so users understand why target was reached with fewer hits.
+                capped_count = 0
+                if max_achievable_hits is not None:
+                    capped_count = sum(
+                        1 for op in linked_operations
+                        if max_achievable_hits.get(op, 0) < min_hits_per_op
+                    )
+                capped_note = f" ({capped_count} capped)" if capped_count > 0 else ""
+                # When ops are capped, say "at target" not "at N+ hits" since
+                # some ops meet their target at fewer than min_hits_per_op hits.
+                target_label = "at target" if capped_count > 0 else f"at {min_hits_per_op}+ hits"
                 if seeds_tried == 1:
                     print(f"  Seed {current_seed}: {len(accumulated_chains)} chains, "
-                          f"{ops_at_target}/{total_linked} ops at {min_hits_per_op}+ hits")
+                          f"{ops_at_target}/{total_linked} ops {target_label}{capped_note}")
                 elif new_chains_this_seed > 0:
                     print(f"  Seed {current_seed}: +{new_chains_this_seed} new chains, "
-                          f"{ops_at_target}/{total_linked} ops at {min_hits_per_op}+ hits")
+                          f"{ops_at_target}/{total_linked} ops {target_label}{capped_note}")
             else:
                 # Show simple coverage when min_hits_per_op is 1
                 covered_count = len(operations_covered & linked_operations)
@@ -1127,25 +1255,32 @@ def _generate_chains_with_seed_walking(
     # Print final summary line for seed walking
     if linked_operations and seeds_tried > 0:
         total_linked = len(linked_operations)
+        # Use "at target" when per-op capping is active, since some ops
+        # have effective targets below min_hits_per_op.
+        has_capped = (max_achievable_hits is not None and any(
+            max_achievable_hits.get(op, 0) < min_hits_per_op
+            for op in linked_operations
+        ))
+        summary_label = "at target" if has_capped else f"at {min_hits_per_op}+ hits"
         if stopped_reason == "coverage_met":
             if min_hits_per_op > 1:
                 ops_at_target = sum(
                     1 for op in linked_operations
-                    if operation_hit_counts.get(op, 0) >= min_hits_per_op
+                    if operation_hit_counts.get(op, 0) >= _effective_target(op)
                 )
                 print(f"  Coverage target met in {len(seeds_used)} seed(s) "
                       f"({len(accumulated_chains)} unique chains, "
-                      f"{ops_at_target}/{total_linked} at {min_hits_per_op}+ hits)")
+                      f"{ops_at_target}/{total_linked} {summary_label})")
             else:
                 print(f"  Full linked coverage in {len(seeds_used)} seed(s) "
                       f"({len(accumulated_chains)} unique chains)")
         else:
             ops_at_target = sum(
                 1 for op in linked_operations
-                if operation_hit_counts.get(op, 0) >= min_hits_per_op
+                if operation_hit_counts.get(op, 0) >= _effective_target(op)
             )
             print(f"  Stopped ({stopped_reason}): {ops_at_target}/{total_linked} ops "
-                  f"at {min_hits_per_op}+ hits after {seeds_tried} seeds")
+                  f"{summary_label} after {seeds_tried} seeds")
 
     return _make_result(stopped_reason, seeds_tried if starting_seed is not None else 0)
 
@@ -1641,8 +1776,6 @@ def run_explore(args: ExploreArgs) -> int:
             print(f"  Coverage target: {args.min_coverage}% of linked ops at {args.min_hits_per_op}+ hits")
         if args.ensure_coverage:
             print("  Ensure coverage: enabled (will run single-request tests on uncovered operations)")
-    elif args.max_cases is not None:
-        print(f"  Max cases: {args.max_cases}")
     if args.exclude:
         print(f"  Excluding: {', '.join(args.exclude)}")
     print(f"  Timeout: {args.timeout}s")
@@ -1687,10 +1820,10 @@ def run_explore(args: ExploreArgs) -> int:
         )
 
         # Create progress reporter
-        # For stateless: total is max_cases if specified
+        # For stateless: total unknown (no max_cases limit)
         # For stateful: total is set after chains are generated
         progress_unit = "chains" if args.stateful else "cases"
-        progress_total = None if args.stateful else args.max_cases
+        progress_total = None  # Unknown for both modes until generation completes
         progress_reporter = ProgressReporter(total=progress_total, unit=progress_unit)
         progress_reporter.start()
 
@@ -1736,7 +1869,6 @@ def run_explore(args: ExploreArgs) -> int:
                     stats=stats,
                     target_a_info=target_a_info,
                     target_b_info=target_b_info,
-                    max_cases=args.max_cases,
                     seed=args.seed,
                     get_operation_rules=get_operation_rules,
                     progress_reporter=progress_reporter,
@@ -1785,7 +1917,6 @@ def _run_stateless_explore(
     stats: RunStats,
     target_a_info: TargetInfo,
     target_b_info: TargetInfo,
-    max_cases: int | None,
     seed: int | None,
     get_operation_rules: Callable[[ComparisonRules, str], Any],
     progress_reporter: ProgressReporter | None = None,
@@ -1793,7 +1924,7 @@ def _run_stateless_explore(
     """Execute stateless (single-request) testing."""
     from api_parity.executor import RequestError
 
-    for case in generator.generate(max_cases=max_cases, seed=seed):
+    for case in generator.generate(seed=seed):
         stats.total_cases += 1
         stats.add_operation(case.operation_id)
 
@@ -1873,6 +2004,27 @@ def _run_stateful_explore(
     linked_operations = generator.get_linked_operation_ids() - excluded_set
     all_operations = generator.get_all_operation_ids() - excluded_set
 
+    # Compute per-operation achievable hit limits from link graph structure.
+    # This enables smart stopping: seed walking stops when each operation
+    # has hit min(achievable, requested) instead of grinding through 100
+    # seeds for operations that can never reach the requested target.
+    link_edges = generator.get_link_edges()
+    max_achievable = _compute_max_achievable_hits(link_edges, linked_operations, max_steps)
+
+    # Warn if any operations are capped below the requested min_hits_per_op
+    if max_achievable is not None and min_hits_per_op > 1:
+        capped_ops = {
+            op: achievable
+            for op, achievable in max_achievable.items()
+            if op in linked_operations and achievable < min_hits_per_op
+        }
+        if capped_ops:
+            print(f"Note: {len(capped_ops)} operation(s) can appear in fewer than "
+                  f"{min_hits_per_op} unique chain structures:")
+            for op, achievable in sorted(capped_ops.items(), key=lambda x: x[1]):
+                print(f"  {op}: max {achievable} unique chains (target: {min_hits_per_op})")
+            print(f"  Using effective target: min(achievable, {min_hits_per_op}) per operation")
+
     # Generate chains with coverage-guided seed walking.
     # When min_hits_per_op > 1 and no explicit --max-chains, use unlimited chains
     # so seed walking continues until the coverage depth target is met.
@@ -1893,6 +2045,7 @@ def _run_stateful_explore(
         all_operations=all_operations,
         min_hits_per_op=min_hits_per_op,
         min_coverage_pct=float(min_coverage),
+        max_achievable_hits=max_achievable,
     )
     chains = gen_result.chains
 
@@ -1930,7 +2083,8 @@ def _run_stateful_explore(
             if below:
                 sorted_below = sorted(below.items(), key=lambda x: x[1])
                 for op, hits in sorted_below[:5]:  # Show up to 5 worst
-                    print(f"    {op}: {hits}/{min_hits_per_op} hits")
+                    effective = gen_result.effective_targets.get(op, min_hits_per_op)
+                    print(f"    {op}: {hits}/{effective} hits")
                 if len(sorted_below) > 5:
                     print(f"    ... and {len(sorted_below) - 5} more")
     print()
