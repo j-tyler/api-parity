@@ -1,14 +1,11 @@
 """Tests for explore CLI configuration features."""
 
 import json
-import os
 import shutil
-import subprocess
-import sys
 
+from tests.integration.cli_runner import run_cli
 from tests.integration.explore_helpers import (
     COMPARISON_RULES,
-    PROJECT_ROOT,
     TEST_API_SPEC,
     create_runtime_config,
 )
@@ -45,22 +42,14 @@ comparison_rules: {COMPARISON_RULES}
         config_path.write_text(config)
         out_dir = tmp_path / "artifacts"
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir),
-                "--validate",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            env={**os.environ},
-            timeout=30,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--out", str(out_dir),
+            "--validate",
         )
 
         assert result.returncode == 0
@@ -88,21 +77,14 @@ comparison_rules: ../rules/rules.json
         config_path = config_dir / "config.yaml"
         config_path.write_text(config)
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(tmp_path / "artifacts2"),
-                "--validate",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=30,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--out", str(tmp_path / "artifacts2"),
+            "--validate",
         )
 
         assert result.returncode == 0
@@ -122,20 +104,13 @@ comparison_rules: ../rules/rules.json
         )
 
         # Test same target rejected
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_a",  # Same as target-a
-                "--out", str(tmp_path / "out1"),
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=30,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_a",  # Same as target-a
+            "--out", str(tmp_path / "out1"),
         )
 
         assert result.returncode == 1
@@ -158,20 +133,13 @@ comparison_rules: {rules_path}
         bad_config_path = tmp_path / "bad_config.yaml"
         bad_config_path.write_text(config)
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(bad_config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(tmp_path / "out2"),
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=30,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(bad_config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--out", str(tmp_path / "out2"),
         )
 
         assert result.returncode == 1

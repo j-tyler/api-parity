@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from jsonpath_ng import parse as jsonpath_parse
-from jsonpath_ng.exceptions import JsonPathParserError
+from jsonpath_ng.exceptions import JsonPathLexerError, JsonPathParserError
 
 from api_parity.cel_evaluator import CELEvaluator, CELEvaluationError
 from api_parity.models import (
@@ -958,7 +958,11 @@ class Comparator:
         if path not in self._jsonpath_cache:
             try:
                 self._jsonpath_cache[path] = jsonpath_parse(path)
-            except JsonPathParserError as e:
+            except (JsonPathParserError, JsonPathLexerError) as e:
+                # JsonPathParserError: invalid JSONPath syntax
+                # JsonPathLexerError: non-printable or unexpected characters in path
+                # (can occur when schema validator reports extra fields with
+                # fuzz-generated names containing non-ASCII bytes)
                 raise JSONPathError(f"Invalid JSONPath '{path}': {e}") from e
 
         compiled = self._jsonpath_cache[path]

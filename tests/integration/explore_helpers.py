@@ -7,7 +7,26 @@ from pathlib import Path
 FIXTURES_DIR: Path = Path(__file__).parent.parent / "fixtures"
 TEST_API_SPEC: Path = FIXTURES_DIR / "test_api.yaml"
 COMPARISON_RULES: Path = FIXTURES_DIR / "comparison_rules.json"
-PROJECT_ROOT: Path = Path(__file__).parent.parent.parent
+# All operations in test_api.yaml. Used to generate --exclude args so that
+# tests only run the operations they actually need (without --max-cases, the
+# generator produces 100 cases per operation, which is far too slow for tests).
+ALL_OPERATIONS: list[str] = [
+    "listWidgets", "createWidget", "getWidget", "updateWidget",
+    "deleteWidget", "getUserProfile", "createOrder", "getOrder", "healthCheck",
+]
+
+
+def exclude_ops_except(*keep: str) -> list[str]:
+    """Generate --exclude arguments for all operations except the ones to keep.
+
+    Usage:
+        run_cli("explore", *exclude_ops_except("healthCheck", "createWidget"), ...)
+    """
+    args: list[str] = []
+    for op in ALL_OPERATIONS:
+        if op not in keep:
+            args.extend(["--exclude", op])
+    return args
 
 
 def create_runtime_config(port_a: int, port_b: int, tmp_path: Path) -> Path:

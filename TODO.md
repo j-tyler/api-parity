@@ -125,16 +125,14 @@ Notes to remember when implementing (validated during Schemathesis prototype). A
 
 ---
 
-## JsonPath Error on Non-ASCII Characters in JSON Keys
+## JsonPath Error on Non-ASCII Characters in JSON Keys [FIXED]
 
-**Status:** Bug. Causes integration test failures when Schemathesis generates test data containing non-ASCII characters in JSON field names.
+**Status:** Fixed. The except clause in `comparator.py:_expand_jsonpath()` now catches both `JsonPathParserError` and `JsonPathLexerError`, raising `JSONPathError` which is handled as a comparison error rather than crashing.
 
 **Discovery Date:** 2026-02-16
 
-When `_expand_jsonpath()` in `comparator.py` receives a JSON body with non-ASCII field names (e.g., containing `\x99`), `jsonpath_ng.parse()` raises `JsonPathLexerError`. This crashes the comparison and causes the entire test run to fail with exit code 1.
+When `_expand_jsonpath()` in `comparator.py` receives a JSON body with non-ASCII field names (e.g., containing `\x99`), `jsonpath_ng.parse()` raises `JsonPathLexerError`. Previously this crashed the comparison and caused the entire test run to fail with exit code 1.
 
-Previously masked by `--max-cases 1` in integration tests (fewer cases = less chance of triggering). After removing `--max-cases`, the default case count exposes this more reliably.
-
-**Fix:** Wrap `jsonpath_parse(path)` in a try/except for `JsonPathLexerError`, skip the comparison for that path, and record it as a comparison error rather than crashing.
+Was masked by `--max-cases 1` in integration tests (fewer cases = less chance of triggering). After removing `--max-cases` and using `exclude_ops_except()` to scope tests, the default case count exposed this more reliably.
 
 ---
