@@ -1827,13 +1827,16 @@ def run_explore(args: ExploreArgs) -> int:
             else None
         )
 
-        # Create progress reporter
-        # For stateless: total unknown (no max_cases limit)
-        # For stateful: total is set after chains are generated
+        # Create progress reporter.
+        # Stateless: start immediately (execution begins right away).
+        # Stateful: do NOT start here. _run_stateful_explore starts it after
+        #   chain generation completes, so the timer aligns with execution.
+        #   Starting before generation causes stale "0 chains | 0.0/s" output
+        #   and distorted rate/ETA once execution begins.
         progress_unit = "chains" if args.stateful else "cases"
-        progress_total = None  # Unknown for both modes until generation completes
-        progress_reporter = ProgressReporter(total=progress_total, unit=progress_unit)
-        progress_reporter.start()
+        progress_reporter = ProgressReporter(total=None, unit=progress_unit)
+        if not args.stateful:
+            progress_reporter.start()
 
         with Executor(
             target_a_config,
@@ -2100,9 +2103,12 @@ def _run_stateful_explore(
     # Use coverage data from generation (already computed during seed walking)
     operations_covered_by_chains: set[str] = set(gen_result.operations_covered)
 
-    # Update progress reporter with total now that we know it
+    # Start the progress reporter now that chain generation is complete.
+    # set_total() first so the very first progress line shows a percentage,
+    # then start() so the timer aligns with execution (not generation).
     if progress_reporter is not None:
         progress_reporter.set_total(len(chains))
+        progress_reporter.start()
 
     # Track chains and outcomes for --log-chains
     executed_chains: list = []
