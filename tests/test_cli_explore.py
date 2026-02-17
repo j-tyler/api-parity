@@ -1235,3 +1235,197 @@ class TestGenerateChainsWithSeedWalking:
         )
         result = run_explore(args)
         assert result == 1
+
+
+class TestProgressReporterTimingInStatefulExplore:
+    """Integration tests for progress reporter lifecycle in stateful explore.
+
+    Bug: The progress reporter was started in run_explore() BEFORE calling
+    _run_stateful_explore(). During the chain generation phase (which can take
+    minutes with --min-hits-per-op 2 and 100% coverage), the reporter shows
+    stale output like:
+        [Progress] 0 chains | 0.0/s | Elapsed: 1m0s
+
+    This happens because:
+    1. reporter.start() sets _start_time and begins the background print thread
+    2. Chain generation runs (seed walking, no progress increments)
+    3. The thread prints every 10s with completed=0, total=None -> stale line
+    4. After generation, set_total() is called, but _start_time still reflects
+       pre-generation time, distorting rate and ETA calculations
+
+    Fix: _run_stateful_explore() must call start() on the reporter after
+    chain generation completes (right after set_total), so the timer and
+    rate calculations align with chain execution -- not generation.
+    """
+
+    @staticmethod
+    def _make_chain(op_ids: list[str], chain_id: str) -> "ChainCase":
+        """Helper to create a ChainCase from operation ID list."""
+        from api_parity.models import ChainCase, ChainStep, RequestCase
+        steps = []
+        for i, op_id in enumerate(op_ids):
+            request = RequestCase(
+                case_id=f"case-{i}",
+                operation_id=op_id,
+                method="GET",
+                path_template="/test",
+                rendered_path="/test",
+            )
+            steps.append(ChainStep(step_index=i, request_template=request))
+        return ChainCase(chain_id=chain_id, steps=steps)
+
+    def test_progress_reporter_started_after_chain_generation(self):
+        """_run_stateful_explore must start the progress reporter after generation.
+
+        The reporter is passed unstarted. The function must call start() itself
+        after chain generation completes, so the timer aligns with execution.
+        With the bug, the function never called start() -- the caller did it
+        too early, before generation.
+        """
+        import time
+        from unittest.mock import MagicMock
+
+        from api_parity.artifact_writer import RunStats
+        from api_parity.cli import ProgressReporter, _run_stateful_explore
+        from api_parity.models import ChainExecution, TargetInfo
+
+        # Track when generate_chains finishes to verify start_time ordering
+        generation_end_time = None
+
+        def mock_generate_chains(max_chains, max_steps, seed):
+            nonlocal generation_end_time
+            chains = [
+                self._make_chain(["op1", "op2"], "c1"),
+                self._make_chain(["op2", "op3"], "c2"),
+            ]
+            generation_end_time = time.monotonic()
+            return chains
+
+        mock_generator = MagicMock()
+        mock_generator.generate_chains.side_effect = mock_generate_chains
+        mock_generator.get_linked_operation_ids.return_value = {"op1", "op2", "op3"}
+        mock_generator.get_all_operation_ids.return_value = {"op1", "op2", "op3"}
+        mock_generator.get_link_edges.return_value = [("op1", "op2"), ("op2", "op3")]
+
+        mock_executor = MagicMock()
+        # execute_chain returns (ChainExecution, ChainExecution).
+        # Don't call on_step -- chains count as matches (no comparator needed).
+        mock_executor.execute_chain.return_value = (
+            ChainExecution(steps=[]),
+            ChainExecution(steps=[]),
+        )
+
+        mock_comparator = MagicMock()
+        mock_writer = MagicMock()
+
+        # Create reporter but do NOT start it.
+        # The fix requires _run_stateful_explore to start it after generation.
+        reporter = ProgressReporter(unit="chains")
+        assert reporter._thread is None, "reporter should not be started before the call"
+
+        try:
+            _run_stateful_explore(
+                generator=mock_generator,
+                executor=mock_executor,
+                comparator=mock_comparator,
+                comparison_rules=MagicMock(),
+                writer=mock_writer,
+                stats=RunStats(),
+                target_a_info=TargetInfo(name="a", base_url="http://a"),
+                target_b_info=TargetInfo(name="b", base_url="http://b"),
+                max_chains=None,
+                max_steps=6,
+                seed=42,
+                get_operation_rules=lambda rules, op_id: MagicMock(),
+                progress_reporter=reporter,
+            )
+
+            # After the call, the reporter must have been started
+            assert reporter._thread is not None, (
+                "_run_stateful_explore must call progress_reporter.start() -- "
+                "without this, the caller starts it too early (before generation) "
+                "and the user sees stale '0 chains | 0.0/s' during seed walking"
+            )
+
+            # The start time must be AFTER chain generation ended.
+            # This ensures the rate calculation (completed/elapsed) reflects
+            # execution time only, not generation + execution time.
+            assert generation_end_time is not None
+            assert reporter._start_time >= generation_end_time, (
+                f"reporter._start_time ({reporter._start_time}) must be >= "
+                f"generation_end_time ({generation_end_time}) -- "
+                "starting before generation distorts rate and ETA"
+            )
+        finally:
+            reporter.stop()
+
+    def test_progress_reporter_has_total_before_start(self):
+        """The progress reporter's total must be set before it starts printing.
+
+        When total is None and completed is 0, the reporter prints the stale:
+            [Progress] 0 chains | 0.0/s | Elapsed: 1m0s
+        The fix ensures set_total() is called before start(), so the very first
+        progress line shows a meaningful percentage.
+        """
+        from unittest.mock import MagicMock
+
+        from api_parity.artifact_writer import RunStats
+        from api_parity.cli import ProgressReporter, _run_stateful_explore
+        from api_parity.models import ChainExecution, TargetInfo
+
+        mock_generator = MagicMock()
+        mock_generator.generate_chains.return_value = [
+            self._make_chain(["op1", "op2"], "c1"),
+        ]
+        mock_generator.get_linked_operation_ids.return_value = {"op1", "op2"}
+        mock_generator.get_all_operation_ids.return_value = {"op1", "op2"}
+        mock_generator.get_link_edges.return_value = [("op1", "op2")]
+
+        mock_executor = MagicMock()
+        mock_executor.execute_chain.return_value = (
+            ChainExecution(steps=[]),
+            ChainExecution(steps=[]),
+        )
+
+        reporter = ProgressReporter(unit="chains")
+
+        # Track when start() is called and what total is at that moment
+        total_at_start_time = None
+        original_start = reporter.start
+
+        def spy_start():
+            nonlocal total_at_start_time
+            total_at_start_time = reporter._total
+            original_start()
+
+        reporter.start = spy_start
+
+        try:
+            _run_stateful_explore(
+                generator=mock_generator,
+                executor=mock_executor,
+                comparator=MagicMock(),
+                comparison_rules=MagicMock(),
+                writer=MagicMock(),
+                stats=RunStats(),
+                target_a_info=TargetInfo(name="a", base_url="http://a"),
+                target_b_info=TargetInfo(name="b", base_url="http://b"),
+                max_chains=None,
+                max_steps=6,
+                seed=42,
+                get_operation_rules=lambda rules, op_id: MagicMock(),
+                progress_reporter=reporter,
+            )
+
+            # start() must have been called
+            assert total_at_start_time is not None, (
+                "progress_reporter.start() was never called by _run_stateful_explore"
+            )
+
+            # At the time start() was called, total must already be set
+            assert total_at_start_time > 0, (
+                f"total was {total_at_start_time} when start() was called -- "
+                "must be set before starting so the first progress line shows a percentage"
+            )
+        finally:
+            reporter.stop()
