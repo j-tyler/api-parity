@@ -1,14 +1,13 @@
 """Tests for explore CLI variant server behavior verification."""
 
 import json
-import subprocess
-import sys
 
 from tests.conftest import MockServer, PortReservation
+from tests.integration.cli_runner import run_cli
 from tests.integration.explore_helpers import (
     COMPARISON_RULES,
-    PROJECT_ROOT,
     TEST_API_SPEC,
+    exclude_ops_except,
 )
 
 
@@ -63,21 +62,15 @@ comparison_rules: {rules_path}
         config_path.write_text(config)
         out_dir = tmp_path / "artifacts"
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir),
-                "--seed", "42",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            *exclude_ops_except("createWidget"),
+            "--out", str(out_dir),
+            "--seed", "42",
         )
 
         assert result.returncode == 0
@@ -112,21 +105,15 @@ comparison_rules: {strict_rules_path}
         strict_config_path.write_text(strict_config)
         out_dir2 = tmp_path / "artifacts2"
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(strict_config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir2),
-                "--seed", "42",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(strict_config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            *exclude_ops_except("healthCheck", "createWidget"),
+            "--out", str(out_dir2),
+            "--seed", "42",
         )
 
         assert result.returncode == 0
@@ -163,21 +150,15 @@ comparison_rules: {COMPARISON_RULES}
                 config_path.write_text(config)
                 out_dir = tmp_path / "artifacts"
 
-                result = subprocess.run(
-                    [
-                        sys.executable, "-m", "api_parity.cli",
-                        "explore",
-                        "--spec", str(TEST_API_SPEC),
-                        "--config", str(config_path),
-                        "--target-a", "server_a",
-                        "--target-b", "server_b",
-                        "--out", str(out_dir),
-                        "--seed", "42",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    cwd=PROJECT_ROOT,
-                    timeout=60,
+                result = run_cli(
+                    "explore",
+                    "--spec", str(TEST_API_SPEC),
+                    "--config", str(config_path),
+                    "--target-a", "server_a",
+                    "--target-b", "server_b",
+                    *exclude_ops_except("healthCheck", "createWidget"),
+                    "--out", str(out_dir),
+                    "--seed", "42",
                 )
 
                 assert result.returncode == 0

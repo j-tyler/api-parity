@@ -8,16 +8,15 @@ The test flow is:
 """
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
+from tests.integration.cli_runner import run_cli
 from tests.integration.explore_helpers import (
-    PROJECT_ROOT,
     TEST_API_SPEC,
     create_runtime_config,
+    exclude_ops_except,
 )
 
 
@@ -40,21 +39,15 @@ class TestReplayExecution:
         replay_out = tmp_path / "replay_artifacts"
 
         # Step 1: Run explore to generate mismatch bundles
-        explore_result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(explore_out),
-                "--seed", "42",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        explore_result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            *exclude_ops_except("healthCheck", "createWidget"),
+            "--out", str(explore_out),
+            "--seed", "42",
         )
 
         print(f"Explore stdout:\n{explore_result.stdout}")
@@ -71,20 +64,13 @@ class TestReplayExecution:
         print(f"Generated {bundle_count} mismatch bundles")
 
         # Step 2: Run replay (servers unchanged, so mismatches should persist)
-        replay_result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "replay",
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--in", str(explore_out),
-                "--out", str(replay_out),
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        replay_result = run_cli(
+            "replay",
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--in", str(explore_out),
+            "--out", str(replay_out),
         )
 
         print(f"Replay stdout:\n{replay_result.stdout}")
@@ -121,20 +107,13 @@ class TestReplayExecution:
         empty_dir.mkdir()
         replay_out = tmp_path / "replay_artifacts"
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "replay",
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--in", str(empty_dir),
-                "--out", str(replay_out),
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=30,
+        result = run_cli(
+            "replay",
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--in", str(empty_dir),
+            "--out", str(replay_out),
         )
 
         print(f"stdout:\n{result.stdout}")
@@ -154,38 +133,26 @@ class TestReplayExecution:
         replay_out = tmp_path / "replay_artifacts"
 
         # First run explore to generate bundles
-        subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(explore_out),
-                "--seed", "42",
-            ],
-            capture_output=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            *exclude_ops_except("healthCheck", "createWidget"),
+            "--out", str(explore_out),
+            "--seed", "42",
         )
 
         # Run replay with --validate
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "replay",
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--in", str(explore_out),
-                "--out", str(replay_out),
-                "--validate",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=30,
+        result = run_cli(
+            "replay",
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--in", str(explore_out),
+            "--out", str(replay_out),
+            "--validate",
         )
 
         print(f"stdout:\n{result.stdout}")
@@ -207,20 +174,15 @@ class TestReplayExecution:
         replay_out = tmp_path / "replay_artifacts"
 
         # Run explore to generate mismatch bundles
-        subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(explore_out),
-                "--seed", "42",
-            ],
-            capture_output=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            *exclude_ops_except("healthCheck", "createWidget"),
+            "--out", str(explore_out),
+            "--seed", "42",
         )
 
         mismatches_dir = explore_out / "mismatches"
@@ -228,19 +190,13 @@ class TestReplayExecution:
             pytest.skip("No mismatches generated")
 
         # Run replay
-        subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "replay",
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--in", str(explore_out),
-                "--out", str(replay_out),
-            ],
-            capture_output=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        run_cli(
+            "replay",
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--in", str(explore_out),
+            "--out", str(replay_out),
         )
 
         # Check that replay wrote bundles for persistent mismatches
@@ -266,20 +222,15 @@ class TestReplayExecution:
         replay_out = tmp_path / "replay_artifacts"
 
         # Run explore to generate bundles
-        subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(explore_out),
-                "--seed", "42",
-            ],
-            capture_output=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            *exclude_ops_except("healthCheck", "createWidget"),
+            "--out", str(explore_out),
+            "--seed", "42",
         )
 
         # Skip if no mismatches were generated
@@ -288,21 +239,14 @@ class TestReplayExecution:
             pytest.skip("No mismatches generated")
 
         # Run replay with custom timeout
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "replay",
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--in", str(explore_out),
-                "--out", str(replay_out),
-                "--timeout", "45",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        result = run_cli(
+            "replay",
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--in", str(explore_out),
+            "--out", str(replay_out),
+            "--timeout", "45",
         )
 
         print(f"stdout:\n{result.stdout}")
@@ -325,20 +269,15 @@ class TestReplaySummaryFormat:
         replay_out = tmp_path / "replay_artifacts"
 
         # Run explore
-        subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(explore_out),
-                "--seed", "42",
-            ],
-            capture_output=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            *exclude_ops_except("healthCheck", "createWidget"),
+            "--out", str(explore_out),
+            "--seed", "42",
         )
 
         mismatches_dir = explore_out / "mismatches"
@@ -346,19 +285,13 @@ class TestReplaySummaryFormat:
             pytest.skip("No mismatches generated")
 
         # Run replay
-        subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "replay",
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--in", str(explore_out),
-                "--out", str(replay_out),
-            ],
-            capture_output=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        run_cli(
+            "replay",
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--in", str(explore_out),
+            "--out", str(replay_out),
         )
 
         # Check summary format

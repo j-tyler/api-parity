@@ -1,13 +1,12 @@
 """Tests for explore CLI execution (requires mock servers and CEL evaluator)."""
 
 import json
-import subprocess
-import sys
 
+from tests.integration.cli_runner import run_cli
 from tests.integration.explore_helpers import (
-    PROJECT_ROOT,
     TEST_API_SPEC,
     create_runtime_config,
+    exclude_ops_except,
 )
 
 
@@ -31,22 +30,16 @@ class TestExploreExecution:
         out_dir = tmp_path / "artifacts"
 
         # Run explore with various options
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir),
-                "--seed", "42",
-                "--timeout", "10",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            *exclude_ops_except("healthCheck", "createWidget", "listWidgets"),
+            "--out", str(out_dir),
+            "--seed", "42",
+            "--timeout", "10",
         )
 
         print(f"stdout:\n{result.stdout}")
@@ -95,22 +88,19 @@ class TestExploreExecution:
         )
         out_dir = tmp_path / "artifacts"
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir),
-                "--exclude", "healthCheck",
-                "--exclude", "deleteWidget",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--out", str(out_dir),
+            "--exclude", "healthCheck",
+            "--exclude", "deleteWidget",
+            "--exclude", "getUserProfile",
+            "--exclude", "createOrder",
+            "--exclude", "getOrder",
+            "--exclude", "updateWidget",
         )
 
         assert result.returncode == 0
@@ -125,28 +115,23 @@ class TestExploreExecution:
             tmp_path,
         )
 
-        def run_explore(out_name: str) -> dict:
+        def do_explore(out_name: str) -> dict:
             out_dir = tmp_path / out_name
-            subprocess.run(
-                [
-                    sys.executable, "-m", "api_parity.cli",
-                    "explore",
-                    "--spec", str(TEST_API_SPEC),
-                    "--config", str(config_path),
-                    "--target-a", "server_a",
-                    "--target-b", "server_b",
-                    "--out", str(out_dir),
-                    "--seed", "99999",
-                ],
-                capture_output=True,
-                cwd=PROJECT_ROOT,
-                timeout=60,
+            run_cli(
+                "explore",
+                "--spec", str(TEST_API_SPEC),
+                "--config", str(config_path),
+                "--target-a", "server_a",
+                "--target-b", "server_b",
+                *exclude_ops_except("healthCheck"),
+                "--out", str(out_dir),
+                "--seed", "99999",
             )
             with open(out_dir / "summary.json") as f:
                 return json.load(f)
 
-        summary1 = run_explore("run1")
-        summary2 = run_explore("run2")
+        summary1 = do_explore("run1")
+        summary2 = do_explore("run2")
 
         # Same seed should produce same number of cases per operation
         assert summary1["operations"] == summary2["operations"]

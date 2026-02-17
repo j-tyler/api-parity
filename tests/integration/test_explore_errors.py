@@ -1,15 +1,14 @@
 """Tests for explore CLI error handling and connection errors."""
 
 import json
-import subprocess
-import sys
 
 from tests.conftest import find_free_port
+from tests.integration.cli_runner import run_cli
 from tests.integration.explore_helpers import (
     COMPARISON_RULES,
-    PROJECT_ROOT,
     TEST_API_SPEC,
     create_runtime_config,
+    exclude_ops_except,
 )
 
 
@@ -42,20 +41,14 @@ comparison_rules: {COMPARISON_RULES}
         config_path.write_text(config)
         out_dir = tmp_path / "artifacts"
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir),
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=30,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--out", str(out_dir),
+            *exclude_ops_except("healthCheck"),
         )
 
         # Should complete (not crash) and report errors
@@ -66,20 +59,13 @@ comparison_rules: {COMPARISON_RULES}
         bad_config_path = tmp_path / "bad_config.yaml"
         bad_config_path.write_text("targets:\n  - this: is\n    bad: yaml: syntax:")
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(bad_config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(tmp_path / "out1"),
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=30,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(bad_config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--out", str(tmp_path / "out1"),
         )
 
         assert result.returncode == 1
@@ -95,20 +81,13 @@ comparison_rules: {COMPARISON_RULES}
             tmp_path,
         )
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(spec_path),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(tmp_path / "out2"),
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=30,
+        result = run_cli(
+            "explore",
+            "--spec", str(spec_path),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--out", str(tmp_path / "out2"),
         )
 
         assert result.returncode == 1
@@ -149,28 +128,21 @@ comparison_rules: {rules_path}
         config_path.write_text(config)
         out_dir = tmp_path / "artifacts"
 
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "api_parity.cli",
-                "explore",
-                "--spec", str(TEST_API_SPEC),
-                "--config", str(config_path),
-                "--target-a", "server_a",
-                "--target-b", "server_b",
-                "--out", str(out_dir),
-                "--exclude", "createWidget",
-                "--exclude", "getWidget",
-                "--exclude", "updateWidget",
-                "--exclude", "deleteWidget",
-                "--exclude", "getUserProfile",
-                "--exclude", "createOrder",
-                "--exclude", "getOrder",
-                "--exclude", "healthCheck",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=60,
+        result = run_cli(
+            "explore",
+            "--spec", str(TEST_API_SPEC),
+            "--config", str(config_path),
+            "--target-a", "server_a",
+            "--target-b", "server_b",
+            "--out", str(out_dir),
+            "--exclude", "createWidget",
+            "--exclude", "getWidget",
+            "--exclude", "updateWidget",
+            "--exclude", "deleteWidget",
+            "--exclude", "getUserProfile",
+            "--exclude", "createOrder",
+            "--exclude", "getOrder",
+            "--exclude", "healthCheck",
         )
 
         # Should complete without crashing

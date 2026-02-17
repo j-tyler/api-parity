@@ -639,21 +639,29 @@ def parse_args(args: list[str] | None = None) -> LintSpecArgs | ListOperationsAr
         parser.error(f"Unknown command: {namespace.command}")
 
 
+def dispatch(parsed: LintSpecArgs | ListOperationsArgs | GraphChainsArgs | ExploreArgs | ReplayArgs) -> int:
+    """Dispatch a parsed CLI args object to the appropriate handler.
+
+    Shared by main() and the in-process test runner (cli_runner.py) to avoid
+    duplicating the isinstance dispatch chain.
+    """
+    if isinstance(parsed, LintSpecArgs):
+        return run_lint_spec(parsed)
+    elif isinstance(parsed, ListOperationsArgs):
+        return run_list_operations(parsed)
+    elif isinstance(parsed, GraphChainsArgs):
+        return run_graph_chains(parsed)
+    elif isinstance(parsed, ExploreArgs):
+        return run_explore(parsed)
+    else:
+        return run_replay(parsed)
+
+
 def main() -> int:
     """Main entry point."""
     try:
         parsed = parse_args()
-
-        if isinstance(parsed, LintSpecArgs):
-            return run_lint_spec(parsed)
-        elif isinstance(parsed, ListOperationsArgs):
-            return run_list_operations(parsed)
-        elif isinstance(parsed, GraphChainsArgs):
-            return run_graph_chains(parsed)
-        elif isinstance(parsed, ExploreArgs):
-            return run_explore(parsed)
-        else:
-            return run_replay(parsed)
+        return dispatch(parsed)
 
     except KeyboardInterrupt:
         print("\nInterrupted", file=sys.stderr)
