@@ -9,6 +9,7 @@ See ARCHITECTURE.md "Executor" for specifications.
 from __future__ import annotations
 
 import base64
+import json
 import re
 import ssl
 import time
@@ -49,6 +50,32 @@ _LINK_EXPR_REQUEST_PATH = re.compile(r'\$request\.path\.([A-Za-z0-9\-_]+)$')
 _LINK_EXPR_REQUEST_HEADER = re.compile(
     r'\$request\.header\.([A-Za-z0-9\-_]+)$', re.IGNORECASE
 )
+
+
+# Pre-compiled pattern for ASCII control characters that httpx rejects in URLs.
+# Covers 0x00-0x1F and 0x7F (DEL).  httpx handles spaces and non-ASCII (unicode)
+# via its own percent-encoding, but control characters raise InvalidURL.
+_URL_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _percent_encode_control_chars(path: str) -> str:
+    """Percent-encode ASCII control characters in a URL path.
+
+    Schemathesis may generate path parameter values containing arbitrary bytes
+    (e.g., \\x1a, \\x00).  httpx rejects these with InvalidURL rather than
+    percent-encoding them.  This function encodes only the control characters
+    that httpx refuses, leaving everything else (slashes, unicode, spaces) for
+    httpx to handle normally.
+
+    Args:
+        path: The rendered URL path (e.g., "/widgets/hello\\x1aworld").
+
+    Returns:
+        Path with control characters percent-encoded (e.g., "/widgets/hello%1Aworld").
+    """
+    return _URL_CONTROL_CHAR_RE.sub(
+        lambda m: '%{:02X}'.format(ord(m.group())), path
+    )
 
 
 def _sanitize_header_value(value: str) -> str:
@@ -724,8 +751,9 @@ class Executor:
         Raises:
             RequestError: If request fails.
         """
-        # Build the URL
-        url = request.rendered_path
+        # Build the URL — percent-encode control characters that httpx rejects.
+        # Fuzz-generated path parameter values may contain arbitrary bytes.
+        url = _percent_encode_control_chars(request.rendered_path)
 
         # Build query params (flatten lists for httpx)
         params: list[tuple[str, str]] = []
@@ -745,7 +773,16 @@ class Executor:
 
         if request.body is not None:
             if request.media_type and "json" in request.media_type.lower():
-                json_body = request.body
+                if isinstance(request.body, bytes):
+                    # Body is raw bytes in a JSON-typed request slot (e.g.,
+                    # schema with format: binary under application/json).
+                    # Try to parse as JSON; if that fails, send as raw content.
+                    try:
+                        json_body = json.loads(request.body)
+                    except (ValueError, UnicodeDecodeError):
+                        content = request.body
+                else:
+                    json_body = request.body
             elif request.media_type and "xml" in request.media_type.lower():
                 # Convert dict body to XML bytes. The body stays as a dict in
                 # RequestCase (inspectable in artifacts); XML serialization

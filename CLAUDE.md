@@ -275,6 +275,8 @@ python -m pytest tests/ -x -q --tb=short
 
 5. **Non-ASCII headers** — Executor sanitizes by replacing with `?`.
 
+6. **Control chars in URLs** — Executor percent-encodes ASCII control characters (0x00-0x1F, 0x7F) in URL paths. httpx rejects them with `InvalidURL` otherwise.
+
 ## Gotchas: Comparison Rules
 
 1. **Override, not merge** — Operation rules completely replace defaults for keys they define.
