@@ -623,7 +623,7 @@ class TestGenerateChainsWithSeedWalking:
     - seeds_used: seeds that contributed unique chains
     - operations_covered: all operation IDs seen in chains
     - linked_operations / orphan_operations: classification from spec
-    - stopped_reason: why walking stopped (coverage_met, max_chains, max_seeds, no_seed)
+    - stopped_reason: why walking stopped (coverage_met, max_chains, max_seeds, plateau, no_seed)
     - seeds_tried: total seeds attempted
     """
 
@@ -757,6 +757,79 @@ class TestGenerateChainsWithSeedWalking:
         assert len(result.chains) == 0
         assert result.seeds_used == []
         assert result.stopped_reason == "max_seeds"
+
+    def test_seed_walking_stops_at_plateau(self):
+        """Seed walking stops when PLATEAU_THRESHOLD consecutive seeds produce no new chains.
+
+        Seeds 0-1 contribute unique chains, seeds 2-21 are barren (20 consecutive).
+        Should stop with stopped_reason="plateau" after seed 21.
+        """
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import PLATEAU_THRESHOLD, _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+
+        def mock_generate(max_chains, max_steps, seed):
+            if seed == 0:
+                return [self._make_chain(["opA", "opB"], "c1")]
+            elif seed == 1:
+                return [self._make_chain(["opA", "opC"], "c2")]
+            # All other seeds: return no chains (barren)
+            return []
+
+        mock_generator.generate_chains.side_effect = mock_generate
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=1000,  # High limit — plateau should stop first
+            max_steps=6,
+            starting_seed=0,
+        )
+
+        assert result.stopped_reason == "plateau"
+        assert result.seeds_used == [0, 1]
+        assert len(result.chains) == 2
+        # 2 contributing + PLATEAU_THRESHOLD barren
+        assert result.seeds_tried == 2 + PLATEAU_THRESHOLD
+
+    def test_plateau_resets_on_contributing_seed(self):
+        """Plateau counter resets when a seed contributes new unique chains.
+
+        Seed 0 contributes, seeds 1-19 barren (19, below threshold of 20),
+        seed 20 contributes (resets counter), seeds 21-40 barren (20, meets threshold).
+        Should stop with stopped_reason="plateau" after seed 40.
+        """
+        from unittest.mock import MagicMock
+
+        from api_parity.cli import PLATEAU_THRESHOLD, _generate_chains_with_seed_walking
+
+        mock_generator = MagicMock()
+
+        # Seed 20 is exactly PLATEAU_THRESHOLD seeds after seed 0, which resets
+        # the counter just before plateau would trigger.
+        contributing_seed = PLATEAU_THRESHOLD
+
+        def mock_generate(max_chains, max_steps, seed):
+            if seed == 0:
+                return [self._make_chain(["opA"], "c1")]
+            elif seed == contributing_seed:
+                return [self._make_chain(["opB"], "c2")]
+            return []
+
+        mock_generator.generate_chains.side_effect = mock_generate
+
+        result = _generate_chains_with_seed_walking(
+            generator=mock_generator,
+            max_chains=1000,
+            max_steps=6,
+            starting_seed=0,
+        )
+
+        assert result.stopped_reason == "plateau"
+        assert result.seeds_used == [0, contributing_seed]
+        # 1 contributing + (threshold-1) barren + 1 contributing + threshold barren
+        assert result.seeds_tried == 1 + (PLATEAU_THRESHOLD - 1) + 1 + PLATEAU_THRESHOLD
 
     def test_coverage_guided_stops_when_all_linked_covered(self):
         """Seed walking stops early when all linked operations are covered.

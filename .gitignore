@@ -22,5 +22,8 @@ build/
 .coverage
 htmlcov/
 
+# Claude Code worktree metadata (temporary, not project config)
+.claude/worktrees/
+
 # OS
 .DS_Store

@@ -1139,3 +1139,136 @@ class TestLinkAttributionHistory:
         assert link_source.get("link_name") == "GetUpdatedResource", (
             f"Link name should be GetUpdatedResource, got {link_source.get('link_name')}"
         )
+
+
+class TestBuildLinkIndex:
+    """Tests for CaseGenerator._build_link_index().
+
+    The link index maps (source_op, target_op) to a list of link entries,
+    enabling O(1) lookup during chain generation instead of scanning the
+    entire spec for each chain step.
+    """
+
+    @staticmethod
+    def _make_spec_with_links(links_by_operation):
+        """Build a minimal OpenAPI spec from a dict of operation → response links.
+
+        Args:
+            links_by_operation: dict mapping
+                (path, method, operationId) -> {resp_code: {link_name: link_def}}
+        """
+        paths = {}
+        for (path, method, op_id), responses in links_by_operation.items():
+            if path not in paths:
+                paths[path] = {}
+            operation = {"operationId": op_id, "responses": {}}
+            for resp_code, links in responses.items():
+                operation["responses"][resp_code] = {
+                    "description": "OK",
+                    "links": links,
+                }
+            paths[path][method] = operation
+        return {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": paths,
+        }
+
+    def test_indexes_single_link(self, tmp_path):
+        """A single link from createItem→getItem is correctly indexed."""
+        import yaml
+
+        from api_parity.case_generator import CaseGenerator
+
+        spec = self._make_spec_with_links({
+            ("/items", "post", "createItem"): {
+                "201": {
+                    "GetCreatedItem": {
+                        "operationId": "getItem",
+                        "parameters": {"item_id": "$response.body#/id"},
+                    }
+                }
+            },
+            ("/items/{item_id}", "get", "getItem"): {
+                "200": {}
+            },
+        })
+
+        spec_file = tmp_path / "spec.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        generator = CaseGenerator(spec_file)
+        index = generator._link_index
+
+        assert ("createItem", "getItem") in index
+        entries = index[("createItem", "getItem")]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["link_name"] == "GetCreatedItem"
+        assert entry["source_operation"] == "createItem"
+        assert entry["resp_code_str"] == "201"
+        assert entry["is_inferred"] is False
+        assert entry["parameters"] == {"item_id": "$response.body#/id"}
+        assert entry["field"] == "$response.body#/id"
+
+    def test_indexes_multiple_links_from_same_operation(self, tmp_path):
+        """Multiple links from one operation are indexed under separate keys."""
+        import yaml
+
+        from api_parity.case_generator import CaseGenerator
+
+        spec = self._make_spec_with_links({
+            ("/orders", "post", "createOrder"): {
+                "201": {
+                    "GetOrder": {
+                        "operationId": "getOrder",
+                        "parameters": {"id": "$response.body#/id"},
+                    },
+                    "DeleteOrder": {
+                        "operationId": "deleteOrder",
+                        "parameters": {"id": "$response.body#/id"},
+                    },
+                }
+            },
+        })
+
+        spec_file = tmp_path / "spec.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        generator = CaseGenerator(spec_file)
+        index = generator._link_index
+
+        assert ("createOrder", "getOrder") in index
+        assert ("createOrder", "deleteOrder") in index
+        assert len(index[("createOrder", "getOrder")]) == 1
+        assert len(index[("createOrder", "deleteOrder")]) == 1
+
+    def test_no_links_produces_empty_index(self, tmp_path):
+        """Spec with no links produces an empty link index."""
+        import yaml
+
+        from api_parity.case_generator import CaseGenerator
+
+        spec = {
+            "openapi": "3.0.3",
+            "info": {"title": "Test", "version": "1.0"},
+            "paths": {
+                "/items": {
+                    "get": {
+                        "operationId": "listItems",
+                        "responses": {
+                            "200": {"description": "OK"}
+                        },
+                    }
+                }
+            },
+        }
+
+        spec_file = tmp_path / "spec.yaml"
+        with open(spec_file, "w") as f:
+            yaml.dump(spec, f)
+
+        generator = CaseGenerator(spec_file)
+        assert generator._link_index == {}

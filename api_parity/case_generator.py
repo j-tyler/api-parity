@@ -334,6 +334,64 @@ class CaseGenerator:
         # Initialize schema-aware value generator for synthetic responses
         self._schema_generator = SchemaValueGenerator(self._raw_spec)
 
+        # Pre-build link index for O(1) lookups in _find_link_between().
+        # Without this, every chain step scans all paths × methods × responses
+        # × links in the spec (5-level nested loop).  With the index, the
+        # lookup is O(prev_steps × matching_entries) which is typically O(1).
+        self._link_index: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._build_link_index()
+
+    def _build_link_index(self) -> None:
+        """Scan the spec once and index all OpenAPI links by (source_op, target_op).
+
+        Each entry stores the link metadata needed by _find_link_between() so
+        the inner method can do a dict lookup instead of re-scanning the spec.
+        """
+        paths = self._raw_spec.get("paths", {})
+        for path_template, path_item in paths.items():
+            if not isinstance(path_item, dict):
+                continue
+            for method_or_key, operation in path_item.items():
+                if not isinstance(operation, dict) or method_or_key.startswith("$"):
+                    continue
+                source_op = _get_operation_id(operation, method_or_key, path_template)
+                responses = operation.get("responses", {})
+                for resp_code, response_def in responses.items():
+                    if not isinstance(response_def, dict):
+                        continue
+                    links = response_def.get("links", {})
+                    for link_name, link_def in links.items():
+                        if not isinstance(link_def, dict):
+                            continue
+                        link_target = (
+                            link_def.get("operationId")
+                            or link_def.get("operationRef")
+                        )
+                        if not link_target:
+                            continue
+                        parameters = link_def.get("parameters", {})
+                        param_expressions = {
+                            k: v for k, v in parameters.items()
+                            if isinstance(v, str)
+                        }
+                        field_expr = (
+                            next(iter(param_expressions.values()), None)
+                            if param_expressions
+                            else None
+                        )
+                        entry = {
+                            "link_name": link_name,
+                            "source_operation": source_op,
+                            "resp_code_str": str(resp_code),
+                            "is_inferred": False,
+                            "field": field_expr,
+                            "parameters": param_expressions,
+                        }
+                        key = (source_op, link_target)
+                        if key not in self._link_index:
+                            self._link_index[key] = []
+                        self._link_index[key].append(entry)
+
     def get_link_fields(self) -> LinkFields:
         """Get the field references extracted from OpenAPI link expressions.
 
@@ -748,60 +806,22 @@ class CaseGenerator:
                     and field (the raw expression for replay), or None if no explicit
                     link found in the spec.
                 """
-                spec = generator_self._raw_spec
-                paths = spec.get("paths", {})
-
-                # Search most recent steps first - links are more likely to come
-                # from recent operations
+                # Use pre-built link index for O(1) lookup instead of scanning
+                # the entire spec (previously a 5-level nested loop).
                 for source_op, status_code in reversed(prev_steps):
-                    # Find the source operation in the spec
-                    for path_template, path_item in paths.items():
-                        if not isinstance(path_item, dict):
-                            continue
-                        for method_or_key, operation in path_item.items():
-                            if not isinstance(operation, dict) or method_or_key.startswith("$"):
-                                continue
-
-                            # Use consistent operationId generation
-                            op_id = _get_operation_id(operation, method_or_key, path_template)
-                            if op_id != source_op:
-                                continue
-
-                            # Look for links in responses
-                            responses = operation.get("responses", {})
-                            for resp_code, response_def in responses.items():
-                                if not isinstance(response_def, dict):
-                                    continue
-
-                                # Match status code: exact, wildcard (2XX), or default
-                                if not self._matches_status_code(str(resp_code), status_code):
-                                    continue
-
-                                links = response_def.get("links", {})
-                                for link_name, link_def in links.items():
-                                    if not isinstance(link_def, dict):
-                                        continue
-                                    link_target = link_def.get("operationId") or link_def.get("operationRef")
-                                    if link_target == target_op:
-                                        # Extract all parameter expressions for replay support
-                                        # Store as dict mapping param name to expression
-                                        parameters = link_def.get("parameters", {})
-                                        param_expressions = {
-                                            k: v for k, v in parameters.items()
-                                            if isinstance(v, str)
-                                        }
-
-                                        # For backwards compatibility, also store first expression as "field"
-                                        field_expr = next(iter(param_expressions.values()), None) if param_expressions else None
-
-                                        return {
-                                            "link_name": link_name,
-                                            "source_operation": source_op,
-                                            "status_code": status_code,
-                                            "is_inferred": False,
-                                            "field": field_expr,  # First expression (backwards compat)
-                                            "parameters": param_expressions,  # All expressions
-                                        }
+                    entries = generator_self._link_index.get((source_op, target_op))
+                    if entries is None:
+                        continue
+                    for entry in entries:
+                        if self._matches_status_code(entry["resp_code_str"], status_code):
+                            return {
+                                "link_name": entry["link_name"],
+                                "source_operation": source_op,
+                                "status_code": status_code,
+                                "is_inferred": entry["is_inferred"],
+                                "field": entry["field"],
+                                "parameters": dict(entry["parameters"]),
+                            }
 
                 # No explicit link found in spec
                 return None
