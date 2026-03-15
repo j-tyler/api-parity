@@ -892,6 +892,11 @@ def _compute_max_achievable_hits(
 # runaway execution if the spec genuinely has fewer chains than requested.
 MAX_SEED_INCREMENTS = 100
 
+# Number of consecutive barren seeds (producing no new unique chains) before
+# stopping seed walking early.  20 gives high confidence the search space is
+# exhausted while avoiding premature exits that could miss interesting cases.
+PLATEAU_THRESHOLD = 20
+
 
 @dataclass
 class ChainGenerationResult:
@@ -924,6 +929,7 @@ class ChainGenerationResult:
             "coverage_met" — coverage target achieved
             "max_chains" — accumulated enough unique chain sequences
             "max_seeds" — hit MAX_SEED_INCREMENTS without meeting other targets
+            "plateau" — no new unique chains for several consecutive seeds
             "no_seed" — single pass (no seed walking)
         seeds_tried: Total number of seeds attempted (0 if no seed walking).
         max_achievable_hits: Per-operation maximum structurally achievable
@@ -1171,6 +1177,7 @@ def _generate_chains_with_seed_walking(
     current_seed = starting_seed
     seeds_tried = 0
     stopped_reason = "max_seeds"
+    consecutive_barren_seeds = 0
 
     while seeds_tried < MAX_SEED_INCREMENTS:
         seeds_tried += 1
@@ -1207,6 +1214,9 @@ def _generate_chains_with_seed_walking(
 
         if seed_contributed:
             seeds_used.append(current_seed)
+            consecutive_barren_seeds = 0
+        else:
+            consecutive_barren_seeds += 1
 
         # Print progress showing coverage depth
         if linked_operations:
@@ -1256,6 +1266,12 @@ def _generate_chains_with_seed_walking(
         # 2. Chain count reached (secondary limit, only if max_chains set)
         if max_chains is not None and len(accumulated_chains) >= max_chains:
             stopped_reason = "max_chains"
+            break
+        # 3. Plateau: no new unique chains for PLATEAU_THRESHOLD consecutive seeds.
+        #    Only activate after at least one seed has contributed, so we don't
+        #    bail out before the search has started producing results.
+        if consecutive_barren_seeds >= PLATEAU_THRESHOLD and seeds_used:
+            stopped_reason = "plateau"
             break
 
         current_seed += 1

@@ -565,3 +565,16 @@ Date: 20260216
 Removed `--max-cases` from the explore CLI. Coverage controls (`--min-hits-per-op`, `--min-coverage`, `--ensure-coverage`, `--max-chains`, `--max-steps`) are the intended way to control exploration depth. `--max-cases` was an early debugging lever that conflicted with coverage-guided stopping semantics.
 
 `CaseGenerator.generate(max_cases=...)` is preserved as an internal parameter since it's used by the `--ensure-coverage` backfill logic and is useful for internal callers. Only the CLI exposure was removed.
+
+---
+
+# Plateau Detection for Seed Walking
+
+Keywords: plateau seed walking barren threshold early exit
+Date: 20260315
+
+**Problem:** When `--min-hits-per-op` or `--max-chains` exceeds what the spec can produce, seed walking grinds through all 100 seeds even though the search space is exhausted. Most of those seeds produce zero new unique chains, wasting time.
+
+**Decision:** After 20 consecutive barren seeds (seeds producing no new unique chains), stop early with `stopped_reason="plateau"`. The threshold of 20 balances two concerns: low enough to avoid wasting dozens of seeds on an exhausted space, high enough to avoid premature exits in large specs where productive seeds may be sparse.
+
+**Guard:** Plateau detection only activates after at least one seed has contributed chains (`seeds_used` is non-empty). Without this guard, a spec where no seed produces chains (e.g., broken links) would exit after 20 seeds instead of running the full 100. The full run is important because it gives the user a clear signal ("tried 100 seeds, found nothing") rather than a confusing early exit.

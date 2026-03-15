@@ -473,7 +473,8 @@ Common configurations:
 The stopping conditions are checked in priority order:
 1. **Coverage met** — min_coverage% of linked operations have min_hits_per_op hits (primary goal)
 2. **Max chains** — accumulated `--max-chains` unique chain sequences (secondary limit, if set)
-3. **Max seeds** — tried 100 seeds without meeting the above (hard safety limit)
+3. **Plateau** — 20 consecutive seeds produced no new unique chains, and at least one seed previously contributed (search space likely exhausted)
+4. **Max seeds** — tried 100 seeds without meeting the above (hard safety limit)
 
 When `--min-hits-per-op > 1` and `--max-chains` is not explicitly set, the chain count limit is removed (unlimited), so seed walking is driven entirely by the coverage depth target.
 
