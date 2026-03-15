@@ -13,6 +13,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from api_parity.schema_validator import build_operation_index
+
 
 class SchemaValueGenerator:
     """Generates values satisfying OpenAPI schema constraints.
@@ -33,6 +35,10 @@ class SchemaValueGenerator:
             spec: Parsed OpenAPI specification dict.
         """
         self._spec = spec
+
+        # Pre-build operationId -> operation definition index for O(1) lookups.
+        # Without this, every _find_operation() call scans all paths × methods.
+        self._operation_index = build_operation_index(spec)
 
     def generate(self, schema: dict[str, Any] | None) -> Any:
         """Generate a value satisfying the schema constraints.
@@ -236,7 +242,7 @@ class SchemaValueGenerator:
         return self._resolve_ref(schema)
 
     def _find_operation(self, operation_id: str) -> dict[str, Any] | None:
-        """Find an operation by its operationId.
+        """Find an operation by its operationId via pre-built index.
 
         Args:
             operation_id: The operationId to find.
@@ -244,19 +250,7 @@ class SchemaValueGenerator:
         Returns:
             The operation definition dict, or None if not found.
         """
-        paths = self._spec.get("paths", {})
-        for path_item in paths.values():
-            if not isinstance(path_item, dict):
-                continue
-            for method_or_key, operation in path_item.items():
-                # Path items contain HTTP operations (get/post/...) plus metadata keys.
-                # isinstance(dict) filters metadata (parameters=list, summary=string).
-                # startswith("$") filters $ref strings that survived the dict check.
-                if not isinstance(operation, dict) or method_or_key.startswith("$"):
-                    continue
-                if operation.get("operationId") == operation_id:
-                    return operation
-        return None
+        return self._operation_index.get(operation_id)
 
     def _resolve_ref(
         self, obj: dict[str, Any], visited: frozenset[str] | None = None

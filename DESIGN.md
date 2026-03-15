@@ -578,3 +578,16 @@ Date: 20260315
 **Decision:** After 20 consecutive barren seeds (seeds producing no new unique chains), stop early with `stopped_reason="plateau"`. The threshold of 20 balances two concerns: low enough to avoid wasting dozens of seeds on an exhausted space, high enough to avoid premature exits in large specs where productive seeds may be sparse.
 
 **Guard:** Plateau detection only activates after at least one seed has contributed chains (`seeds_used` is non-empty). Without this guard, a spec where no seed produces chains (e.g., broken links) would exit after 20 seeds instead of running the full 100. The full run is important because it gives the user a clear signal ("tried 100 seeds, found nothing") rather than a confusing early exit.
+
+---
+
+# Chain Topology Caching
+
+Keywords: chain topology cache seed walking performance hypothesis state machine
+Date: 20260315
+
+**Problem:** During seed walking in `_generate_chains_with_seed_walking()`, `generate_chains()` is called once per seed (up to 100 times). Each invocation runs the full Hypothesis state machine engine via `run_state_machine_as_test`, which is expensive pure CPU work. But chain STRUCTURE (which operations link to which) is determined by the OpenAPI spec and doesn't change between seeds -- only the fuzz-generated parameter values differ.
+
+**Decision:** After the first `generate_chains()` call discovers all chain structures via the Hypothesis state machine, cache those structures as "topologies" (operation sequences + link sources). On subsequent calls, skip the state machine entirely and regenerate only the fuzz parameter values for each step using `_generate_for_operation()` with the new seed. This is transparent to callers -- the `generate_chains()` API doesn't change.
+
+**Tradeoffs:** This assumes all discoverable chain topologies are found on the first run. In practice, different seeds could theoretically produce different topologies — `_find_status_code_with_links()` uses `random.choice()` among status codes, and different status codes may have links pointing to different target operations, producing genuinely new operation sequences. However, this requires specs where multiple status codes on the same operation link to different targets, which is uncommon. The CPU cost of re-running the full Hypothesis state machine on every seed (up to 100x) outweighs the risk of missing these rare topologies.
