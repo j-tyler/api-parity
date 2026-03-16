@@ -2868,10 +2868,10 @@ def _is_same_mismatch(original_diff: dict, new_result: "ComparisonResult") -> bo
         original_details = original_diff.get("details", {})
         original_headers = original_details.get("headers", {})
         original_differences = original_headers.get("differences", [])
-        original_names = {d.get("header") for d in original_differences}
+        original_names = {d.get("path") for d in original_differences}
 
         new_headers = new_result.details.get("headers")
-        new_names = {d.header for d in new_headers.differences} if new_headers else set()
+        new_names = {d.path for d in new_headers.differences} if new_headers else set()
 
         return original_names == new_names
 

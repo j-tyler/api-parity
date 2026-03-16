@@ -55,6 +55,48 @@ Findings confirmed by inspecting Schemathesis's state machine rule generation: o
 
 ---
 
+## Merge Command: Aggregate Mismatch Bundles Across Runs
+
+**Status:** Not yet started.
+
+**Date:** 2026-03-16
+
+**Core concept:** "Same mismatch" means same fields mismatched — same operation, same mismatch_type, same paths that differed. Not same values, not same request. Two bundles from different runs that both show `createWidget` failing at `$.id` and `$.name` are the same mismatch. Replay already uses this concept for classification. Merge uses it for deduplication.
+
+**Merge command:** Combines bundles from multiple explore/replay runs into a single deduplicated directory. Workflow: explore → fix → explore → `merge` all runs → `replay` the merged set.
+
+```
+api-parity merge --in run1/ run2/ run3/ --out regression-suite/
+```
+
+### Implementation Steps
+
+**1. Extract classification into `api_parity/mismatch_classifier.py`**
+
+Move `_is_same_mismatch` and `_is_same_chain_mismatch` out of cli.py. Add `mismatch_dedup_key()` that returns a hashable key from diff.json data — same logic, just returns the tuple instead of comparing two. Merge uses these keys to group duplicates. Update cli.py to import from new module.
+
+**2. Unit test classification + dedup key (`tests/test_mismatch_classifier.py`)**
+
+Pure functions, no mocking. Test each mismatch_type (body paths, header names, status_code type-only). Test chain step matching. Test that same-pattern bundles produce same key, different-pattern produce different key.
+
+**3. Add `merge` CLI command in cli.py**
+
+`MergeArgs(input_dirs: list[Path], out: Path)`. Parser with `--in` (repeatable) and `--out`. Wire into dispatch.
+
+**4. Implement merge in `api_parity/bundle_merger.py`**
+
+Discover bundles across all input dirs → load diff.json + case/chain.json (lightweight) → compute dedup key → group by key → keep latest per group → `shutil.copytree` winners to output. Write `merge_summary.json`. Skip corrupted bundles with error.
+
+**5. Tests**
+
+- `tests/test_cli_merge.py` — argument parsing
+- `tests/test_bundle_merger.py` — merge logic with tmp_path fixtures
+- `tests/integration/test_merge_execution.py` — explore → explore → merge → replay
+
+**6. Update ARCHITECTURE.md and TODO.md**
+
+---
+
 ## Advanced Authentication Support
 
 v0 supports simple header-based auth configured manually in runtime config (see ARCHITECTURE.md config example with `Authorization: "Bearer ${API_TOKEN}"`). Future work for advanced auth schemes:
