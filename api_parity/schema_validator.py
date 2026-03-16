@@ -82,6 +82,38 @@ class ResponseSchema:
 
 
 # =============================================================================
+# Helpers
+# =============================================================================
+
+
+def build_operation_index(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Build operationId -> operation definition index from an OpenAPI spec.
+
+    Scans all paths × methods once at init time so callers can do O(1) lookups
+    instead of O(paths × methods) linear scans per operationId lookup.
+
+    Args:
+        spec: Parsed OpenAPI specification dict.
+
+    Returns:
+        Dict mapping operationId strings to their operation definition dicts.
+    """
+    index: dict[str, dict[str, Any]] = {}
+    paths = spec.get("paths", {})
+    for path_item in paths.values():
+        if not isinstance(path_item, dict):
+            continue
+        for method_or_key, operation in path_item.items():
+            # Skip non-operation keys like 'parameters', '$ref'
+            if not isinstance(operation, dict) or method_or_key.startswith("$"):
+                continue
+            op_id = operation.get("operationId")
+            if op_id is not None:
+                index[op_id] = operation
+    return index
+
+
+# =============================================================================
 # Schema Validator
 # =============================================================================
 
@@ -125,6 +157,12 @@ class SchemaValidator:
             raise SchemaExtractionError(
                 f"Failed to load OpenAPI spec from '{spec_path}': {e}"
             ) from e
+
+        # Pre-build operationId -> operation dict index for O(1) lookups.
+        # Without this, every _find_operation() call scans all paths × methods.
+        self._operation_index: dict[str, dict[str, Any]] = build_operation_index(
+            self._spec
+        )
 
     def validate_response(
         self,
@@ -325,7 +363,7 @@ class SchemaValidator:
         return ResponseSchema(schema=schema, allows_extra_fields=allows_extra)
 
     def _find_operation(self, operation_id: str) -> dict[str, Any] | None:
-        """Find an operation by its operationId.
+        """Find an operation by its operationId via pre-built index.
 
         Args:
             operation_id: The operationId to find.
@@ -333,17 +371,7 @@ class SchemaValidator:
         Returns:
             The operation definition dict, or None if not found.
         """
-        paths = self._spec.get("paths", {})
-        for path_item in paths.values():
-            if not isinstance(path_item, dict):
-                continue
-            for method_or_key, operation in path_item.items():
-                # Skip non-operation keys like 'parameters', '$ref'
-                if not isinstance(operation, dict) or method_or_key.startswith("$"):
-                    continue
-                if operation.get("operationId") == operation_id:
-                    return operation
-        return None
+        return self._operation_index.get(operation_id)
 
     def _resolve_ref(self, obj: dict[str, Any]) -> dict[str, Any]:
         """Resolve a $ref reference in the spec.

@@ -791,6 +791,39 @@ def _chain_signature(chain: "ChainCase") -> tuple[str, ...]:
     return tuple(step.request_template.operation_id for step in chain.steps)
 
 
+def _build_adjacency(edges: list[tuple[str, str]]) -> dict[str, set[str]]:
+    """Build adjacency dict from deduplicated edges."""
+    adj: dict[str, set[str]] = {}
+    for source, target in set(edges):
+        if source not in adj:
+            adj[source] = set()
+        adj[source].add(target)
+    return adj
+
+
+def _reachable_from(
+    ops_in_chain: frozenset[str],
+    adj: dict[str, set[str]],
+    reachable_cache: dict[frozenset[str], set[str]],
+) -> set[str]:
+    """Compute the set of next operations reachable from a chain's operation set.
+
+    Memoized: for a given frozenset of operations already in the chain,
+    the reachable next-ops are deterministic (they depend only on which
+    ops are in the chain, not the order). This avoids re-scanning adjacency
+    lists for the same operation set encountered via different DFS paths.
+    """
+    cached = reachable_cache.get(ops_in_chain)
+    if cached is not None:
+        return cached
+    result: set[str] = set()
+    for op in ops_in_chain:
+        if op in adj:
+            result.update(adj[op])
+    reachable_cache[ops_in_chain] = result
+    return result
+
+
 def _enumerate_possible_chain_signatures(
     edges: list[tuple[str, str]],
     linked_ops: set[str],
@@ -816,16 +849,16 @@ def _enumerate_possible_chain_signatures(
         Set of chain signature tuples (length >= 2), or None if the
         safety cap was hit (graph too dense for enumeration).
     """
-    # Build adjacency dict from deduplicated edges
-    adj: dict[str, set[str]] = {}
-    for source, target in set(edges):
-        if source not in adj:
-            adj[source] = set()
-        adj[source].add(target)
+    adj = _build_adjacency(edges)
+    # Cache: frozenset(ops_in_chain) -> set(reachable next ops)
+    reachable_cache: dict[frozenset[str], set[str]] = {}
 
     signatures: set[tuple[str, ...]] = set()
 
-    # DFS from every linked operation as the start
+    # DFS from every linked operation as the start.
+    # Each start_op produces chains beginning with that op, so chains from
+    # different start_ops always differ in their first element -- no
+    # cross-start duplicates are possible.
     for start_op in linked_ops:
         # Stack holds (current_chain_tuple, set_of_ops_in_chain)
         stack: list[tuple[tuple[str, ...], frozenset[str]]] = [
@@ -843,11 +876,7 @@ def _enumerate_possible_chain_signatures(
             if len(chain) >= max_steps:
                 continue
 
-            # Available next operations = union of adj[op] for all ops in chain
-            next_ops: set[str] = set()
-            for op in ops_in_chain:
-                if op in adj:
-                    next_ops.update(adj[op])
+            next_ops = _reachable_from(ops_in_chain, adj, reachable_cache)
 
             for next_op in next_ops:
                 new_chain = chain + (next_op,)
@@ -861,6 +890,7 @@ def _compute_max_achievable_hits(
     edges: list[tuple[str, str]],
     linked_ops: set[str],
     max_steps: int,
+    max_signatures: int = 50_000,
 ) -> dict[str, int] | None:
     """Compute per-operation maximum achievable unique chain hits.
 
@@ -869,20 +899,64 @@ def _compute_max_achievable_hits(
     theoretical maximum number of unique chain hits the operation can
     accumulate, regardless of how many seeds are tried.
 
+    Optimization: counts per-operation hits directly during DFS traversal
+    instead of materializing all chain signature tuples into a set. This
+    avoids O(total_signatures * avg_chain_length) memory for storing tuples
+    and O(n) hashing cost per signature for dedup. Dedup is unnecessary
+    because each DFS starting point produces chains with a unique first
+    element, and within a single start's DFS tree each path produces a
+    unique sequence by construction.
+
     Returns:
         Dict mapping operation_id -> max achievable hits, or None if the
         link graph is too dense to enumerate (caller falls back to flat
         min_hits_per_op with no per-op capping).
     """
-    signatures = _enumerate_possible_chain_signatures(edges, linked_ops, max_steps)
-    if signatures is None:
-        return None
+    adj = _build_adjacency(edges)
+    # Cache: frozenset(ops_in_chain) -> set(reachable next ops)
+    reachable_cache: dict[frozenset[str], set[str]] = {}
 
     counts: dict[str, int] = {}
-    for sig in signatures:
-        # Count each unique operation in this signature once
-        for op in set(sig):
-            counts[op] = counts.get(op, 0) + 1
+    signature_count = 0
+
+    # DFS from every linked operation as the start.
+    # No cross-start duplicates: chains from different start_ops have
+    # different first elements. Within a single start's DFS, each path
+    # appends a specific next_op to a specific prefix, producing unique
+    # sequences -- no intra-start duplicates either.
+    for start_op in linked_ops:
+        # Stack holds (chain_length, ops_in_chain).
+        # We don't need the full chain tuple -- only the length (to enforce
+        # max_steps) and the set of unique ops (to compute reachable next
+        # ops and to count per-op hits). This avoids O(chain_length) tuple
+        # concatenation and hashing at each step.
+        stack: list[tuple[int, frozenset[str]]] = [
+            (1, frozenset({start_op}))
+        ]
+
+        while stack:
+            chain_len, ops_in_chain = stack.pop()
+
+            if chain_len >= 2:
+                # Count each unique operation in this chain once,
+                # directly without storing the signature tuple.
+                signature_count += 1
+                if signature_count > max_signatures:
+                    return None  # Safety cap hit
+                # ops_in_chain is a frozenset of unique ops in the chain,
+                # equivalent to set(chain_tuple). Count each op once per
+                # signature.
+                for op in ops_in_chain:
+                    counts[op] = counts.get(op, 0) + 1
+
+            if chain_len >= max_steps:
+                continue
+
+            next_ops = _reachable_from(ops_in_chain, adj, reachable_cache)
+
+            for next_op in next_ops:
+                new_ops = ops_in_chain | frozenset({next_op})
+                stack.append((chain_len + 1, new_ops))
 
     return counts
 

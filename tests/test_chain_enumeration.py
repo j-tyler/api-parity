@@ -3,13 +3,18 @@
 Tests the functions _enumerate_possible_chain_signatures() and
 _compute_max_achievable_hits() which determine how many unique chain
 structures each operation can appear in given the link graph.
+
+Also tests the helper functions _build_adjacency() and _reachable_from()
+extracted during the DFS optimization.
 """
 
 import pytest
 
 from api_parity.cli import (
+    _build_adjacency,
     _compute_max_achievable_hits,
     _enumerate_possible_chain_signatures,
+    _reachable_from,
 )
 
 
@@ -563,3 +568,174 @@ class TestWarningOutput:
             if op in linked_ops and achievable < min_hits_per_op
         }
         assert len(capped_ops) == 0
+
+
+class TestBuildAdjacency:
+    """Tests for _build_adjacency() helper."""
+
+    def test_simple_edges(self):
+        """Builds correct adjacency dict from edge list."""
+        edges = [("A", "B"), ("B", "C"), ("A", "C")]
+        adj = _build_adjacency(edges)
+
+        assert adj["A"] == {"B", "C"}
+        assert adj["B"] == {"C"}
+        assert "C" not in adj  # C has no outbound edges
+
+    def test_duplicate_edges_deduplicated(self):
+        """Duplicate edges produce a single adjacency entry."""
+        edges = [("A", "B"), ("A", "B"), ("A", "B")]
+        adj = _build_adjacency(edges)
+
+        assert adj["A"] == {"B"}
+
+    def test_empty_edges(self):
+        """Empty edge list produces empty adjacency dict."""
+        adj = _build_adjacency([])
+        assert adj == {}
+
+    def test_self_loop(self):
+        """Self-loop A->A is represented correctly."""
+        edges = [("A", "A")]
+        adj = _build_adjacency(edges)
+
+        assert adj["A"] == {"A"}
+
+
+class TestReachableFrom:
+    """Tests for _reachable_from() memoized helper."""
+
+    def test_basic_reachability(self):
+        """Returns union of adjacency sets for all ops in chain."""
+        adj = {"A": {"B", "C"}, "B": {"D"}}
+        cache: dict[frozenset[str], set[str]] = {}
+        ops = frozenset({"A", "B"})
+
+        result = _reachable_from(ops, adj, cache)
+
+        assert result == {"B", "C", "D"}
+
+    def test_caches_result(self):
+        """Second call returns cached result without recomputation."""
+        adj = {"A": {"B"}}
+        cache: dict[frozenset[str], set[str]] = {}
+        ops = frozenset({"A"})
+
+        result1 = _reachable_from(ops, adj, cache)
+        result2 = _reachable_from(ops, adj, cache)
+
+        assert result1 is result2  # Same object from cache
+        assert ops in cache
+
+    def test_ops_not_in_adj(self):
+        """Operations with no outbound edges contribute nothing."""
+        adj = {"A": {"B"}}
+        cache: dict[frozenset[str], set[str]] = {}
+        ops = frozenset({"A", "C"})  # C not in adj
+
+        result = _reachable_from(ops, adj, cache)
+
+        assert result == {"B"}
+
+    def test_empty_ops(self):
+        """Empty operation set returns empty reachable set."""
+        adj = {"A": {"B"}}
+        cache: dict[frozenset[str], set[str]] = {}
+
+        result = _reachable_from(frozenset(), adj, cache)
+
+        assert result == set()
+
+
+class TestComputeMaxAchievableHitsMaxSignatures:
+    """Tests for max_signatures parameter on _compute_max_achievable_hits."""
+
+    def test_max_signatures_triggers_none(self):
+        """max_signatures=1 on a graph with >1 signature returns None."""
+        edges = [("A", "B"), ("B", "A")]
+        linked_ops = {"A", "B"}
+
+        result = _compute_max_achievable_hits(
+            edges, linked_ops, max_steps=4, max_signatures=1
+        )
+
+        assert result is None
+
+    def test_max_signatures_sufficient_returns_counts(self):
+        """max_signatures large enough returns valid counts."""
+        edges = [("A", "B")]
+        linked_ops = {"A", "B"}
+
+        result = _compute_max_achievable_hits(
+            edges, linked_ops, max_steps=2, max_signatures=100
+        )
+
+        assert result is not None
+        assert result["A"] == 1
+        assert result["B"] == 1
+
+
+class TestDirectCountingMatchesEnumeration:
+    """Cross-validate that _compute_max_achievable_hits direct counting
+    produces identical results to counting from _enumerate_possible_chain_signatures.
+
+    This ensures the optimization (tracking chain_len + ops_in_chain instead
+    of full chain tuples) does not change the computed counts.
+    """
+
+    @staticmethod
+    def _counts_from_enumeration(edges, linked_ops, max_steps):
+        """Compute per-op counts the old way: enumerate all signatures, then count."""
+        sigs = _enumerate_possible_chain_signatures(edges, linked_ops, max_steps)
+        if sigs is None:
+            return None
+        counts = {}
+        for sig in sigs:
+            for op in set(sig):
+                counts[op] = counts.get(op, 0) + 1
+        return counts
+
+    def test_linear_graph(self):
+        edges = [("A", "B"), ("B", "C")]
+        linked_ops = {"A", "B", "C"}
+        enum_counts = self._counts_from_enumeration(edges, linked_ops, 3)
+        direct_counts = _compute_max_achievable_hits(edges, linked_ops, 3)
+        assert enum_counts == direct_counts
+
+    def test_cycle(self):
+        edges = [("A", "B"), ("B", "A")]
+        linked_ops = {"A", "B"}
+        enum_counts = self._counts_from_enumeration(edges, linked_ops, 4)
+        direct_counts = _compute_max_achievable_hits(edges, linked_ops, 4)
+        assert enum_counts == direct_counts
+
+    def test_diamond(self):
+        edges = [("A", "B"), ("A", "C"), ("B", "D"), ("C", "D")]
+        linked_ops = {"A", "B", "C", "D"}
+        enum_counts = self._counts_from_enumeration(edges, linked_ops, 4)
+        direct_counts = _compute_max_achievable_hits(edges, linked_ops, 4)
+        assert enum_counts == direct_counts
+
+    def test_branching_convergent_paths(self):
+        """A->B, A->C, B->C with max_steps=4: different paths converge on same ops."""
+        edges = [("A", "B"), ("A", "C"), ("B", "C")]
+        linked_ops = {"A", "B", "C"}
+        enum_counts = self._counts_from_enumeration(edges, linked_ops, 4)
+        direct_counts = _compute_max_achievable_hits(edges, linked_ops, 4)
+        assert enum_counts == direct_counts
+
+    def test_disconnected_components(self):
+        edges = [("A", "B"), ("C", "D")]
+        linked_ops = {"A", "B", "C", "D"}
+        enum_counts = self._counts_from_enumeration(edges, linked_ops, 3)
+        direct_counts = _compute_max_achievable_hits(edges, linked_ops, 3)
+        assert enum_counts == direct_counts
+
+    def test_dense_four_node_graph(self):
+        """4-node fully connected (no self-loops) at max_steps=4."""
+        nodes = ["A", "B", "C", "D"]
+        edges = [(s, t) for s in nodes for t in nodes if s != t]
+        linked_ops = set(nodes)
+        enum_counts = self._counts_from_enumeration(edges, linked_ops, 4)
+        direct_counts = _compute_max_achievable_hits(edges, linked_ops, 4)
+        assert enum_counts == direct_counts

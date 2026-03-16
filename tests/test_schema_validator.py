@@ -13,6 +13,7 @@ from api_parity.schema_validator import (
     SchemaValidator,
     SchemaViolation,
     ValidationResult,
+    build_operation_index,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -743,3 +744,94 @@ class TestEdgeCases:
         validator.validate_response({"widgets": [], "total": 0}, "listStrictWidgets", 200)
         # Cache key should exist
         assert ("listStrictWidgets", 200) in validator._schema_cache
+
+
+# =============================================================================
+# Operation Index Tests
+# =============================================================================
+
+
+class TestBuildOperationIndex:
+    """Tests for build_operation_index helper.
+
+    This helper builds an operationId -> operation dict at init time so callers
+    can do O(1) lookups instead of scanning all paths × methods each time.
+    """
+
+    def test_builds_index_from_spec(self):
+        """Index maps each operationId to its operation definition."""
+        spec = {
+            "paths": {
+                "/users": {
+                    "get": {"operationId": "listUsers", "summary": "List users"},
+                    "post": {"operationId": "createUser", "summary": "Create user"},
+                },
+                "/items": {
+                    "get": {"operationId": "listItems", "summary": "List items"},
+                },
+            },
+        }
+        index = build_operation_index(spec)
+        assert len(index) == 3
+        assert index["listUsers"]["summary"] == "List users"
+        assert index["createUser"]["summary"] == "Create user"
+        assert index["listItems"]["summary"] == "List items"
+
+    def test_operations_without_operation_id_excluded(self):
+        """Operations without an operationId key are not indexed."""
+        spec = {
+            "paths": {
+                "/users": {
+                    "get": {"operationId": "listUsers"},
+                    "post": {"summary": "No operationId here"},
+                },
+            },
+        }
+        index = build_operation_index(spec)
+        assert len(index) == 1
+        assert "listUsers" in index
+
+    def test_skips_non_operation_keys(self):
+        """Non-operation keys like 'parameters' and '$ref' are skipped."""
+        spec = {
+            "paths": {
+                "/users": {
+                    "parameters": [{"name": "id", "in": "path"}],
+                    "$ref": "#/components/pathItems/Users",
+                    "get": {"operationId": "listUsers"},
+                },
+            },
+        }
+        index = build_operation_index(spec)
+        assert len(index) == 1
+        assert "listUsers" in index
+
+    def test_empty_paths(self):
+        """Empty paths dict produces empty index."""
+        assert build_operation_index({"paths": {}}) == {}
+        assert build_operation_index({}) == {}
+
+    def test_non_dict_path_item_skipped(self):
+        """Non-dict path items (e.g., $ref string) are skipped."""
+        spec = {
+            "paths": {
+                "/users": "not-a-dict",
+                "/items": {
+                    "get": {"operationId": "listItems"},
+                },
+            },
+        }
+        index = build_operation_index(spec)
+        assert len(index) == 1
+        assert "listItems" in index
+
+    def test_validator_uses_index_for_find_operation(self):
+        """SchemaValidator._find_operation uses the pre-built index."""
+        validator = SchemaValidator(SCHEMA_VALIDATION_SPEC)
+        # The fixture spec has operationIds - verify _find_operation returns them
+        op = validator._find_operation("listStrictWidgets")
+        assert op is not None
+        assert op["operationId"] == "listStrictWidgets"
+
+        # Non-existent operationId returns None
+        assert validator._find_operation("nonExistent") is None

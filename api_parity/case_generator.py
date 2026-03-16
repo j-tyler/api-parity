@@ -39,6 +39,7 @@ _InferenceConfig = type(StatefulPhaseConfig().inference)
 from schemathesis.specs.openapi.stateful import OpenAPIStateMachine
 
 from api_parity.models import ChainCase, ChainStep, RequestCase
+from api_parity.schema_validator import build_operation_index
 from api_parity.schema_value_generator import SchemaValueGenerator
 
 
@@ -334,12 +335,29 @@ class CaseGenerator:
         # Initialize schema-aware value generator for synthetic responses
         self._schema_generator = SchemaValueGenerator(self._raw_spec)
 
+        # Pre-build operationId -> operation definition index for O(1) lookups.
+        # Used by _find_status_code_with_links() instead of scanning all paths × methods.
+        self._operation_index = build_operation_index(self._raw_spec)
+
         # Pre-build link index for O(1) lookups in _find_link_between().
         # Without this, every chain step scans all paths × methods × responses
         # × links in the spec (5-level nested loop).  With the index, the
         # lookup is O(prev_steps × matching_entries) which is typically O(1).
         self._link_index: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._build_link_index()
+
+        # Cache for chain topology reuse across seeds. After the first
+        # generate_chains() call discovers chain structures via the expensive
+        # Hypothesis state machine, subsequent calls with different seeds
+        # reuse these structures and only regenerate fuzz parameter values.
+        # This avoids re-running the full state machine engine per seed.
+        # See DESIGN.md "Chain Topology Caching" for rationale.
+        self._cached_chain_topologies: list[list[dict[str, Any]]] | None = None
+
+        # Index mapping operation_id -> Schemathesis operation object, built
+        # lazily on first use. Needed to generate fresh fuzz values for cached
+        # chain topologies without re-running the state machine.
+        self._schemathesis_op_index: dict[str, Any] | None = None
 
     def _build_link_index(self) -> None:
         """Scan the spec once and index all OpenAPI links by (source_op, target_op).
@@ -391,6 +409,123 @@ class CaseGenerator:
                         if key not in self._link_index:
                             self._link_index[key] = []
                         self._link_index[key].append(entry)
+
+    def _get_schemathesis_op_index(self) -> dict[str, Any]:
+        """Build or return cached index of operation_id -> Schemathesis operation object.
+
+        Lazily built on first call. Used by _regenerate_chains_from_cache()
+        to generate fresh fuzz values for specific operations without running
+        the full state machine.
+        """
+        if self._schemathesis_op_index is not None:
+            return self._schemathesis_op_index
+
+        index: dict[str, Any] = {}
+        for result in self._schema.get_all_operations():
+            op = result.ok()
+            if op is None:
+                continue
+            raw = op.definition.raw
+            operation_id = raw.get("operationId", f"{op.method}_{op.path}")
+            index[operation_id] = op
+
+        self._schemathesis_op_index = index
+        return index
+
+    def _extract_chain_topologies(
+        self, chains: list[ChainCase]
+    ) -> list[list[dict[str, Any]]]:
+        """Extract reusable chain topologies from generated chains.
+
+        A topology captures the structural aspects of a chain (which operations
+        in which order, with which link sources) but NOT the fuzz-generated
+        parameter values. This allows regenerating chains with different seeds
+        without re-running the expensive Hypothesis state machine.
+
+        Args:
+            chains: List of ChainCase objects from a generate_chains() run.
+
+        Returns:
+            List of topologies. Each topology is a list of step descriptors
+            containing operation_id, method, path_template, and link_source.
+        """
+        topologies: list[list[dict[str, Any]]] = []
+        for chain in chains:
+            topo: list[dict[str, Any]] = []
+            for step in chain.steps:
+                topo.append({
+                    "operation_id": step.request_template.operation_id,
+                    "method": step.request_template.method,
+                    "path_template": step.request_template.path_template,
+                    "link_source": step.link_source,
+                })
+            topologies.append(topo)
+        return topologies
+
+    def _regenerate_chains_from_cache(
+        self,
+        topologies: list[list[dict[str, Any]]],
+        seed: int | None,
+    ) -> list[ChainCase]:
+        """Regenerate chains from cached topologies with fresh fuzz values.
+
+        Reuses the chain structure (operation sequence + link sources) from a
+        previous run but generates new parameter values using the given seed.
+        This is much cheaper than running the full Hypothesis state machine.
+
+        Args:
+            topologies: Cached chain topologies from _extract_chain_topologies().
+            seed: Random seed for fuzz value generation.
+
+        Returns:
+            List of ChainCase objects with fresh parameter values.
+        """
+        op_index = self._get_schemathesis_op_index()
+
+        # Seed Python's random module for reproducibility (same as generate_chains)
+        if seed is not None:
+            random.seed(seed)
+
+        chains: list[ChainCase] = []
+        for topo in topologies:
+            steps: list[ChainStep] = []
+            for step_idx, step_desc in enumerate(topo):
+                op_id = step_desc["operation_id"]
+                schemathesis_op = op_index.get(op_id)
+
+                if schemathesis_op is None:
+                    # Operation not found in spec (e.g., excluded). Skip chain.
+                    break
+
+                # Generate one fuzz case for this operation with the current seed.
+                # Use a per-step seed derived from the base seed so each step
+                # gets different but reproducible values.
+                step_seed = (seed + step_idx) if seed is not None else None
+                fuzz_cases = list(
+                    self._generate_for_operation(schemathesis_op, op_id, 1, step_seed)
+                )
+                if not fuzz_cases:
+                    # Could not generate a case for this operation. Skip chain.
+                    break
+
+                request_case = fuzz_cases[0]
+
+                step = ChainStep(
+                    step_index=step_idx,
+                    request_template=request_case,
+                    link_source=step_desc["link_source"],
+                )
+                steps.append(step)
+            else:
+                # All steps generated successfully
+                if len(steps) > 1:
+                    chain = ChainCase(
+                        chain_id=str(uuid.uuid4()),
+                        steps=steps,
+                    )
+                    chains.append(chain)
+
+        return chains
 
     def get_link_fields(self) -> LinkFields:
         """Get the field references extracted from OpenAPI link expressions.
@@ -702,6 +837,16 @@ class CaseGenerator:
         """
         max_chains = max_chains or 20
 
+        # Performance optimization: if chain topologies were cached from a
+        # previous run, skip the expensive Hypothesis state machine and just
+        # regenerate fuzz values for the same chain structures. Chain topology
+        # (which operations link to which) is determined by the OpenAPI spec
+        # and doesn't change between seeds - only parameter values differ.
+        if self._cached_chain_topologies is not None:
+            return self._regenerate_chains_from_cache(
+                self._cached_chain_topologies, seed
+            )
+
         # Seed Python's random module for reproducibility of status code selection.
         # Hypothesis has its own seeding via _hypothesis_internal_use_seed, but
         # _find_status_code_with_links() uses random.choice() which needs this.
@@ -846,11 +991,11 @@ class CaseGenerator:
             def _find_status_code_with_links(self, operation_id: str, method: str) -> int:
                 """Find a status code that has links defined for this operation.
 
-                Examines the OpenAPI spec to find which status codes have links
-                defined for the operation. Randomly selects from all 2xx status
-                codes that have links to ensure all links can be discovered over
-                multiple chain generations. Falls back to 201 for POST / 200
-                otherwise.
+                Uses pre-built operation index for O(1) lookup instead of
+                scanning all paths × methods. Randomly selects from all 2xx
+                status codes that have links to ensure all links can be
+                discovered over multiple chain generations. Falls back to 201
+                for POST / 200 otherwise.
 
                 Random selection is necessary because links on different status
                 codes may lead to different operations. For example, an operation
@@ -858,55 +1003,46 @@ class CaseGenerator:
                 different target operations for each case. Selecting only the
                 lowest status code would make the 201-specific links unreachable.
                 """
-                spec = generator_self._raw_spec
-                paths = spec.get("paths", {})
+                operation = generator_self._operation_index.get(operation_id)
+                if operation is None:
+                    return 201 if method.upper() == "POST" else 200
 
-                # Find this operation in the spec
-                for path_item in paths.values():
-                    if not isinstance(path_item, dict):
+                # Found the operation - look for responses with links
+                responses = operation.get("responses", {})
+
+                # Collect all 2xx status codes that have links
+                status_codes_with_links = []
+                for resp_code, response_def in responses.items():
+                    if not isinstance(response_def, dict):
                         continue
-                    for method_or_key, operation in path_item.items():
-                        if not isinstance(operation, dict) or method_or_key.startswith("$"):
+                    links = response_def.get("links", {})
+                    if not links:
+                        continue
+
+                    # Parse status code (handle wildcards like "2XX" and "default")
+                    if resp_code == "default":
+                        # default could be any status, use fallback
+                        continue
+                    if resp_code.endswith("XX"):
+                        # Wildcard like "2XX" - use representative value
+                        try:
+                            base = int(resp_code[0])
+                            status_codes_with_links.append(base * 100)
+                        except ValueError:
                             continue
-                        if operation.get("operationId") != operation_id:
+                    else:
+                        try:
+                            code = int(resp_code)
+                            # Only consider 2xx success codes
+                            if 200 <= code < 300:
+                                status_codes_with_links.append(code)
+                        except ValueError:
                             continue
 
-                        # Found the operation - look for responses with links
-                        responses = operation.get("responses", {})
-
-                        # Collect all 2xx status codes that have links
-                        status_codes_with_links = []
-                        for resp_code, response_def in responses.items():
-                            if not isinstance(response_def, dict):
-                                continue
-                            links = response_def.get("links", {})
-                            if not links:
-                                continue
-
-                            # Parse status code (handle wildcards like "2XX" and "default")
-                            if resp_code == "default":
-                                # default could be any status, use fallback
-                                continue
-                            if resp_code.endswith("XX"):
-                                # Wildcard like "2XX" - use representative value
-                                try:
-                                    base = int(resp_code[0])
-                                    status_codes_with_links.append(base * 100)
-                                except ValueError:
-                                    continue
-                            else:
-                                try:
-                                    code = int(resp_code)
-                                    # Only consider 2xx success codes
-                                    if 200 <= code < 300:
-                                        status_codes_with_links.append(code)
-                                except ValueError:
-                                    continue
-
-                        # Randomly select from all status codes with links
-                        # This ensures links on all status codes can be discovered
-                        if status_codes_with_links:
-                            return random.choice(status_codes_with_links)
+                # Randomly select from all status codes with links
+                # This ensures links on all status codes can be discovered
+                if status_codes_with_links:
+                    return random.choice(status_codes_with_links)
 
                 # Fallback: POST typically returns 201, others return 200
                 return 201 if method.upper() == "POST" else 200
@@ -1139,5 +1275,13 @@ class CaseGenerator:
 
         # Filter to chains with multiple steps (single-step chains aren't useful)
         multi_step_chains = [c for c in captured_chains if len(c.steps) > 1]
+
+        # Cache the chain topologies for reuse on subsequent calls with
+        # different seeds. This avoids re-running the expensive Hypothesis
+        # state machine when only the fuzz parameter values need to change.
+        if multi_step_chains:
+            self._cached_chain_topologies = self._extract_chain_topologies(
+                multi_step_chains
+            )
 
         return multi_step_chains
