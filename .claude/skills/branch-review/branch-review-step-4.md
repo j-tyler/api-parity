@@ -15,4 +15,4 @@ For each item, conclude with exactly one of:
 
 No hedging. Every item gets DOUBLE DOWN or RETRACT.
 
-When complete, read and follow `.claude/skills/branch-review-step-5.md`.
+When complete, read and follow `.claude/skills/branch-review/branch-review-step-5.md`.
