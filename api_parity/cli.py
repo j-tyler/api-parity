@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from api_parity.mismatch_classifier import is_same_chain_mismatch, is_same_mismatch
+
 if TYPE_CHECKING:
     from api_parity.artifact_writer import ArtifactWriter, ReplayStats, RunStats
     from api_parity.bundle_loader import LoadedBundle
@@ -256,6 +258,14 @@ class ReplayArgs:
     validate: bool
     timeout: float
     operation_timeout: dict[str, float]
+
+
+@dataclass
+class MergeArgs:
+    """Parsed arguments for merge mode."""
+
+    input_dirs: list[Path]
+    out: Path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -531,6 +541,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Set timeout for a specific operation (can be repeated)",
     )
 
+    # Merge subcommand
+    merge_parser = subparsers.add_parser(
+        "merge",
+        help="Merge mismatch bundles from multiple runs, deduplicating by failure pattern",
+    )
+    merge_parser.add_argument(
+        "--in",
+        type=Path,
+        nargs="+",
+        required=True,
+        dest="input_dirs",
+        help="Input directories containing mismatch bundles (can specify multiple)",
+    )
+    merge_parser.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help="Output directory for merged bundles",
+    )
+
     return parser
 
 
@@ -609,14 +639,19 @@ def parse_replay_args(namespace: argparse.Namespace) -> ReplayArgs:
     )
 
 
-def parse_args(args: list[str] | None = None) -> LintSpecArgs | ListOperationsArgs | GraphChainsArgs | ExploreArgs | ReplayArgs:
+def parse_merge_args(namespace: argparse.Namespace) -> MergeArgs:
+    """Convert parsed namespace to MergeArgs dataclass."""
+    return MergeArgs(input_dirs=namespace.input_dirs, out=namespace.out)
+
+
+def parse_args(args: list[str] | None = None) -> LintSpecArgs | ListOperationsArgs | GraphChainsArgs | ExploreArgs | ReplayArgs | MergeArgs:
     """Parse command-line arguments and return typed args dataclass.
 
     Args:
         args: Command-line arguments to parse. If None, uses sys.argv[1:].
 
     Returns:
-        LintSpecArgs, ListOperationsArgs, GraphChainsArgs, ExploreArgs, or ReplayArgs depending on the subcommand.
+        LintSpecArgs, ListOperationsArgs, GraphChainsArgs, ExploreArgs, ReplayArgs, or MergeArgs depending on the subcommand.
 
     Raises:
         SystemExit: If arguments are invalid (argparse behavior).
@@ -634,12 +669,14 @@ def parse_args(args: list[str] | None = None) -> LintSpecArgs | ListOperationsAr
         return parse_explore_args(namespace)
     elif namespace.command == "replay":
         return parse_replay_args(namespace)
+    elif namespace.command == "merge":
+        return parse_merge_args(namespace)
     else:
         # Should not happen with required=True on subparsers
         parser.error(f"Unknown command: {namespace.command}")
 
 
-def dispatch(parsed: LintSpecArgs | ListOperationsArgs | GraphChainsArgs | ExploreArgs | ReplayArgs) -> int:
+def dispatch(parsed: LintSpecArgs | ListOperationsArgs | GraphChainsArgs | ExploreArgs | ReplayArgs | MergeArgs) -> int:
     """Dispatch a parsed CLI args object to the appropriate handler.
 
     Shared by main() and the in-process test runner (cli_runner.py) to avoid
@@ -653,6 +690,8 @@ def dispatch(parsed: LintSpecArgs | ListOperationsArgs | GraphChainsArgs | Explo
         return run_graph_chains(parsed)
     elif isinstance(parsed, ExploreArgs):
         return run_explore(parsed)
+    elif isinstance(parsed, MergeArgs):
+        return run_merge(parsed)
     else:
         return run_replay(parsed)
 
@@ -2711,7 +2750,7 @@ def _replay_stateless_bundle(
             stats.now_match += 1
             stats.fixed_bundles.append(bundle.bundle_path.name)
             print("FIXED")
-        elif _is_same_mismatch(bundle.original_diff, result):
+        elif is_same_mismatch(bundle.original_diff, result):
             stats.still_mismatch += 1
             stats.persistent_bundles.append(bundle.bundle_path.name)
             print(f"STILL MISMATCH: {result.summary}")
@@ -2795,7 +2834,7 @@ def _replay_chain_bundle(
             stats.now_match += 1
             stats.fixed_bundles.append(bundle.bundle_path.name)
             print("  FIXED (all steps)")
-        elif _is_same_chain_mismatch(bundle.original_diff, step_diffs):
+        elif is_same_chain_mismatch(bundle.original_diff, step_diffs):
             stats.still_mismatch += 1
             stats.persistent_bundles.append(bundle.bundle_path.name)
             mismatch_step = len(step_diffs) - 1
@@ -2831,82 +2870,53 @@ def _replay_chain_bundle(
         print(f"  ERROR: {e}")
 
 
-def _is_same_mismatch(original_diff: dict, new_result: "ComparisonResult") -> bool:
-    """Determine if two mismatches are essentially the same failure pattern.
+def run_merge(args: MergeArgs) -> int:
+    """Run merge mode.
 
-    Why pattern matching instead of exact value comparison:
-    - Values change between runs (timestamps, IDs, etc.)
-    - We care about "still failing at the same place" not "exact same failure"
-    - DIFFERENT MISMATCH after rule changes is expected and useful to track
-
-    Comparison strategy by mismatch_type:
-    - status_code: Type match is sufficient (specific codes may vary legitimately)
-    - headers: Same header names must fail (values ignored)
-    - body: Same JSONPath fields must fail (values ignored)
+    Combines mismatch bundles from multiple explore runs into a single
+    deduplicated directory. Bundles with the same failure pattern (operation,
+    mismatch type, failing paths) are deduplicated, keeping the latest.
+    Rejects replay output — merge is for building regression suites from
+    explore runs only.
     """
-    # Get original mismatch type
-    original_type = original_diff.get("mismatch_type")
-    new_type = new_result.mismatch_type.value if new_result.mismatch_type else None
+    from api_parity.bundle_merger import BundleMergeError, merge_bundles
 
-    if original_type != new_type:
-        return False
+    # Validate input directories exist
+    for input_dir in args.input_dirs:
+        if not input_dir.exists():
+            print(f"Error: Input directory does not exist: {input_dir}", file=sys.stderr)
+            return 1
+        if not input_dir.is_dir():
+            print(f"Error: Input path is not a directory: {input_dir}", file=sys.stderr)
+            return 1
 
-    # For body mismatches, check if same paths failed
-    if original_type == "body":
-        original_details = original_diff.get("details", {})
-        original_body = original_details.get("body", {})
-        original_differences = original_body.get("differences", [])
-        original_paths = {d.get("path") for d in original_differences}
+    print(f"Merge mode:")
+    print(f"  Input directories: {len(args.input_dirs)}")
+    for input_dir in args.input_dirs:
+        print(f"    {input_dir}")
+    print(f"  Output: {args.out}")
+    print()
 
-        new_body = new_result.details.get("body")
-        new_paths = {d.path for d in new_body.differences} if new_body else set()
+    try:
+        summary = merge_bundles(args.input_dirs, args.out)
+    except BundleMergeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
-        return original_paths == new_paths
+    # Print summary
+    print("=" * 60)
+    print(f"Total bundles scanned:  {summary.total_bundles_scanned}")
+    print(f"Unique failure patterns: {summary.unique_patterns}")
+    print(f"Bundles kept:           {summary.bundles_kept}")
+    print(f"Duplicates removed:     {summary.bundles_deduplicated}")
+    if summary.errors:
+        print(f"Errors:                 {len(summary.errors)}")
+        for error in summary.errors:
+            print(f"  {error}")
+    print(f"\nMerged output: {args.out}")
+    print(f"Summary written to: {args.out / 'merge_summary.json'}")
 
-    # For header mismatches, check if same header names failed
-    if original_type == "headers":
-        original_details = original_diff.get("details", {})
-        original_headers = original_details.get("headers", {})
-        original_differences = original_headers.get("differences", [])
-        original_names = {d.get("path") for d in original_differences}
-
-        new_headers = new_result.details.get("headers")
-        new_names = {d.path for d in new_headers.differences} if new_headers else set()
-
-        return original_names == new_names
-
-    # For status_code mismatches, mismatch_type being the same is sufficient
-    return True
-
-
-def _is_same_chain_mismatch(
-    original_diff: dict, new_step_diffs: list["ComparisonResult"]
-) -> bool:
-    """Determine if chain mismatches are essentially the same.
-
-    Compares:
-    - Same step number failed
-    - Same mismatch type at that step
-    """
-    original_mismatch_step = original_diff.get("mismatch_step")
-    new_mismatch_step = len(new_step_diffs) - 1 if new_step_diffs else None
-
-    if original_mismatch_step != new_mismatch_step:
-        return False
-
-    # Get original step diff
-    original_steps = original_diff.get("steps", [])
-    if original_mismatch_step is None or original_mismatch_step >= len(original_steps):
-        return False
-
-    original_step_diff = original_steps[original_mismatch_step]
-
-    # Compare the mismatch at that step
-    if not new_step_diffs:
-        return False
-
-    new_step_diff = new_step_diffs[new_mismatch_step]
-    return _is_same_mismatch(original_step_diff, new_step_diff)
+    return 0
 
 
 if __name__ == "__main__":
