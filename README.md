@@ -2,7 +2,7 @@
 
 Differential fuzzing tool for comparing two API implementations against an OpenAPI specification. Find where they differ, replay failures to verify fixes. Perfect for API rewrites where you need to know: does the new implementation behave exactly like the old one?
 
-**Status:** Ready for use. Both `explore` and `replay` commands are fully implemented.
+**Status:** Ready for use. `explore`, `replay`, and `merge` commands are fully implemented.
 
 **Languages:** Python (primary), Go (CEL evaluator subprocess)
 
@@ -83,6 +83,11 @@ api-parity replay \
   --target-b staging \
   --in ./artifacts \
   --out ./replay-results
+
+# Combine mismatches from multiple explore runs into one deduplicated set
+api-parity merge \
+  --in ./artifacts_run1 ./artifacts_run2 \
+  --out ./regression-suite
 ```
 
 ## Core Workflow
@@ -91,7 +96,8 @@ api-parity replay \
 2. **Analyze** — Review mismatch bundles in `./artifacts/mismatches/`
 3. **Fix** — Update comparison rules for expected differences, or fix API bugs
 4. **Replay** — Re-run saved mismatches to verify fixes
-5. **Repeat** — Until all show `FIXED` or are documented as acceptable
+5. **Merge** — Combine mismatches from multiple explore runs, deduplicating by failure pattern
+6. **Repeat** — Until all show `FIXED` or are documented as acceptable
 
 ## CLI Reference
 
@@ -129,6 +135,17 @@ api-parity replay \
 | `--validate` | Validate config without executing |
 
 **Replay classifications:** `FIXED` (now matches), `STILL MISMATCH` (same failure), `DIFFERENT MISMATCH` (fails differently)
+
+### merge
+
+Combine mismatch bundles from multiple explore runs into a single deduplicated directory. Bundles with the same failure pattern (operation, mismatch type, failing paths) are deduplicated, keeping the latest.
+
+| Option | Description |
+|--------|-------------|
+| `--in PATH [PATH ...]` | Input directories from explore runs (required, one or more) |
+| `--out PATH` | Output directory for merged bundles (required) |
+
+Merge only accepts explore output directories. Replay output is rejected — replay is for verifying fixes, not for building regression suites. The merged output is directly replayable with `replay --in`.
 
 ### Other Commands
 

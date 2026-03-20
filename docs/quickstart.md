@@ -114,7 +114,7 @@ Each bundle directory contains everything needed to understand the failure:
 
 ## Iterative Fix Workflow
 
-The typical workflow cycles through: explore → analyze → fix → replay.
+The typical workflow cycles through: explore → analyze → fix → replay. Use merge to combine mismatches from multiple explore runs into a single deduplicated suite.
 
 ### Cycle 1: Initial Discovery
 
@@ -173,6 +173,29 @@ Total bundles: 2
 Fixed bundles:
   20260112T143052__createWidget__abc123
 ```
+
+### Merging Multiple Explore Runs
+
+If you run explore multiple times (different seeds, different time windows), merge combines the results and deduplicates by failure pattern:
+
+```bash
+api-parity merge \
+  --in ./round1 ./round2 ./round3 \
+  --out ./merged
+```
+
+Bundles with the same operation, mismatch type, and failing paths are deduplicated (latest wins). The merged output is directly replayable:
+
+```bash
+api-parity replay \
+  --config config.yaml \
+  --target-a production \
+  --target-b staging \
+  --in ./merged \
+  --out ./merged-replay
+```
+
+Merge only accepts explore output — replay output is rejected to keep the workflow roles separate.
 
 ### Cycle 4: Investigate Remaining Issues
 
