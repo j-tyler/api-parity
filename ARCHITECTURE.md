@@ -79,6 +79,7 @@ api-parity compares two deployments of a "theoretically identical" HTTP API to d
 | `list-operations` | Show operationIds and links from spec |
 | `graph-chains` | Visualize link graph or generated chains |
 | `lint-spec` | Check spec for api-parity issues |
+| `merge` | Deduplicate mismatch bundles from multiple runs |
 
 **Exit codes:** `0` = success, non-zero = error. Finding mismatches is expected behavior, not an error.
 
@@ -98,6 +99,19 @@ When replaying saved bundles, each is classified:
 - **Link expression coverage** — Categorizes expressions (`$response.body#/...`, `$response.header.*`, etc.)
 - **Response schema coverage** — Reports operations missing 2xx response schemas
 - **Duplicate link names** — Detects YAML duplicate keys that get silently overwritten
+
+### merge
+
+Combines mismatch bundles from multiple explore runs into a single deduplicated directory. Only accepts explore output — replay output is rejected (contains `replay_summary.json`).
+
+```
+api-parity merge --in run1/ run2/ run3/ --out regression-suite/
+```
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `--in` | Yes | Input directories from explore runs (one or more) |
+| `--out` | Yes | Output directory for merged bundles |
 
 ---
 
@@ -230,6 +244,18 @@ def load_bundle(bundle_path: Path) -> LoadedBundle: ...
 def detect_bundle_type(bundle_path: Path) -> BundleType: ...
 def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields: ...
 ```
+
+### Mismatch Classifier
+
+`api_parity/mismatch_classifier.py` — Determines whether two mismatches represent the same failure pattern.
+
+Provides `mismatch_dedup_key()` for grouping duplicates and `is_same_mismatch()`/`is_same_chain_mismatch()` for comparing patterns. Used by both replay (classification) and merge (deduplication).
+
+### Bundle Merger
+
+`api_parity/bundle_merger.py` — Merges mismatch bundles from multiple explore runs into deduplicated output.
+
+Rejects replay output (detected by `replay_summary.json` presence). Groups bundles by dedup key (operation_id + mismatch_type + failing paths), keeps latest per group, copies to output preserving bundle structure. Used by the `merge` CLI command.
 
 ### Artifact Writer
 

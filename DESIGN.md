@@ -591,3 +591,21 @@ Date: 20260315
 **Decision:** After the first `generate_chains()` call discovers all chain structures via the Hypothesis state machine, cache those structures as "topologies" (operation sequences + link sources). On subsequent calls, skip the state machine entirely and regenerate only the fuzz parameter values for each step using `_generate_for_operation()` with the new seed. This is transparent to callers -- the `generate_chains()` API doesn't change.
 
 **Tradeoffs:** This assumes all discoverable chain topologies are found on the first run. In practice, different seeds could theoretically produce different topologies — `_find_status_code_with_links()` uses `random.choice()` among status codes, and different status codes may have links pointing to different target operations, producing genuinely new operation sequences. However, this requires specs where multiple status codes on the same operation link to different targets, which is uncommon. The CPU cost of re-running the full Hypothesis state machine on every seed (up to 100x) outweighs the risk of missing these rare topologies.
+
+---
+
+# Merge Deduplication: Operation + Type + Paths
+
+Keywords: merge dedup key pattern
+Date: 20260316
+
+Two bundles are "the same mismatch" when they share the same operation_id, mismatch_type, and set of failing paths. Values are excluded because they change between runs (timestamps, IDs, generated data). Requests are excluded because the same failure pattern can be triggered by different inputs. When duplicates exist, the latest bundle wins (by timestamp prefix in directory name) — newer runs reflect more recent API behavior. Chain bundles include mismatch_step in the key since the same chain failing at different steps represents different bugs.
+
+---
+
+# Merge Rejects Replay Output
+
+Keywords: merge replay input validation
+Date: 20260317
+
+Merge only accepts explore output directories. Replay output (detected by `replay_summary.json`) is rejected with a clear error. Replay re-verifies existing mismatches and writes bundles for STILL MISMATCH and DIFFERENT MISMATCH cases. If merged with explore output, these would create confusing duplicates — the same mismatch would appear twice (once from explore, once from replay) with identical dedup keys but different provenance. Merge exists to build deduplicated regression suites from explore runs. Replay exists to verify fixes. Keeping these roles separate makes the workflow unambiguous: explore to find, merge to combine, replay to verify.
