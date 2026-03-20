@@ -57,7 +57,7 @@ Findings confirmed by inspecting Schemathesis's state machine rule generation: o
 
 ## Merge Command: Aggregate Mismatch Bundles Across Runs
 
-**Status:** Not yet started.
+**Status:** Done (2026-03-16)
 
 **Date:** 2026-03-16
 

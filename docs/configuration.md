@@ -165,6 +165,25 @@ api-parity replay \
 - `STILL MISMATCH` — Same failure pattern persists
 - `DIFFERENT MISMATCH` — Fails differently (rules changed or new issue)
 
+### `api-parity merge`
+
+Combine mismatch bundles from multiple explore runs into a single deduplicated directory. Bundles with the same failure pattern (operation, mismatch type, failing paths) are deduplicated, keeping the latest.
+
+```bash
+api-parity merge \
+  --in ./run1 ./run2 ./run3 \
+  --out ./merged
+```
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `--in PATH [PATH ...]` | Yes | Input directories from explore runs (one or more) |
+| `--out PATH` | Yes | Output directory for merged bundles |
+
+Merge only accepts explore output directories. Replay output is rejected — replay is for verifying fixes, not for building regression suites. The merged output is directly replayable with `replay --in`.
+
+Writes `merge_summary.json` to the output directory with deduplication statistics (total scanned, unique patterns, kept, deduplicated, errors).
+
 ### `api-parity list-operations`
 
 Show operations from OpenAPI spec.
