@@ -10,4 +10,4 @@ For each file changed, identify any bugs, edge cases, security issues, or logic 
 
 **Output:** Number each issue sequentially (#1, #2, #3, etc.). These numbers will be referenced in later steps.
 
-When complete, read and follow `.claude/skills/branch-review-step-3.md`.
+When complete, read and follow `.claude/skills/branch-review/branch-review-step-3.md`.

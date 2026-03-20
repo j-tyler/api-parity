@@ -22,4 +22,4 @@ Form a clear understanding of the intent of the changes.
 
 **Output:** Write a "## Understanding of Change" section to the user. This is the ONLY output for this step.
 
-When complete, read and follow `.claude/skills/branch-review-step-2.md`.
+When complete, read and follow `.claude/skills/branch-review/branch-review-step-2.md`.

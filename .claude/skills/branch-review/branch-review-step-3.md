@@ -10,4 +10,4 @@ Review the changes again, this time focused on clarity and documentation.
 
 **Output:** Add to the numbered issue list from Step 2, continuing the sequence (e.g., if Step 2 ended at #5, start here at #6).
 
-When complete, read and follow `.claude/skills/branch-review-step-4.md`.
+When complete, read and follow `.claude/skills/branch-review/branch-review-step-4.md`.
