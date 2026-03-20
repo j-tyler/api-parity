@@ -1,10 +1,6 @@
----
-description: Deep dive on review findings - confirm with evidence or retract
----
+# Step 4: Double Down
 
-For each numbered item from your previous review, gather evidence by reading code and tracing logic.
-
-You wrote the code being reviewed. Some "issues" may be intentional choices you made.
+For each numbered item from your review, gather evidence by reading code and tracing logic.
 
 For each item, conclude with exactly one of:
 
@@ -18,3 +14,5 @@ For each item, conclude with exactly one of:
 - Why the code is correct
 
 No hedging. Every item gets DOUBLE DOWN or RETRACT.
+
+When complete, read and follow `.claude/skills/branch-review-step-5.md`.
