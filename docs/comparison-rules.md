@@ -107,17 +107,20 @@ Write arbitrary CEL:
 
 ## Presence Modes
 
-Control how missing fields are handled:
+Control how missing fields are handled. Presence is checked before value comparison.
 
 ```json
-{"presence": "required", "predefined": "exact_match"}
+{"presence": "parity", "predefined": "exact_match"}
 {"presence": "optional", "predefined": "iso_timestamp_format"}
+{"presence": "forbidden"}
 ```
 
 | Mode | Behavior |
 |------|----------|
-| `required` (default) | Field must exist in both responses. Missing = mismatch. |
-| `optional` | Field may be missing from either/both. Only compared if present in both. |
+| `parity` (default) | Both must have the field, or both must lack it. If both lack it, pass. If only one has it, mismatch. |
+| `required` | Field must exist in both responses. Missing from either = mismatch, even if both lack it. |
+| `forbidden` | Field must be absent from both responses. Present in either = mismatch. No value comparison. |
+| `optional` | Compare only if both have the field. If either or both lack it, pass. |
 
 ## JSONPath Syntax
 

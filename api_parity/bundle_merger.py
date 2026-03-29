@@ -82,7 +82,7 @@ def _extract_operation_id(
         # but diverge later (e.g. createOrder->getInvoice vs createOrder->getShipment)
         # produce distinct dedup keys.
         mismatch_step = diff_data.get("mismatch_step")
-        if mismatch_step is not None and mismatch_step < len(steps):
+        if mismatch_step is not None and 0 <= mismatch_step < len(steps):
             return steps[mismatch_step]["request_template"]["operation_id"]
         return steps[0]["request_template"]["operation_id"]
 

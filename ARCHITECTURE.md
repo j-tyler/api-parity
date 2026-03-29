@@ -411,14 +411,73 @@ class ChainStepExecution:
 
 ```
 mismatches/<timestamp>__<operation_id>__<case_id>/
-  case.json        # RequestCase or ChainCase
+  case.json        # RequestCase (stateless bundles)
+  chain.json       # ChainCase (chain bundles — mutually exclusive with case.json)
   target_a.json    # Response/execution from Target A
   target_b.json    # Response/execution from Target B
   diff.json        # ComparisonResult
   metadata.json    # Run context (version, targets, seed)
 ```
 
-**diff.json:** `mismatch_type` (status_code|headers|body|schema_violation), `summary`, `details` with per-component differences.
+**diff.json:** `mismatch_type` (status_code|headers|body|schema_violation), `summary`, `details` with per-component differences. Chain diffs add `"type": "chain"`, `"mismatch_step"`, and `"steps"` (per-step comparison results).
+
+### Replay Output Structure
+
+Replay writes only unresolved mismatches (STILL MISMATCH and DIFFERENT MISMATCH). FIXED bundles are not written — they represent resolved issues. This means the output directory contains only what still needs attention.
+
+```
+<output_dir>/
+  mismatches/             # Only STILL MISMATCH and DIFFERENT MISMATCH bundles
+    <timestamp>__<op>__<id>/
+      case.json or chain.json
+      target_a.json, target_b.json, diff.json, metadata.json
+  replay_summary.json     # Run statistics and classification results
+```
+
+**replay_summary.json fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp` | string | ISO 8601 UTC timestamp of replay run |
+| `tool_version` | string | api-parity version |
+| `mode` | string | Always `"replay"` |
+| `input_dir` | string | Path to input directory |
+| `interrupted` | bool | True if run was interrupted (SIGINT) |
+| `total_bundles` | int | Total bundles replayed |
+| `still_mismatch` | int | Count of STILL MISMATCH |
+| `now_match` | int | Count of FIXED |
+| `different_mismatch` | int | Count of DIFFERENT MISMATCH |
+| `errors` | int | Count of execution errors |
+| `skipped` | int | Count of bundles that failed to load |
+| `stateless_bundles` | int | Count of stateless bundles replayed |
+| `chain_bundles` | int | Count of chain bundles replayed |
+| `fixed_bundles` | list[str] | Bundle directory names classified as FIXED |
+| `persistent_bundles` | list[str] | Bundle directory names classified as STILL MISMATCH |
+| `changed_bundles` | list[str] | Bundle directory names classified as DIFFERENT MISMATCH |
+
+### Merge Output Structure
+
+Merge deduplicates bundles by failure pattern and writes winners to output. The merged output is directly replayable.
+
+```
+<output_dir>/
+  mismatches/             # Deduplicated bundles (latest per failure pattern)
+    <timestamp>__<op>__<id>/
+      case.json or chain.json
+      target_a.json, target_b.json, diff.json, metadata.json
+  merge_summary.json      # Deduplication statistics
+```
+
+**merge_summary.json fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_bundles_scanned` | int | Total bundles across all input directories |
+| `unique_patterns` | int | Distinct failure patterns found |
+| `bundles_kept` | int | Bundles written to output (= unique_patterns) |
+| `bundles_deduplicated` | int | Duplicate bundles removed |
+| `errors` | list[str] | Error messages for bundles that failed to process |
+| `input_dir_counts` | dict[str, int] | Bundle count per input directory |
 
 ---
 
@@ -442,7 +501,7 @@ JSON file referenced by runtime config.
 - Predefined: `{"predefined": "uuid_format"}` — expands to CEL at load time
 - Custom CEL: `{"expr": "a == b"}` — variables `a` (Target A) and `b` (Target B)
 
-**Presence modes:** `required` (default), `optional`, `forbidden`, `parity`
+**Presence modes:** `parity` (default), `required`, `forbidden`, `optional`
 
 **Body rules:** Only apply to 2xx JSON responses. Use `binary_rule` for non-JSON.
 
