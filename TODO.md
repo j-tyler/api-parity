@@ -133,14 +133,9 @@ Validates responses against the OpenAPI schema before comparison. See DESIGN.md 
 
 ---
 
-## Presence Modes Documentation Incomplete
+## Presence Modes Documentation Incomplete [FIXED]
 
-`docs/comparison-rules.md` "Presence Modes" section (line 108) has two problems:
-
-1. **Wrong default**: Says `required (default)` but code default is `parity` (`models.py:172`). Difference: when both targets lack a field, `parity` passes but `required` fails.
-2. **Missing modes**: Only lists `required` and `optional`. Does not document `parity` or `forbidden` modes at all.
-
-The table should list all four modes with correct default indicated.
+**Status:** Fixed (2026-03-29). Updated `docs/comparison-rules.md` to list all four modes (`parity`, `required`, `forbidden`, `optional`) with `parity` correctly marked as default.
 
 ---
 

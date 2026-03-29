@@ -25,10 +25,13 @@ def _make_comparison_result(
     mismatch_type: MismatchType | None = None,
     body_differences: list[FieldDifference] | None = None,
     header_differences: list[FieldDifference] | None = None,
+    binary_body_differences: list[FieldDifference] | None = None,
+    extra_fields_differences: list[FieldDifference] | None = None,
 ) -> ComparisonResult:
     """Build a ComparisonResult for testing.
 
     Only populates the details relevant to the mismatch_type being tested.
+    Supports all three body sub-cases: JSON body, binary body, extra fields.
     """
     body_result = ComponentResult(
         match=body_differences is None,
@@ -46,15 +49,24 @@ def _make_comparison_result(
             else []
         ),
     )
+    details: dict[str, ComponentResult] = {
+        "status_code": status_result,
+        "headers": header_result,
+        "body": body_result,
+    }
+    if binary_body_differences is not None:
+        details["binary_body"] = ComponentResult(
+            match=False, differences=binary_body_differences,
+        )
+    if extra_fields_differences is not None:
+        details["extra_fields"] = ComponentResult(
+            match=False, differences=extra_fields_differences,
+        )
     return ComparisonResult(
         match=match,
         mismatch_type=mismatch_type,
         summary="test",
-        details={
-            "status_code": status_result,
-            "headers": header_result,
-            "body": body_result,
-        },
+        details=details,
     )
 
 
@@ -347,6 +359,90 @@ class TestIsSameMismatch:
     def test_different_mismatch_type_returns_false(self):
         """Different mismatch types are never the same."""
         original_diff = {"mismatch_type": "status_code", "details": {}}
+        new_result = _make_comparison_result(
+            mismatch_type=MismatchType.BODY,
+            body_differences=[_field_diff("$.id")],
+        )
+        assert is_same_mismatch(original_diff, new_result) is False
+
+    def test_binary_body_same_paths_returns_true(self):
+        """Binary body mismatches with same paths are the same."""
+        original_diff = {
+            "mismatch_type": "body",
+            "details": {
+                "binary_body": {"differences": [{"path": "binary_body"}]},
+            },
+        }
+        new_result = _make_comparison_result(
+            mismatch_type=MismatchType.BODY,
+            binary_body_differences=[_field_diff("binary_body")],
+        )
+        assert is_same_mismatch(original_diff, new_result) is True
+
+    def test_binary_body_different_paths_returns_false(self):
+        """Binary body mismatches with different paths are not the same."""
+        original_diff = {
+            "mismatch_type": "body",
+            "details": {
+                "binary_body": {"differences": [{"path": "binary_body"}]},
+            },
+        }
+        new_result = _make_comparison_result(
+            mismatch_type=MismatchType.BODY,
+            binary_body_differences=[_field_diff("length")],
+        )
+        assert is_same_mismatch(original_diff, new_result) is False
+
+    def test_extra_fields_same_paths_returns_true(self):
+        """Extra fields mismatches with same paths are the same."""
+        original_diff = {
+            "mismatch_type": "body",
+            "details": {
+                "extra_fields": {"differences": [{"path": "$.debug"}]},
+            },
+        }
+        new_result = _make_comparison_result(
+            mismatch_type=MismatchType.BODY,
+            extra_fields_differences=[_field_diff("$.debug")],
+        )
+        assert is_same_mismatch(original_diff, new_result) is True
+
+    def test_extra_fields_different_paths_returns_false(self):
+        """Extra fields mismatches with different paths are not the same."""
+        original_diff = {
+            "mismatch_type": "body",
+            "details": {
+                "extra_fields": {"differences": [{"path": "$.debug"}]},
+            },
+        }
+        new_result = _make_comparison_result(
+            mismatch_type=MismatchType.BODY,
+            extra_fields_differences=[_field_diff("$.internal")],
+        )
+        assert is_same_mismatch(original_diff, new_result) is False
+
+    def test_binary_vs_json_body_returns_false(self):
+        """Binary body mismatch is not the same as JSON body mismatch."""
+        original_diff = {
+            "mismatch_type": "body",
+            "details": {
+                "binary_body": {"differences": [{"path": "binary_body"}]},
+            },
+        }
+        new_result = _make_comparison_result(
+            mismatch_type=MismatchType.BODY,
+            body_differences=[_field_diff("$.id")],
+        )
+        assert is_same_mismatch(original_diff, new_result) is False
+
+    def test_extra_fields_vs_json_body_returns_false(self):
+        """Extra fields mismatch is not the same as JSON body mismatch."""
+        original_diff = {
+            "mismatch_type": "body",
+            "details": {
+                "extra_fields": {"differences": [{"path": "$.debug"}]},
+            },
+        }
         new_result = _make_comparison_result(
             mismatch_type=MismatchType.BODY,
             body_differences=[_field_diff("$.id")],

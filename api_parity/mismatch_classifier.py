@@ -77,8 +77,15 @@ def mismatch_dedup_key(operation_id: str, diff_data: dict) -> tuple:
     if diff_data.get("type") == "chain":
         mismatch_step = diff_data.get("mismatch_step")
         steps = diff_data.get("steps", [])
-        if mismatch_step is not None and mismatch_step < len(steps):
+        if mismatch_step is not None and 0 <= mismatch_step < len(steps):
             step_diff = steps[mismatch_step]
+            step_mismatch_type = step_diff.get("mismatch_type", "")
+            paths = _extract_paths_from_step_diff(step_diff)
+            return ("chain", mismatch_step, operation_id, step_mismatch_type, paths)
+        # Out-of-range or missing mismatch_step: fall back to step 0's diff data,
+        # matching bundle_merger._extract_operation_id which falls back to steps[0].
+        if steps:
+            step_diff = steps[0]
             step_mismatch_type = step_diff.get("mismatch_type", "")
             paths = _extract_paths_from_step_diff(step_diff)
             return ("chain", mismatch_step, operation_id, step_mismatch_type, paths)
@@ -113,6 +120,54 @@ def mismatch_dedup_key(operation_id: str, diff_data: dict) -> tuple:
     return (operation_id, mismatch_type)
 
 
+def _extract_original_body_paths(original_diff: dict) -> set[str]:
+    """Extract failing body paths from an original diff dict (from diff.json).
+
+    Checks all three body sub-cases: JSON body, binary body, extra fields.
+    Uses the same prefixing as _extract_paths_from_step_diff so that binary
+    and extra-field paths never collide with JSON paths.
+    """
+    original_details = original_diff.get("details", {})
+
+    body = original_details.get("body", {})
+    differences = body.get("differences", [])
+    if differences:
+        return {d.get("path") for d in differences}
+
+    binary_body = original_details.get("binary_body", {})
+    binary_differences = binary_body.get("differences", [])
+    if binary_differences:
+        return {f"binary:{d.get('path', '')}" for d in binary_differences}
+
+    extra_fields = original_details.get("extra_fields", {})
+    extra_differences = extra_fields.get("differences", [])
+    if extra_differences:
+        return {f"extra:{d.get('path', '')}" for d in extra_differences}
+
+    return set()
+
+
+def _extract_new_body_paths(new_result: ComparisonResult) -> set[str]:
+    """Extract failing body paths from a ComparisonResult (live comparison).
+
+    Mirrors _extract_original_body_paths but reads from typed ComponentResult
+    objects instead of raw dicts.
+    """
+    new_body = new_result.details.get("body")
+    if new_body and new_body.differences:
+        return {d.path for d in new_body.differences}
+
+    new_binary = new_result.details.get("binary_body")
+    if new_binary and new_binary.differences:
+        return {f"binary:{d.path}" for d in new_binary.differences}
+
+    new_extra = new_result.details.get("extra_fields")
+    if new_extra and new_extra.differences:
+        return {f"extra:{d.path}" for d in new_extra.differences}
+
+    return set()
+
+
 def is_same_mismatch(original_diff: dict, new_result: ComparisonResult) -> bool:
     """Determine if two mismatches are essentially the same failure pattern.
 
@@ -133,16 +188,14 @@ def is_same_mismatch(original_diff: dict, new_result: ComparisonResult) -> bool:
     if original_type != new_type:
         return False
 
-    # For body mismatches, check if same paths failed
+    # For body mismatches, check if same paths failed.
+    # The comparator produces mismatch_type=BODY for three distinct sub-cases:
+    # JSON body (details["body"]), binary body (details["binary_body"]), and
+    # extra fields (details["extra_fields"]). We must check all three to avoid
+    # falsely classifying e.g. two different binary mismatches as STILL MISMATCH.
     if original_type == "body":
-        original_details = original_diff.get("details", {})
-        original_body = original_details.get("body", {})
-        original_differences = original_body.get("differences", [])
-        original_paths = {d.get("path") for d in original_differences}
-
-        new_body = new_result.details.get("body")
-        new_paths = {d.path for d in new_body.differences} if new_body else set()
-
+        original_paths = _extract_original_body_paths(original_diff)
+        new_paths = _extract_new_body_paths(new_result)
         return original_paths == new_paths
 
     # For header mismatches, check if same header names failed
@@ -178,7 +231,7 @@ def is_same_chain_mismatch(
 
     # Get original step diff
     original_steps = original_diff.get("steps", [])
-    if original_mismatch_step is None or original_mismatch_step >= len(original_steps):
+    if original_mismatch_step is None or not (0 <= original_mismatch_step < len(original_steps)):
         return False
 
     original_step_diff = original_steps[original_mismatch_step]
