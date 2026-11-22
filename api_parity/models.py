@@ -13,7 +13,7 @@ from typing import Any
 
 from typing_extensions import Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 
 # =============================================================================
@@ -38,6 +38,9 @@ class RequestCase(BaseModel):
     path_parameters: dict[str, Any] = Field(
         default_factory=dict, description="Parameter values, e.g., {'id': 'abc123'}"
     )
+    # During a chain, retain URI syntax for later $request.path links. The
+    # decoded parameter alone cannot distinguish a slash from an escaped %2F.
+    _uri_path_references: dict[str, str] = PrivateAttr(default_factory=dict)
     rendered_path: str = Field(description="Fully rendered path")
     query: dict[str, list[str]] = Field(
         default_factory=dict, description="Query parameters (arrays for repeated params)"

@@ -19,7 +19,7 @@ def _quote_segment(value: str) -> str:
     return quote(value, safe="", errors="surrogateescape")
 
 
-def _quote_location_segment(segment: str) -> str:
+def _quote_uri_segment(segment: str) -> str:
     if segment in (".", ".."):
         return _quote_segment(segment)
     # RFC 3986 path characters and existing escapes in a URI reference already
@@ -28,14 +28,14 @@ def _quote_location_segment(segment: str) -> str:
     return quote(segment, safe="%!$&'()*+,;=:@", errors="surrogateescape")
 
 
-def render_path(template: str, values: dict[str, Any], location_paths: dict[str, str] | None = None) -> str:
+def render_path(template: str, values: dict[str, Any], uri_paths: dict[str, str] | None = None) -> str:
     """Interpolate logical parameter values exactly once, leaving literal template text intact."""
     def replace(match: re.Match) -> str:
         name = match.group(1)
         if name not in values:
             return match.group()
-        if location_paths and name in location_paths:
-            return "/".join(_quote_location_segment(part) for part in location_paths[name].split("/"))
+        if uri_paths and name in uri_paths:
+            return "/".join(_quote_uri_segment(part) for part in uri_paths[name].split("/"))
         return _quote_segment(str(values[name]))
 
     return _PLACEHOLDER.sub(replace, template)

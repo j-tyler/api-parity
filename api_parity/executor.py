@@ -324,8 +324,9 @@ class Executor:
             # parameters belong to their source, and resolved values are literal.
             request_a = self._apply_variables(step.request_template, extracted_vars_a, linked_parameters)
             request_b = self._apply_variables(step.request_template, extracted_vars_b, linked_parameters)
-            request_a = self._apply_link_overrides(request_a, overrides_a, linked_parameters)
-            request_b = self._apply_link_overrides(request_b, overrides_b, linked_parameters)
+            if linked_parameters:
+                request_a = self._apply_link_overrides(request_a, overrides_a, linked_parameters, source_a.request)
+                request_b = self._apply_link_overrides(request_b, overrides_b, linked_parameters, source_b.request)
 
             timeout = self._get_timeout(request_a.operation_id)
 
@@ -692,6 +693,7 @@ class Executor:
         template: RequestCase,
         overrides: dict[str, Any],
         expressions: dict[str, str] | None = None,
+        source_request: RequestCase | None = None,
     ) -> RequestCase:
         """Override request template parameters with link-resolved values.
 
@@ -699,11 +701,6 @@ class Executor:
         prior step responses. This is the key step that makes stateful chains
         work: instead of sending random UUIDs as path parameters, we send the
         actual resource IDs from prior create/update responses.
-
-        For path parameters sourced from Location, leading slashes are stripped because Location
-        headers often return paths like "/resourceId" — the leading slash is
-        the URL separator, not part of the value, and causes double-slashes
-        in rendered paths like "//resourceId/subResource".
 
         Args:
             template: Request template with fuzz-generated values.
@@ -717,17 +714,26 @@ class Executor:
 
         request_dict = template.model_dump()
 
-        location_paths = {}
+        uri_paths = {}
         for param_name, value in overrides.items():
             str_value = self._variable_to_string(value)
 
             if param_name in request_dict.get("path_parameters", {}):
                 expression = (expressions or {}).get(param_name, "")
-                if re.fullmatch(r"\$(?:request|response)\.header\.location(?:\[\d+\])?", expression, re.I):
-                    # Location already contains URI path separators and percent escapes.
-                    str_value = str_value.lstrip("/")
-                    location_paths[param_name] = str_value
-                    str_value = decode_path_value(str_value)
+                path_source = _LINK_EXPR_REQUEST_PATH.fullmatch(expression)
+                if path_source and source_request is not None:
+                    # An ordinary source segment may decode to a leading slash.
+                    # Forward its original interpretation along with the value.
+                    reference = source_request._uri_path_references.get(path_source.group(1))
+                elif str_value.startswith("/") or re.fullmatch(
+                    r"\$(?:request|response)\.header\.(?:content-)?location(?:\[\d+\])?", expression, re.I
+                ):
+                    reference = str_value.lstrip("/")
+                else:
+                    reference = None
+                if reference is not None:
+                    uri_paths[param_name] = reference
+                    str_value = decode_path_value(reference)
                 request_dict["path_parameters"][param_name] = str_value
             elif param_name in request_dict.get("query", {}):
                 request_dict["query"][param_name] = [str_value]
@@ -739,9 +745,10 @@ class Executor:
                         request_dict["headers"][hdr_key] = [str_value]
                         break
 
-        request_dict["rendered_path"] = render_path(template.path_template, request_dict["path_parameters"], location_paths)
-
-        return RequestCase.model_validate(request_dict)
+        request_dict["rendered_path"] = render_path(template.path_template, request_dict["path_parameters"], uri_paths)
+        request = RequestCase.model_validate(request_dict)
+        request._uri_path_references = uri_paths
+        return request
 
     def _get_timeout(self, operation_id: str) -> float:
         """Get timeout for an operation."""

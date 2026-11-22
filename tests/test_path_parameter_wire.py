@@ -41,7 +41,7 @@ def test_generated_path_escapes_once(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(("source", "value", "expected"), [
     ("$response.body#/id", "a#b", b"a%23b"),
-    ("$response.body#/id", "/a?b+c %2F/{other}", b"%2Fa%3Fb%2Bc%20%252F%2F%7Bother%7D"),
+    ("$response.body#/id", "a?b+c %2F/{other}", b"a%3Fb%2Bc%20%252F%2F%7Bother%7D"),
     ("$response.body#/id", "..", b"%2E%2E"),
     ("$response.header.Location", "/tenants/a%2Fb/widgets;v=2", b"tenants/a%2Fb/widgets;v=2"),
 ])
@@ -68,3 +68,42 @@ def test_linked_and_substituted_targets(monkeypatch, source, value, expected):
     with capture_targets(monkeypatch, handle, fields) as executor:
         executor.execute_chain(ChainCase(chain_id="linked", steps=steps))
     assert received == [b"/widgets/" + expected + b";view=prefix-x%23%252F/details?q=ok"] * 2
+
+
+@pytest.mark.parametrize(("source", "value", "expected"), [
+    ("$response.header.Location", "/tenants/a%2Fb/widgets;v=2", "tenants/a%2Fb/widgets;v=2"),
+    ("$response.header.Content-Location", "tenants/a%2Fb", "tenants/a%2Fb"),
+    ("$response.body#/links/self", "/tenants/a%2Fb", "tenants/a%2Fb"),
+    ("$response.body#/id", "/42", "42"),
+    ("$response.body#/id", "team/42%2F", "team%2F42%252F"),
+])
+def test_forwarded_request_path_reuses_each_targets_resource(monkeypatch, source, value, expected):
+    def step(index, operation, method, path, parameters, link=None):
+        request = RequestCase(case_id=operation, operation_id=operation, method=method,
+                              path_template=path, path_parameters=parameters, rendered_path=path)
+        return ChainStep(step_index=index, request_template=request, link_source=link)
+
+    chain = ChainCase(chain_id="forward", steps=[
+        step(0, "create", "POST", "/create", {}),
+        step(1, "read", "GET", "/{id}", {"id": "seed"},
+             {"source_operation": "create", "parameters": {"id": source}}),
+        step(2, "delete", "DELETE", "/{other}", {"other": "seed"},
+             {"source_operation": "read", "parameters": {"other": "$request.path.id"}}),
+    ])
+    received = []
+
+    def handle(request):
+        host = request.url.host
+        if request.method == "POST":
+            resource = value + "-" + host
+            return httpx.Response(201, json={"id": resource, "links": {"self": resource}},
+                                  headers={"Location": resource, "Content-Location": resource})
+        received.append((host, request.method, request.url.raw_path))
+        return httpx.Response(200)
+
+    fields = LinkFields(body_pointers={"id", "links/self"}, headers=[
+        HeaderRef("location", "Location"), HeaderRef("content-location", "Content-Location")])
+    with capture_targets(monkeypatch, handle, fields) as executor:
+        executor.execute_chain(chain)
+    assert received == [(host, method, f"/{expected}-{host}".encode())
+                        for method in ("GET", "DELETE") for host in ("a", "b")]

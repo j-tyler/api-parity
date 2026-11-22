@@ -143,6 +143,8 @@ Link field references are parsed from the OpenAPI spec at init. `LinkFields` con
 
 `api_parity/executor.py` — Sends requests and captures responses.
 
+`api_parity/path_rendering.py` renders path templates. Generated templates store serialized path parameters. Executed chain requests record their decoded logical values in `path_parameters` and the actual encoded path in `rendered_path`. For URI references the executor also retains the original separators and escapes in memory, so later links to that parameter address the same resource. Replay reconstructs this information by executing the chain template.
+
 ```python
 class Executor:
     def __init__(
