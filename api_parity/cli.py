@@ -2042,6 +2042,7 @@ def run_explore(args: ExploreArgs) -> int:
         print(f"  Matches:    {stats.chain_matches}")
         print(f"  Mismatches: {stats.chain_mismatches}")
         print(f"  Errors:     {stats.chain_errors}")
+        print(f"  Incomplete: {stats.chain_incomplete}")
     else:
         print(f"Total cases: {stats.total_cases}")
         print(f"  Matches:    {stats.matches}")
@@ -2112,16 +2113,12 @@ def _run_stateless_explore(
             progress_reporter.increment()
 
 
-def _require_complete_chain(chain: ChainCase, compared: int) -> None:
-    """A matching prefix is inconclusive if the executor could not follow a link."""
-    if compared < len(chain.steps):
-        from api_parity.executor import RequestError
-
-        next_op = chain.steps[compared].request_template.operation_id
-        raise RequestError(
-            f"Incomplete chain: compared {compared}/{len(chain.steps)} steps. "
-            f"Step {compared} ({next_op}) could not resolve link parameters on either target."
-        )
+def _incomplete_chain_message(chain: ChainCase, compared: int) -> str:
+    step = chain.steps[compared]
+    parameters = (step.link_source or {}).get("parameters", {})
+    return (f"compared {compared}/{len(chain.steps)} steps. Step {compared} "
+            f"({step.request_template.operation_id}): no link parameter resolved "
+            f"for either target. Parameters: {parameters!r}")
 
 
 def _run_stateful_explore(
@@ -2245,8 +2242,8 @@ def _run_stateful_explore(
                     print(f"    ... and {len(sorted_below) - 5} more")
     print()
 
-    # Backfill operations that never produced a pair of live responses.
-    operations_covered_by_chains: set[str] = set()
+    # Backfill only operations missed during chain generation.
+    operations_covered_by_chains = set(gen_result.operations_covered)
 
     # Start the progress reporter now that chain generation is complete.
     # set_total() first so the very first progress line shows a percentage,
@@ -2258,6 +2255,7 @@ def _run_stateful_explore(
     # Track chains and outcomes for --log-chains
     executed_chains: list = []
     chain_outcomes: list[str] = []
+    compared_counts: list[int] = []
 
     for chain in chains:
         stats.total_chains += 1
@@ -2283,7 +2281,6 @@ def _run_stateful_explore(
                 step_idx = len(step_diffs)
                 op_id = chain.steps[step_idx].request_template.operation_id
                 step_ops.append(op_id)
-                operations_covered_by_chains.add(op_id)
 
                 rules = get_operation_rules(comparison_rules, op_id)
                 result = comparator.compare(response_a, response_b, rules, op_id)
@@ -2298,8 +2295,11 @@ def _run_stateful_explore(
             execution_a, execution_b = executor.execute_chain(chain, on_step=on_step)
 
             # Determine overall result
-            if not mismatch_found:
-                _require_complete_chain(chain, len(step_diffs))
+            if not mismatch_found and len(step_diffs) < len(chain.steps):
+                stats.chain_incomplete += 1
+                print(f"  INCOMPLETE: {_incomplete_chain_message(chain, len(step_diffs))}")
+                chain_outcomes.append("incomplete")
+            elif not mismatch_found:
                 stats.chain_matches += 1
                 print("  MATCH (all steps)")
                 chain_outcomes.append("match")
@@ -2329,7 +2329,8 @@ def _run_stateful_explore(
             chain_outcomes.append("error")
 
         if log_chains:
-            executed_chains.append(chain.model_copy(update={"steps": chain.steps[:len(step_diffs)]}))
+            executed_chains.append(chain)
+            compared_counts.append(len(step_diffs))
 
         # Update progress reporter
         if progress_reporter is not None:
@@ -2340,6 +2341,7 @@ def _run_stateful_explore(
         chains_path = writer.write_chains_log(
             chains=executed_chains,
             outcomes=chain_outcomes,
+            compared_counts=compared_counts,
             max_chains=max_chains,
             max_steps=max_steps,
         )
@@ -2692,6 +2694,8 @@ def run_replay(args: ReplayArgs) -> int:
     print(f"  Still mismatch:        {stats.still_mismatch}")
     print(f"  Different mismatch:    {stats.different_mismatch}")
     print(f"  Errors:                {stats.errors}")
+    if stats.incomplete_bundles:
+        print(f"  Incomplete:            {len(stats.incomplete_bundles)}")
     if stats.skipped > 0:
         print(f"  Skipped:               {stats.skipped}")
     print(f"Summary written to: {args.out / 'replay_summary.json'}")
@@ -2865,10 +2869,18 @@ def _replay_chain_bundle(
 
         # Classify outcome
         if not mismatch_found:
-            _require_complete_chain(chain, len(step_diffs))
+            note = "all steps"
+            if len(step_diffs) < len(chain.steps):
+                message = _incomplete_chain_message(chain, len(step_diffs))
+                original_step = bundle.original_diff.get("mismatch_step")
+                if not isinstance(original_step, int) or not 0 <= original_step < len(step_diffs):
+                    stats.incomplete_bundles.append(bundle.bundle_path.name)
+                    print(f"  INCOMPLETE: {bundle.bundle_path.name}: {message}")
+                    return
+                note = f"original mismatch at step {original_step} passed; {message}"
             stats.now_match += 1
             stats.fixed_bundles.append(bundle.bundle_path.name)
-            print("  FIXED (all steps)")
+            print(f"  FIXED ({note})")
         elif is_same_chain_mismatch(bundle.original_diff, step_diffs):
             stats.still_mismatch += 1
             stats.persistent_bundles.append(bundle.bundle_path.name)

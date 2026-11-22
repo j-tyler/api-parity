@@ -625,3 +625,18 @@ Keywords: merge replay input validation
 Date: 20260317
 
 Merge only accepts explore output directories. Replay output (detected by `replay_summary.json`) is rejected with a clear error. Replay re-verifies existing mismatches and writes bundles for STILL MISMATCH and DIFFERENT MISMATCH cases. If merged with explore output, these would create confusing duplicates — the same mismatch would appear twice (once from explore, once from replay) with identical dedup keys but different provenance. Merge exists to build deduplicated regression suites from explore runs. Replay exists to verify fixes. Keeping these roles separate makes the workflow unambiguous: explore to find, merge to combine, replay to verify.
+
+
+## Blocked chain links during explore and replay
+
+Explore measures agreement across the planned chain. If neither target resolves
+any parameter of a required link, the compared prefix alone cannot establish a
+chain match. Count this as incomplete. A transport exception still counts as an
+error. The chain log preserves the plan and identifies steps that were compared.
+Coverage backfill is based on generated chains, so a blocked execution does not
+schedule extra standalone requests.
+
+Replay verifies the saved failing step and continues to check reachable steps.
+A blocked link before that comparison leaves the bundle inconclusive. After
+the saved step passes, a blocked tail can be reported alongside the verified
+fix. A new mismatch on a reachable step takes precedence.

@@ -137,9 +137,11 @@ api-parity merge \
 
 **Replay classifications:** `FIXED` (now matches), `STILL MISMATCH` (same failure), `DIFFERENT MISMATCH` (fails differently)
 
-If neither target supplies the link values needed for the next step, explore and
-replay count the incomplete chain as an error and identify the first unexecuted
-operation. A mismatch observed before the chain stops is still reported.
+If a link cannot be resolved for either target, explore counts the chain in
+`chain_incomplete`. Replay reports `INCOMPLETE` and names the bundle in
+`incomplete_bundles` if it stopped before comparing the saved failing step.
+If that step now passes and a later link blocks, replay reports `FIXED` and
+identifies the unexecuted step. A later observed mismatch is still reported.
 
 Replay uses the schema saved in each bundle. Pass `--spec corrected.yaml` to
 apply one contract to the entire input suite, including older bundles. Explore
