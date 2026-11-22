@@ -132,7 +132,7 @@ api-parity merge \
 | `--target-b NAME` | Second target name (required) |
 | `--in PATH` | Input directory with bundles (required) |
 | `--out PATH` | Output directory (required) |
-| `--spec PATH` | Use this OpenAPI spec for every input bundle, including legacy bundles (optional) |
+| `--spec PATH` | Use this OpenAPI spec for every input bundle (optional) |
 | `--validate` | Validate config without executing |
 
 **Replay classifications:** `FIXED` (now matches), `STILL MISMATCH` (same failure), `DIFFERENT MISMATCH` (fails differently)
@@ -143,11 +143,7 @@ and replay omit the spec from artifacts when `secrets.redact_fields` is configur
 since it can contain sensitive examples or validation constraints. For these
 runs, supply the spec externally with `--spec`.
 
-With neither a snapshot nor an explicit spec, replay still sends requests and
-reports mismatches found by the current rules. If the rules pass and the original
-failure required schema validation or extra-field comparison, replay lists the
-bundle in `replay_summary.json` under `unverifiable_bundles`, increments
-`errors`, and exits with status 1. Supply `--spec` to verify those bundles.
+If a bundle has no snapshot, supply its schema with `replay --spec PATH`.
 
 ### merge
 

@@ -86,7 +86,6 @@ class ReplayStats:
     fixed_bundles: list[str] = field(default_factory=list)
     persistent_bundles: list[str] = field(default_factory=list)
     changed_bundles: list[str] = field(default_factory=list)
-    unverifiable_bundles: list[str] = field(default_factory=list)
 
     # Set to True if run was interrupted (SIGINT)
     interrupted: bool = False
@@ -421,7 +420,6 @@ class ArtifactWriter:
             "fixed_bundles": stats.fixed_bundles,
             "persistent_bundles": stats.persistent_bundles,
             "changed_bundles": stats.changed_bundles,
-            "unverifiable_bundles": stats.unverifiable_bundles,
         }
         self._write_json(self._output_dir / "replay_summary.json", summary)
 

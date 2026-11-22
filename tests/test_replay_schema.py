@@ -63,14 +63,14 @@ def request(case_id="case"):
                        path_template="/items", rendered_path="/items")
 
 
-def make_bundle(out, spec, bodies, chain=False, legacy=False, case_id="case"):
+def make_bundle(out, spec, bodies, chain=False, case_id="case"):
     responses = [ResponseCase(status_code=200, body=b, elapsed_ms=1) for b in bodies]
     with CELEvaluator() as cel:
         diff = Comparator(cel, load_comparison_library(), SchemaValidator(spec)).compare(
             *responses, OperationRules(), "getItems",
         )
     assert not diff.match
-    writer = ArtifactWriter(out, spec_path=None if legacy else spec)
+    writer = ArtifactWriter(out, spec_path=spec)
     info = TargetInfo(name="test", base_url="http://test")
     case = request(case_id)
     if not chain:
@@ -82,12 +82,12 @@ def make_bundle(out, spec, bodies, chain=False, legacy=False, case_id="case"):
     return writer.write_chain_mismatch(chain_case, *executions, [diff], 0, info, info)
 
 
-def replay(config, source, out, *flags, expected_exit=0):
+def replay(config, source, out, *flags):
     result = dispatch(parse_args([
         "replay", "--config", str(config), "--target-a", "a", "--target-b", "b",
         "--in", str(source), "--out", str(out), *flags,
     ]))
-    assert result == expected_exit
+    assert result == 0
     return json.loads((out / "replay_summary.json").read_text())
 
 
@@ -131,46 +131,20 @@ def test_schema_and_extra_field_failures_survive_replay(tmp_path, replay_env, ch
     assert replay(config, source, tmp_path / "fixed")["now_match"] == 1
 
 
-@pytest.mark.parametrize("chain", [False, True])
-@pytest.mark.parametrize("extra_fields", [False, True])
-def test_legacy_schema_failures_are_unverifiable_until_spec_supplied(
-    tmp_path, replay_env, chain, extra_fields,
-):
-    config, bodies, send = replay_env
-    if extra_fields:
-        bodies[:] = [{"id": 1, "extra": "a"}, {"id": 1, "extra": "b"}]
-    spec = write_spec(tmp_path / "spec.json")
-    source = tmp_path / "explore"
-    bundle = make_bundle(source, spec, bodies, chain=chain, legacy=True)
-    assert load_bundle(bundle).schema_validator is None
-    result = replay(config, source, tmp_path / "replay", expected_exit=1)
-    assert result["errors"] == 1
-    assert result["unverifiable_bundles"] == [bundle.name]
-    assert result["now_match"] == 0
-    assert send.call_count == 2
-    assert replay(config, source, tmp_path / "recovered", "--spec", str(spec))["still_mismatch"] == 1
-
-
-def test_merged_bundles_use_their_own_contracts_and_legacy_still_loads(tmp_path, replay_env):
+def test_merged_bundles_use_their_own_contracts(tmp_path, replay_env):
     config, bodies, _ = replay_env
     integer_spec = write_spec(tmp_path / "integer.json")
     string_spec = write_spec(tmp_path / "string.json", "string")
-    first, second, legacy = (tmp_path / name for name in ("first", "second", "legacy"))
+    first, second = tmp_path / "first", tmp_path / "second"
     make_bundle(first, integer_spec, bodies, case_id="integer")
     # Use an extra-field failure so merge preserves both patterns for the same operation.
     make_bundle(second, string_spec, [{"id": "x", "extra": 1}, {"id": "x", "extra": 2}], case_id="string")
-    legacy_path = make_bundle(legacy, integer_spec, bodies, legacy=True, case_id="legacy")
-    # A historical status failure still replays without a schema snapshot.
-    diff_path = legacy_path / "diff.json"
-    diff = json.loads(diff_path.read_text())
-    diff.update(mismatch_type="status_code", details={})
-    diff_path.write_text(json.dumps(diff))
     merged = tmp_path / "merged"
-    merge_bundles([first, second, legacy], merged)
+    merge_bundles([first, second], merged)
     result = replay(config, merged, tmp_path / "replay")
-    assert result["total_bundles"] == 3
+    assert result["total_bundles"] == 2
     assert result["still_mismatch"] == 1  # integer contract still rejects strings
-    assert result["now_match"] == 2  # string contract and legacy status test pass
+    assert result["now_match"] == 1  # string contract accepts the current responses
     assert result["errors"] == 0
 
 
@@ -189,7 +163,7 @@ def test_corrupt_snapshot_is_not_silently_ignored(tmp_path, replay_env, content)
     ])) == 1
 
 
-def test_repeated_merge_does_not_attach_stale_schema_to_legacy_bundle(tmp_path, replay_env):
+def test_repeated_merge_removes_stale_snapshot(tmp_path, replay_env):
     _, bodies, _ = replay_env
     spec = write_spec(tmp_path / "spec.json")
     source, merged = tmp_path / "source", tmp_path / "merged"
@@ -197,7 +171,7 @@ def test_repeated_merge_does_not_attach_stale_schema_to_legacy_bundle(tmp_path, 
     merge_bundles([source], merged)
     (bundle / BUNDLE_SPEC_FILENAME).unlink()
     merge_bundles([source], merged)
-    assert load_bundle(discover_bundles(merged)[0]).schema_validator is None
+    assert not (discover_bundles(merged)[0] / BUNDLE_SPEC_FILENAME).exists()
 
 
 @pytest.mark.parametrize("suffix", [".yaml", ".yml"])
@@ -246,20 +220,6 @@ def test_ambiguous_snapshot_is_rejected(tmp_path, replay_env):
 
 
 @pytest.mark.parametrize("chain", [False, True])
-def test_legacy_rule_failure_is_reported(tmp_path, replay_env, chain):
-    config, bodies, _ = replay_env
-    spec = write_spec(tmp_path / "spec.json")
-    make_bundle(tmp_path / "source", spec, bodies, chain=chain, legacy=True)
-    (tmp_path / "rules.json").write_text(json.dumps({"default_rules": {
-        "body": {"field_rules": {"$.id": {"predefined": "exact_match"}}},
-    }}))
-    bodies[1] = {"id": 5}
-    result = replay(config, tmp_path / "source", tmp_path / "out")
-    assert result["different_mismatch"] == 1
-    assert result["errors"] == 0
-
-
-@pytest.mark.parametrize("chain", [False, True])
 def test_changed_violation_path_and_spec_override(tmp_path, replay_env, chain):
     config, bodies, _ = replay_env
     spec = write_spec(tmp_path / "spec.json")
@@ -282,8 +242,8 @@ def test_redacted_run_keeps_sensitive_spec_external(tmp_path, replay_env):
     document = json.loads(spec.read_bytes())
     document["components"]["schemas"]["Item"]["example"] = {"password": "example-secret"}
     spec.write_text(json.dumps(document))
-    source = tmp_path / "legacy"
-    make_bundle(source, spec, bodies, legacy=True)
+    source = tmp_path / "source"
+    make_bundle(source, spec, bodies)
     settings = json.loads(config.read_bytes())
     settings["secrets"] = {"redact_fields": ["$..password"]}
     config.write_text(json.dumps(settings))
@@ -292,6 +252,12 @@ def test_redacted_run_keeps_sensitive_spec_external(tmp_path, replay_env):
     bundle = discover_bundles(out)[0]
     assert not (bundle / "openapi.json").exists()
     assert all(b"example-secret" not in path.read_bytes() for path in bundle.iterdir())
+    with pytest.raises(BundleLoadError, match="replay --spec"):
+        load_bundle(bundle)
+    for flags in ([], ["--validate"]):
+        assert dispatch(parse_args(["replay", "--config", str(config), "--in", str(out),
+                                    "--out", str(tmp_path / "missing"), "--target-a", "a",
+                                    "--target-b", "b", *flags])) == 1
     bodies[:] = [{"id": 1}] * 2
     assert replay(config, out, tmp_path / "fixed", "--spec", str(spec))["now_match"] == 1
 

@@ -51,16 +51,14 @@ disk space but makes moved bundles and merged suites self-contained. A run
 shares one validator per distinct snapshot format and content digest.
 
 An explicit `replay --spec` takes precedence for every bundle so teams can
-verify a corrected contract or replay historical suites. Unresolved output
+verify a corrected contract. Unresolved output
 carries the effective contract for subsequent runs. When artifact redaction is
 configured, keep the spec external: examples, defaults, and even validation
 constraints can contain sensitive values. Editing those constraints would
 change what replay validates.
 
-Legacy failures still execute against both targets. Rule mismatches remain
-reportable without a schema. When all rules pass but the original failure
-depended on a missing schema, record an unverifiable error and return a nonzero
-exit status. An explicit spec makes that result verifiable.
+All bundles use the same schema-based comparison and classification. A missing
+schema is an input error with guidance to supply `--spec`.
 
 ---
 

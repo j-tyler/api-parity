@@ -59,9 +59,7 @@ class LoadedBundle:
     original_diff: dict[str, Any]
     # Metadata for context
     metadata: MismatchMetadata
-    # Absent in legacy bundles. Each bundle owns its contract, since merge
-    # can combine runs made against different specifications.
-    schema_validator: SchemaValidator | None = None
+    schema_validator: SchemaValidator
 
 
 def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
@@ -314,18 +312,19 @@ def load_bundle(
                       if (bundle_path / name).exists()]
         if len(spec_paths) > 1:
             raise BundleLoadError("Bundle contains both openapi.json and openapi.yaml; keep only the original contract")
-        if spec_paths:
-            spec_path = spec_paths[0]
-            try:
-                raw = spec_path.read_bytes()
-                key = (spec_path.suffix, hashlib.sha256(raw).digest())
-                schema_validator = schema_cache.get(key) if schema_cache is not None else None
-                if schema_validator is None:
-                    schema_validator = SchemaValidator(spec_path, source_bytes=raw)
-                    if schema_cache is not None:
-                        schema_cache[key] = schema_validator
-            except Exception as e:
-                raise BundleLoadError(f"Invalid {spec_path.name}: {e}") from e
+        if not spec_paths:
+            raise BundleLoadError("Missing OpenAPI snapshot. Supply the schema with replay --spec PATH.")
+        spec_path = spec_paths[0]
+        try:
+            raw = spec_path.read_bytes()
+            key = (spec_path.suffix, hashlib.sha256(raw).digest())
+            schema_validator = schema_cache.get(key) if schema_cache is not None else None
+            if schema_validator is None:
+                schema_validator = SchemaValidator(spec_path, source_bytes=raw)
+                if schema_cache is not None:
+                    schema_cache[key] = schema_validator
+        except Exception as e:
+            raise BundleLoadError(f"Invalid {spec_path.name}: {e}") from e
 
     return LoadedBundle(
         bundle_path=bundle_path,

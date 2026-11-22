@@ -2587,7 +2587,7 @@ def run_replay(args: ReplayArgs) -> int:
 
     if not loaded_bundles:
         print("No valid bundles to replay")
-        return 0
+        return 1
 
     # Initialize components
     stats = ReplayStats()
@@ -2633,7 +2633,7 @@ def run_replay(args: ReplayArgs) -> int:
             # Replay each pre-loaded bundle
             for bundle in loaded_bundles:
                 # Merged inputs can have different schemas. Never reuse one
-                # bundle's validator for another, including legacy bundles.
+                # bundle's validator for another, including bundles from different runs.
                 comparator = Comparator(
                     cel_evaluator, comparison_library, bundle.schema_validator
                 )
@@ -2687,25 +2687,7 @@ def run_replay(args: ReplayArgs) -> int:
         for name in stats.fixed_bundles:
             print(f"  {name}")
 
-    return 1 if stats.unverifiable_bundles else 0
-
-
-def _record_replay_match(bundle, stats) -> bool:
-    """Record the classification and return whether a fix was verified."""
-    steps = bundle.original_diff.get("steps", [bundle.original_diff])
-    if bundle.schema_validator is None and any(
-        step.get("mismatch_type") == "schema_violation"
-        or step.get("details", {}).get("extra_fields", {}).get("differences")
-        for step in steps
-    ):
-        stats.errors += 1
-        stats.unverifiable_bundles.append(bundle.bundle_path.name)
-        print(f"UNVERIFIABLE: {bundle.bundle_path.name} - rules matched, "
-              "but the original schema check requires replay --spec")
-        return False
-    stats.now_match += 1
-    stats.fixed_bundles.append(bundle.bundle_path.name)
-    return True
+    return 0
 
 
 def _replay_loaded_bundle(
@@ -2785,8 +2767,9 @@ def _replay_stateless_bundle(
 
         # Classify outcome
         if result.match:
-            if _record_replay_match(bundle, stats):
-                print("FIXED")
+            stats.now_match += 1
+            stats.fixed_bundles.append(bundle.bundle_path.name)
+            print("FIXED")
         elif is_same_mismatch(bundle.original_diff, result):
             stats.still_mismatch += 1
             stats.persistent_bundles.append(bundle.bundle_path.name)
@@ -2868,8 +2851,9 @@ def _replay_chain_bundle(
 
         # Classify outcome
         if not mismatch_found:
-            if _record_replay_match(bundle, stats):
-                print("  FIXED (all steps)")
+            stats.now_match += 1
+            stats.fixed_bundles.append(bundle.bundle_path.name)
+            print("  FIXED (all steps)")
         elif is_same_chain_mismatch(bundle.original_diff, step_diffs):
             stats.still_mismatch += 1
             stats.persistent_bundles.append(bundle.bundle_path.name)

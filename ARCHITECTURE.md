@@ -433,10 +433,7 @@ reuses the bytes already parsed. Unresolved outputs carry the effective spec
 unless artifact redaction is configured. Malformed or ambiguous snapshots
 are load errors when a snapshot is the selected contract.
 
-Bundles without a contract execute their configured rules. If those pass but
-the original failure required schema validation or extra-field comparison,
-replay records the name in `unverifiable_bundles`, increments `errors`, and
-returns exit code 1. Other legacy classifications follow the existing rules.
+Replay requires a schema for each bundle. Supply `--spec` for bundles without a snapshot.
 
 ```
 <output_dir>/

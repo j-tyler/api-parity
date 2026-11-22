@@ -195,7 +195,7 @@ def merge_bundles(input_dirs: list[Path], output_dir: Path) -> MergeSummary:
             # dirs_exist_ok=True allows re-running merge into the same
             # output directory without FileExistsError. Previous winners
             # are overwritten with fresh copies.
-            # Re-merging a legacy bundle must not retain a schema snapshot
+            # Re-merging a redacted bundle must not retain a schema snapshot
             # left by an earlier version of a bundle with the same name.
             for name in BUNDLE_SPEC_FILENAMES:
                 if not (bundle_info.path / name).exists():

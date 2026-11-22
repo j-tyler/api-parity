@@ -175,6 +175,7 @@ def stateless_bundle_dir(tmp_path, sample_request_case, sample_stateless_diff, s
     """Create a complete stateless bundle directory."""
     bundle_dir = tmp_path / "mismatches" / "20240115T103000__getWidget__test-cas"
     bundle_dir.mkdir(parents=True)
+    (bundle_dir / "openapi.json").write_text(json.dumps({"paths": {}}))
 
     (bundle_dir / "case.json").write_text(json.dumps(sample_request_case))
     (bundle_dir / "diff.json").write_text(json.dumps(sample_stateless_diff))
@@ -189,6 +190,7 @@ def chain_bundle_dir(tmp_path, sample_chain_case, sample_chain_diff, sample_meta
     """Create a complete chain bundle directory."""
     bundle_dir = tmp_path / "mismatches" / "20240115T103000__chain__createWidget__chain-00"
     bundle_dir.mkdir(parents=True)
+    (bundle_dir / "openapi.json").write_text(json.dumps({"paths": {}}))
 
     (bundle_dir / "chain.json").write_text(json.dumps(sample_chain_case))
     (bundle_dir / "diff.json").write_text(json.dumps(sample_chain_diff))
