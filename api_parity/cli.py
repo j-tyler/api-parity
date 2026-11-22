@@ -594,7 +594,7 @@ def parse_graph_chains_args(namespace: argparse.Namespace) -> GraphChainsArgs:
         generated=namespace.generated,
         max_chains=namespace.max_chains,
         max_steps=namespace.max_steps,
-        max_seeds=namespace.max_seeds,
+        max_seeds=getattr(namespace, "max_seeds", None),
         seed=namespace.seed,
     )
 
@@ -630,7 +630,7 @@ def parse_explore_args(namespace: argparse.Namespace) -> ExploreArgs:
         stateful=namespace.stateful,
         max_chains=namespace.max_chains,
         max_steps=namespace.max_steps,
-        max_seeds=namespace.max_seeds,
+        max_seeds=getattr(namespace, "max_seeds", None),
         log_chains=namespace.log_chains,
         ensure_coverage=namespace.ensure_coverage,
         min_hits_per_op=namespace.min_hits_per_op,
