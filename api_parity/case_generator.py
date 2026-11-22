@@ -791,7 +791,8 @@ class CaseGenerator:
         Args:
             max_chains: Maximum number of chains to generate (default 20).
             max_steps: Maximum steps per chain (default 6).
-            seed: Random seed for reproducibility.
+            seed: Seed for sampling. To repeat operation sequences across Python
+                processes, also fix PYTHONHASHSEED at process startup.
             reuse_topologies: Reuse previously sampled structures with fresh inputs.
                 Set to False to sample structures independently for this seed.
 
@@ -801,9 +802,10 @@ class CaseGenerator:
         max_chains = max_chains or 20
 
         if reuse_topologies and self._cached_chain_topologies is not None:
-            return self._regenerate_chains_from_cache(
-                self._cached_chain_topologies, seed
-            )
+            eligible = [topology for topology in self._cached_chain_topologies
+                        if len(topology) <= max_steps]
+            if eligible:
+                return self._regenerate_chains_from_cache(eligible[:max_chains], seed)
 
         # Seed Python's random module for reproducibility of status code selection.
         # Hypothesis has its own seeding via _hypothesis_internal_use_seed, but

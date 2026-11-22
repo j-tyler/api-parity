@@ -607,9 +607,25 @@ Date: 20260315
 Keywords: chain topology cache seed walking performance hypothesis state machine
 Date: 20260315
 
+**Problem:** During seed walking in `_generate_chains_with_seed_walking()`, `generate_chains()` is called once per seed (up to 100 times). Each invocation runs the full Hypothesis state machine engine via `run_state_machine_as_test`, which is expensive pure CPU work. But chain STRUCTURE (which operations link to which) is determined by the OpenAPI spec and doesn't change between seeds -- only the fuzz-generated parameter values differ.
+
+**Decision:** After the first `generate_chains()` call discovers all chain structures via the Hypothesis state machine, cache those structures as "topologies" (operation sequences + link sources). On subsequent calls, skip the state machine entirely and regenerate only the fuzz parameter values for each step using `_generate_for_operation()` with the new seed. This is transparent to callers -- the `generate_chains()` API doesn't change.
+
+**Tradeoffs:** This assumes all discoverable chain topologies are found on the first run. In practice, different seeds could theoretically produce different topologies — `_find_status_code_with_links()` uses `random.choice()` among status codes, and different status codes may have links pointing to different target operations, producing genuinely new operation sequences. However, this requires specs where multiple status codes on the same operation link to different targets, which is uncommon. The CPU cost of re-running the full Hypothesis state machine on every seed (up to 100x) outweighs the risk of missing these rare topologies.
+
+---
+
+# Coverage-guided chain discovery
+
+Date: 20261122
+
 Direct calls to `generate_chains()` cache the sampled operation sequences and link sources. Subsequent calls can regenerate values for those structures cheaply. Callers can request a fresh sample with `reuse_topologies=False`, which bypasses the cache for that call.
 
 Seed walking in `explore` and `graph-chains` counts unique operation sequences. Regenerating values from cached sequences cannot increase that count. Each seed therefore gets a fresh state-machine sample, with the seed and generation limits applied to Hypothesis itself. Only sequences retained within the chain limit contribute to coverage. The existing plateau and seed limits bound searches that keep sampling duplicates.
+
+The generator now passes the example and step limits to the state machine. Earlier versions attached them to a wrapper that Hypothesis did not run. The documented defaults of 20 chains and six steps can therefore produce fewer requests on upgrade. Increase the explicit limits to request more testing.
+
+Fresh sampling has a cost on difficult contracts. In the PR review’s nine-operation benchmark, a depth target of 30 was reached in about 35 seconds. At 200, sampling used all 100 seeds and took about 310 seconds. A coverage search now measures its plateau in needed operation hits. Users can also set `--max-seeds` to bound discovery even while it continues to make small gains.
 
 ---
 

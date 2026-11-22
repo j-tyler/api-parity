@@ -121,20 +121,25 @@ api-parity explore \
 | `--target-a NAME` | Yes | First target name |
 | `--target-b NAME` | Yes | Second target name |
 | `--out PATH` | Yes | Output directory |
-| `--seed INT` | No | Random seed for reproducibility |
+| `--seed INT` | No | Starting seed for generation (see reproducibility below) |
 | `--validate` | No | Validate without executing |
 | `--exclude OPID` | No | Exclude operation (repeatable) |
 | `--timeout SECONDS` | No | Default timeout (default: 30) |
 | `--operation-timeout OPID:SEC` | No | Per-operation timeout (repeatable) |
 | `--stateful` | No | Enable chain testing via OpenAPI links |
-| `--max-chains INT` | No | Max chains in stateful mode (default: 20) |
-| `--max-steps INT` | No | Max steps per chain (default: 6) |
+| `--max-chains INT` | No | Maximum retained chains (default 20, or uncapped with a depth target above 1) |
+| `--max-steps INT` | No | Maximum generated steps per chain (default 6) |
+| `--max-seeds INT` | No | Maximum discovery attempts during seed walking (default 100) |
 | `--log-chains` | No | Write chains to chains.txt |
 | `--ensure-coverage` | No | Test all operations (stateful mode) |
 | `--min-hits-per-op INT` | No | Min unique chains per linked operation (default: 1, stateful mode) |
 | `--min-coverage INT` | No | % of linked ops that must meet min-hits-per-op (default: 100, stateful mode) |
 
-**Seed walking:** When `--seed` is provided in stateful mode, the CLI walks seeds (seed, seed+1, seed+2, ...) to accumulate chains. Stopping is coverage-guided: seed walking continues until `--min-coverage`% of linked operations appear in at least `--min-hits-per-op` unique chains. If `--max-chains` is also set, it acts as a secondary limit. Hard safety limit: 100 seed attempts.
+**Seed walking:** When `--seed` is provided in stateful mode, the CLI walks seeds (seed, seed+1, seed+2, ...) to accumulate chains. Stopping is coverage-guided: seed walking continues until `--min-coverage`% of linked operations appear in at least `--min-hits-per-op` unique chains. If `--max-chains` is also set, it acts as a secondary limit. After the search has found chains, it stops on a plateau of 20 consecutive seeds that add no needed operation hits. Set `--max-seeds` to bound generation work and `--max-chains` to bound the number of chains executed.
+
+**Generation limits on upgrade.** Earlier releases could exceed both the requested chain count and step limit. The documented limits now apply during discovery. A default stateful run can therefore execute fewer chains. Set explicit limits to increase the count or depth.
+
+**Reproducibility.** Stateful operation sequences can vary across Python processes because generation also depends on Python’s hash seed. To repeat a sequence sample, keep the spec, generator options, and dependency versions fixed, and set the same `PYTHONHASHSEED` before starting Python (for example, `PYTHONHASHSEED=0 api-parity explore … --stateful --seed 42`). Use `replay` with the saved bundle to rerun a specific captured chain.
 
 ### `api-parity replay`
 
@@ -211,7 +216,8 @@ api-parity graph-chains --spec openapi.yaml --generated
 | `--generated` | No | Show actual chains, not static graph |
 | `--max-chains INT` | No | Max chains with `--generated` |
 | `--max-steps INT` | No | Max steps with `--generated` |
-| `--seed INT` | No | Seed for `--generated` |
+| `--seed INT` | No | Starting seed for `--generated`; see reproducibility above |
+| `--max-seeds INT` | No | Maximum discovery attempts with `--generated --seed` (default 100) |
 
 ### `api-parity lint-spec`
 

@@ -349,3 +349,41 @@ def test_seed_walk_discovers_structures_with_a_warm_cache(monkeypatch):
     assert all(2 <= len(chain.steps) <= 3 for chain in result.chains)
     signatures = [cli._chain_signature(chain) for chain in result.chains]
     assert len(signatures) == len(set(signatures))
+
+
+def test_fixed_hash_seed_repeats_seeded_sequences_across_processes():
+    import os
+    import subprocess
+    import sys
+    from textwrap import dedent
+
+    script = dedent("""
+        import json, sys
+        from pathlib import Path
+        from api_parity.case_generator import CaseGenerator
+        from api_parity.cli import _chain_signature
+        chains = CaseGenerator(Path(sys.argv[1])).generate_chains(5, 3, 42)
+        assert chains
+        print(json.dumps([_chain_signature(chain) for chain in chains]))
+    """)
+    def sample():
+        return subprocess.check_output(
+            [sys.executable, "-c", script, str(TEST_API_SPEC.resolve())],
+            env={**os.environ, "PYTHONHASHSEED": "0"},
+            cwd=TEST_API_SPEC.resolve().parents[2],
+        )
+
+    assert sample() == sample()
+
+
+def test_warm_cache_honors_current_chain_and_step_limits(monkeypatch):
+    generator = CaseGenerator(TEST_API_SPEC)
+    short = [{"operation_id": "a"}, {"operation_id": "b"}]
+    generator._cached_chain_topologies = [short + [{"operation_id": "c"}], short, short]
+    observed = []
+    def capture(topologies, seed):
+        observed.extend(topologies)
+        return []
+    monkeypatch.setattr(generator, "_regenerate_chains_from_cache", capture)
+    generator.generate_chains(max_chains=1, max_steps=2, seed=42)
+    assert observed == [short]

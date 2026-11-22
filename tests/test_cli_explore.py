@@ -797,6 +797,22 @@ class TestGenerateChainsWithSeedWalking:
         # 2 contributing + PLATEAU_THRESHOLD barren
         assert result.seeds_tried == 2 + PLATEAU_THRESHOLD
 
+    @pytest.mark.parametrize(("budget", "reason", "attempts"), [(2, "max_seeds", 2), (10, "plateau", 4)])
+    def test_seed_walk_stops_when_new_sequences_only_cover_satisfied_ops(self, monkeypatch, budget, reason, attempts):
+        from unittest.mock import Mock
+        from api_parity import cli
+
+        monkeypatch.setattr(cli, "PLATEAU_THRESHOLD", 2)
+        generator = Mock()
+        def sample(*, seed, **kwargs):
+            return [self._make_chain(["covered", f"extra{seed}"], str(seed))]
+        generator.generate_chains.side_effect = sample
+        result = cli._generate_chains_with_seed_walking(
+            generator, None, 3, 0, {"covered", "missing"}, min_hits_per_op=2, max_seeds=budget,
+        )
+        assert (result.stopped_reason, result.seeds_tried) == (reason, attempts)
+        assert len(result.chains) == attempts
+
     def test_plateau_resets_on_contributing_seed(self):
         """Plateau counter resets when a seed contributes new unique chains.
 
