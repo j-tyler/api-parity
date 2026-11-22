@@ -149,6 +149,12 @@ Field rules use JSONPath to select values:
 | `$.array[*].field` | Field in each array element |
 | `$..field` | Field at any depth (recursive) |
 
+Array wildcard rules compare the same positions on both targets. For example,
+if `$.items[*].id` selects `items[0].id` on A and `items[1].id` on B, the
+default `parity` rule reports both one-sided fields even when their values are
+equal. An `optional` rule compares only locations present on both targets.
+A `required` rule checks the named field at each selected array element.
+
 ## Override Semantics
 
 Operation rules **completely override** default rules for any key they define—no mental merging required to understand what applies. There is no deep merging.

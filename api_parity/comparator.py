@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from jsonpath_ng import parse as jsonpath_parse
+from jsonpath_ng.jsonpath import Child, Fields, Index, JSONPath, Slice, This
 from jsonpath_ng.exceptions import JsonPathLexerError, JsonPathParserError
 
 from api_parity.cel_evaluator import CELEvaluator, CELEvaluationError
@@ -692,6 +693,73 @@ class Comparator:
             return f"Binary body mismatch: {diff.rule}"
         return f"Binary body mismatches: {len(differences)} differences"
 
+    @staticmethod
+    def _array_wildcard_parts(path: JSONPath) -> tuple[JSONPath, list[JSONPath]] | None:
+        """Return the array element selector and the remaining selectors after its last [*]."""
+        tail = []
+        while isinstance(path, Child):
+            if isinstance(path.right, Slice) and path.right == Slice():
+                return path, tail[::-1]
+            tail.append(path.right)
+            path = path.left
+        if isinstance(path, Slice) and path == Slice():
+            return path, tail[::-1]
+        return None
+
+    def _compare_array_wildcard(
+        self, body_a: Any, body_b: Any, query: str, rule: FieldRule,
+        elements: JSONPath, tail: list[JSONPath],
+    ) -> list[FieldDifference]:
+        suffix = This()
+        for selector in tail:
+            suffix = suffix.child(selector)
+        required_leaf = rule.presence == PresenceMode.REQUIRED and all(
+            isinstance(s, Index) or (isinstance(s, Fields) and len(s.fields) == 1 and "*" not in s.fields)
+            for s in tail
+        )
+
+        def values_by_path(body: Any) -> dict[JSONPath, Any]:
+            values = {}
+            for element in elements.find(body):
+                matches = suffix.find(element)
+                for match in matches:
+                    values[match.full_path] = match.value
+                if not matches and required_leaf:
+                    # Keep this location even if both targets omit the required field.
+                    path = element.full_path
+                    for selector in tail:
+                        path = path.child(selector)
+                    values[path] = NOT_FOUND
+            return values
+
+        a = values_by_path(body_a)
+        b = values_by_path(body_b)
+        differences = []
+
+        # Preserve the aggregate diagnostic for rules that require equal counts.
+        if rule.presence in (PresenceMode.PARITY, PresenceMode.REQUIRED):
+            count_a = sum(value is not NOT_FOUND for value in a.values())
+            count_b = sum(value is not NOT_FOUND for value in b.values())
+            if max(count_a, count_b) > 1 and count_a != count_b:
+                differences.append(FieldDifference(
+                    path=query, target_a=f"<{count_a} matches>", target_b=f"<{count_b} matches>",
+                    rule="wildcard_count_mismatch",
+                ))
+
+        if not a and not b:
+            diff = self._compare_single_field(query, NOT_FOUND, NOT_FOUND, rule)
+            return [diff] if diff else []
+
+        for path, value in a.items():
+            diff = self._compare_single_field(str(path), value, b.pop(path, NOT_FOUND), rule)
+            if diff:
+                differences.append(diff)
+        for path, value in b.items():
+            diff = self._compare_single_field(str(path), NOT_FOUND, value, rule)
+            if diff:
+                differences.append(diff)
+        return differences
+
     def _compare_jsonpath(
         self,
         body_a: Any,
@@ -715,6 +783,9 @@ class Comparator:
         differences: list[FieldDifference] = []
 
         try:
+            parts = self._array_wildcard_parts(self._compile_jsonpath(jsonpath))
+            if parts is not None:
+                return self._compare_array_wildcard(body_a, body_b, jsonpath, rule, *parts)
             matches_a = self._expand_jsonpath(body_a, jsonpath)
             matches_b = self._expand_jsonpath(body_b, jsonpath)
         except JSONPathError as e:
@@ -992,6 +1063,10 @@ class Comparator:
         Raises:
             JSONPathError: If path is syntactically invalid.
         """
+        matches = self._compile_jsonpath(path).find(body)
+        return [(str(match.full_path), match.value) for match in matches]
+
+    def _compile_jsonpath(self, path: str) -> JSONPath:
         # Use cache for compiled paths
         if path not in self._jsonpath_cache:
             try:
@@ -1003,10 +1078,7 @@ class Comparator:
                 # fuzz-generated names containing non-ASCII bytes)
                 raise JSONPathError(f"Invalid JSONPath '{path}': {e}") from e
 
-        compiled = self._jsonpath_cache[path]
-        matches = compiled.find(body)
-
-        return [(str(match.full_path), match.value) for match in matches]
+        return self._jsonpath_cache[path]
 
     def _get_header_value(
         self,

@@ -3,6 +3,8 @@
 Tests wildcard paths, recursive descent, caching, and error handling.
 """
 
+import pytest
+
 from api_parity.models import BodyRules, FieldRule, OperationRules
 from tests.conftest import make_response_case
 
@@ -44,6 +46,43 @@ class TestWildcardPaths:
 
         assert result.match is False
         assert "wildcard_count_mismatch" in result.details["body"].differences[0].rule
+
+    @pytest.mark.parametrize(("presence", "missing_indices"), [
+        ("parity", [0, 1]), ("required", [0, 1]), ("forbidden", [0, 1]), ("optional", []),
+    ])
+    def test_field_moves_to_another_array_element(self, comparator, presence, missing_indices):
+        rule = FieldRule(presence=presence, predefined=None if presence == "forbidden" else "exact_match")
+        rules = OperationRules(body=BodyRules(field_rules={"$.items[*].id": rule}))
+        result = comparator.compare(make_response_case(body={"items": [{"id": None}, {}]}),
+                                    make_response_case(body={"items": [{}, {"id": None}]}), rules)
+        assert result.match == (not missing_indices)
+        assert [d.path for d in result.details["body"].differences] == [
+            f"items.[{i}].id" for i in missing_indices
+        ]
+
+    def test_optional_compares_shared_locations_when_counts_differ(self, comparator):
+        rule = FieldRule(predefined="exact_match", presence="optional")
+        rules = OperationRules(body=BodyRules(field_rules={"$.groups[*].items[*].id": rule}))
+        def response(items):
+            return make_response_case(body={"groups": [{"items": items}]})
+
+        a = response([{"id": 3}, {}, {"id": 5}])
+        assert comparator.compare(a, response([{}, {}, {"id": 5}]), rules).match
+        result = comparator.compare(a, response([{}, {}, {"id": 6}]), rules)
+        diff, = result.details["body"].differences
+        assert (diff.path, diff.target_a, diff.target_b) == ("groups.[0].items.[2].id", 5, 6)
+
+    def test_required_checks_each_existing_element(self, comparator):
+        rule = FieldRule(presence="required")
+        rules = OperationRules(body=BodyRules(field_rules={"$.items[*].record.id": rule}))
+        a = make_response_case(body={"items": [{"record": {"id": 1}}, {}, {}]})
+        b = make_response_case(body={"items": [{"record": {"id": 1}}, {}, {"record": {"id": 2}}]})
+        result = comparator.compare(a, b, rules)
+        assert [(d.path, d.target_a, d.target_b) for d in result.details["body"].differences
+                if d.rule == "presence:required"] == [
+            ("items.[1].record.id", "<missing>", "<missing>"),
+            ("items.[2].record.id", "<missing>", 2),
+        ]
 
     def test_wildcard_element_mismatch(self, comparator, mock_cel):
         """Wildcard paths report which element mismatched."""
