@@ -1,7 +1,8 @@
-"""Form serialization when the caller supplies Content-Type as a request header."""
+"""Request serialization when the caller supplies Content-Type as a header."""
 
 from email import policy
 from email.parser import BytesParser
+from xml.etree import ElementTree
 
 import httpx
 import pytest
@@ -11,6 +12,11 @@ from api_parity.models import RequestCase, TargetConfig
 
 
 @pytest.mark.parametrize(("content_type", "body", "expected"), [
+    ("application/json", {"name": "hello world"}, b'{"name":"hello world"}'),
+    ("Application/Vnd.Api+Json; charset=utf-8", [True, False], b'[true,false]'),
+    ("application/xml", {"root": {"name": "hello world"}}, None),
+    ("application/json", '{ "name": "hello" }', b'{ "name": "hello" }'),
+    ("application/json", b'{ "name": "hello" }', b'{ "name": "hello" }'),
     ("application/x-www-form-urlencoded", {"name": "hello world"}, b"name=hello+world"),
     ("Application/X-WWW-Form-Urlencoded; charset=utf-8",
      {"name": "a+b", "tag": ["x", "y"]}, b"name=a%2Bb&tag=x&tag=y"),
@@ -19,7 +25,7 @@ from api_parity.models import RequestCase, TargetConfig
     ("multipart/form-data; boundary=custom", {"name": "hello world"}, None),
     ("multipart/form-data; boundary=custom", b"--custom--\r\n", b"--custom--\r\n"),
 ])
-def test_form_content_type_header(monkeypatch, content_type, body, expected):
+def test_content_type_header(monkeypatch, content_type, body, expected):
     requests = []
 
     def capture(request):
@@ -39,6 +45,9 @@ def test_form_content_type_header(monkeypatch, content_type, body, expected):
         assert request.headers["content-type"] == content_type
         if expected is not None:
             assert request.content == expected
+        elif content_type == "application/xml":
+            root = ElementTree.fromstring(request.content)
+            assert (root.tag, root.findtext("name")) == ("root", "hello world")
         else:
             message = BytesParser(policy=policy.default).parsebytes(
                 f"Content-Type: {content_type}\r\n\r\n".encode() + request.content)

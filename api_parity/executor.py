@@ -809,10 +809,14 @@ class Executor:
         json_body: Any = None
 
         content_type_key = next((k for k in headers if k.lower() == "content-type"), "Content-Type")
-        form_content_type = request.media_type or headers.get(content_type_key, "")
-        media = form_content_type.partition(";")[0].lower().strip()
+        effective_content_type = request.media_type or headers.get(content_type_key, "")
+        media = effective_content_type.partition(";")[0].lower().strip()
 
-        if isinstance(request.body, dict) and media == "application/x-www-form-urlencoded":
+        # Header-only callers can supply pre-serialized JSON text or bytes.
+        # Explicit media_type retains its existing JSON string/byte semantics.
+        if not request.media_type and isinstance(request.body, (str, bytes)):
+            content = request.body.encode("utf-8") if isinstance(request.body, str) else request.body
+        elif isinstance(request.body, dict) and media == "application/x-www-form-urlencoded":
             content = urlencode(_form_fields(request.body)).encode("ascii")
         elif isinstance(request.body, dict) and media in {"multipart/form-data", "multipart/mixed"}:
             header = Message()
@@ -826,7 +830,7 @@ class Executor:
                      for name, value in _form_fields(request.body)]
             content, _ = encode_multipart_formdata(parts, boundary=header.get_boundary())
         elif request.body is not None:
-            if request.media_type and "json" in request.media_type.lower():
+            if "json" in media:
                 if isinstance(request.body, bytes):
                     # Body is raw bytes in a JSON-typed request slot (e.g.,
                     # schema with format: binary under application/json).
@@ -837,7 +841,7 @@ class Executor:
                         content = request.body
                 else:
                     json_body = request.body
-            elif request.media_type and "xml" in request.media_type.lower():
+            elif "xml" in media:
                 # Convert dict body to XML bytes. The body stays as a dict in
                 # RequestCase (inspectable in artifacts); XML serialization
                 # happens only at send time.  See DESIGN.md "XML Body Conversion".
