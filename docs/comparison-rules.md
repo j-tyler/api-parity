@@ -57,6 +57,20 @@ Write arbitrary CEL:
 {"expr": "a > 0 && b > 0 && (a - b) <= 10"}
 ```
 
+## Numeric precision
+
+Use the standard `exact_match` or `both_null_or_equal` rule for integer IDs and counters.
+These rules compare two JSON integers exactly, including inside arrays and objects.
+When either number contains a decimal point or an exponent, they compare the pair
+as doubles so equivalent serializer spellings such as `12345678901234567000` and
+`1.2345678901234567e19` match. An integer outside the double range differs from
+every finite double.
+
+Custom CEL expressions and other predefined rules evaluate JSON numbers as doubles.
+For example, `9007199254740992` and `9007199254740993` round to the same double.
+A custom `a == b`, `numeric_tolerance` with zero tolerance, and `unordered_array`
+on lists of these IDs can therefore report a match.
+
 ## Predefined Reference
 
 | Name | Parameters | Description |

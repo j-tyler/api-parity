@@ -657,8 +657,13 @@ values remain literal during placeholder substitution.
 
 ## Exact comparison of JSON integers
 
-The built-in `exact_match` rule compares parsed JSON values before they cross the
-Go evaluator boundary. Decoding JSON into Go doubles can round adjacent integer
-IDs to the same value. Exact equality compares numbers by value, distinguishes
-booleans from numbers, compares arrays in order, and ignores object key order.
+Keywords: CEL exact_match both_null_or_equal JSON integer precision
+Date: 20261121
+
+The standard `exact_match` and `both_null_or_equal` rules compare parsed JSON
+values directly because decoding integer IDs as doubles can discard low bits.
+Pairs of integers compare exactly. Pairs containing a float retain the double
+comparison used by existing configurations, since serializers can encode the
+same double with integer or exponent notation. Schema extra fields retain their
+existing numeric value comparison. All three distinguish booleans from numbers.
 Custom CEL expressions and arithmetic rules retain the evaluator's double semantics.

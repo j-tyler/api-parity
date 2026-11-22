@@ -80,19 +80,40 @@ class _NotFound:
 NOT_FOUND = _NotFound()
 
 
-def _json_equal(left: Any, right: Any) -> bool:
-    """Compare parsed JSON without rounding integers or treating booleans as numbers."""
-    if isinstance(left, bool) or isinstance(right, bool):
-        return left is right
-    if isinstance(left, dict) and isinstance(right, dict):
-        return left.keys() == right.keys() and all(
-            _json_equal(value, right[key]) for key, value in left.items()
-        )
-    if isinstance(left, list) and isinstance(right, list):
-        return len(left) == len(right) and all(
-            _json_equal(a, b) for a, b in zip(left, right)
-        )
-    return left == right
+_EXACT_RULES = {
+    "exact_match": "a == b",
+    "both_null_or_equal": "(a == null && b == null) || (a != null && b != null && a == b)",
+}
+
+
+def _json_equal(left: Any, right: Any, *, mixed_as_double: bool) -> bool:
+    """Compare JSON with one iterator per open container, independent of Python stack depth."""
+    pending = [iter(((left, right),))]
+    while pending:
+        pair = next(pending[-1], None)
+        if pair is None:
+            pending.pop()
+            continue
+        a, b = pair
+        if type(a) is not type(b):
+            if {type(a), type(b)} != {int, float}:
+                return False
+            if mixed_as_double:
+                try:
+                    a, b = float(a), float(b)
+                except OverflowError:
+                    return False
+        if isinstance(a, dict):
+            if a.keys() != b.keys():
+                return False
+            pending.append(zip(a.values(), map(b.__getitem__, a)))
+        elif isinstance(a, list):
+            if len(a) != len(b):
+                return False
+            pending.append(zip(a, b))
+        elif a != b:
+            return False
+    return True
 
 
 # =============================================================================
@@ -391,7 +412,7 @@ class Comparator:
                         rule="extra_field_presence",
                     )
                 )
-            elif a_present and b_present and value_a != value_b:
+            elif a_present and b_present and not _json_equal(value_a, value_b, mixed_as_double=False):
                 # Both have the field but values differ
                 differences.append(
                     FieldDifference(
@@ -911,8 +932,8 @@ class Comparator:
         elif rule.predefined is not None:
             # Expand predefined to CEL expression
             expr = self._expand_predefined(rule)
-            if rule.predefined == "exact_match" and expr == "a == b":
-                return _json_equal(value_a, value_b)
+            if _EXACT_RULES.get(rule.predefined) == expr:
+                return _json_equal(value_a, value_b, mixed_as_double=True)
         else:
             # No comparison specified (presence-only) - treat as pass
             return True
