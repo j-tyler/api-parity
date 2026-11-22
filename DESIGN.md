@@ -640,3 +640,17 @@ Replay verifies the saved failing step and continues to check reachable steps.
 A blocked link before that comparison leaves the bundle inconclusive. After
 the saved step passes, a blocked tail can be reported alongside the verified
 fix. A new mismatch on a reachable step takes precedence.
+
+## Chain link source identity
+
+Date: 20261121
+
+Two earlier operations can both declare links to the same read operation. For
+example, a create can return an ID and a later update can return 422 on both
+targets. A read discovered through the create must still run against that ID.
+A read discovered through the update is incomplete if its link cannot resolve.
+
+Discovery records the parent case ID as a position in the captured chain and
+uses the transition ID to identify the exact OpenAPI link. Explore and replay
+resolve that link against the selected exchange on each target. Explicit link
+values remain literal during placeholder substitution.

@@ -13,6 +13,7 @@ import json
 import re
 import ssl
 import time
+from collections.abc import Collection
 from threading import Lock
 from typing import Any, Callable
 
@@ -283,38 +284,32 @@ class Executor:
         steps_b: list[ChainStepExecution] = []
         extracted_vars_a: dict[str, Any] = {}
         extracted_vars_b: dict[str, Any] = {}
-        # Per-target request history for $request.path/header resolution
-        prev_request_a: RequestCase | None = None
-        prev_request_b: RequestCase | None = None
 
         for step in chain.steps:
-            # Resolve OpenAPI link expressions if this step has link_source.
-            # This maps parameter names to actual values from prior responses
-            # (e.g., widget_id → the real ID from a POST response body).
-            template_a = step.request_template
-            template_b = step.request_template
-
-            if step.link_source is not None and step.link_source.get("parameters"):
-                overrides_a = self._resolve_link_overrides(
-                    step.link_source, extracted_vars_a, prev_request_a
-                )
-                overrides_b = self._resolve_link_overrides(
-                    step.link_source, extracted_vars_b, prev_request_b
-                )
-
-                # If resolution failed for BOTH targets, the source step
-                # returned errors and no variables were extracted. Continuing
-                # would send garbage fuzz values to both targets, producing
-                # spurious mismatches from different error responses.
+            link = step.link_source or {}
+            linked_parameters = link.get("parameters") or {}
+            overrides_a: dict[str, Any] = {}
+            overrides_b: dict[str, Any] = {}
+            if linked_parameters:
+                source = self._link_source_position(link, steps_a)
+                if source is None:
+                    raise RequestError(
+                        f"Step {step.step_index} ({step.request_template.operation_id}) has no "
+                        f"matching prior link source: source_step_index={link.get('source_step_index')!r}, "
+                        f"source_operation={link.get('source_operation')!r}"
+                    )
+                source_a, source_b = steps_a[source], steps_b[source]
+                overrides_a = self._resolve_link_overrides(link, source_a.extracted, source_a.request)
+                overrides_b = self._resolve_link_overrides(link, source_b.extracted, source_b.request)
                 if not overrides_a and not overrides_b:
                     break
 
-                template_a = self._apply_link_overrides(template_a, overrides_a)
-                template_b = self._apply_link_overrides(template_b, overrides_b)
-
-            # Each target gets request populated with its own extracted variables
-            request_a = self._apply_variables(template_a, extracted_vars_a)
-            request_b = self._apply_variables(template_b, extracted_vars_b)
+            # Ordinary placeholders may use accumulated variables. Explicit link
+            # parameters belong to their source, and resolved values are literal.
+            request_a = self._apply_variables(step.request_template, extracted_vars_a, linked_parameters)
+            request_b = self._apply_variables(step.request_template, extracted_vars_b, linked_parameters)
+            request_a = self._apply_link_overrides(request_a, overrides_a)
+            request_b = self._apply_link_overrides(request_b, overrides_b)
 
             timeout = self._get_timeout(request_a.operation_id)
 
@@ -346,10 +341,6 @@ class Executor:
                 extracted=extracted_b,
             ))
 
-            # Track requests for $request.path/header resolution in future steps
-            prev_request_a = request_a
-            prev_request_b = request_b
-
             # Check if caller wants to stop (mismatch detected)
             if on_step is not None and not on_step(response_a, response_b):
                 break
@@ -358,6 +349,21 @@ class Executor:
             ChainExecution(steps=steps_a),
             ChainExecution(steps=steps_b),
         )
+
+    @staticmethod
+    def _link_source_position(link: dict, history: list[ChainStepExecution]) -> int | None:
+        """Locate the recorded source, or the most recent matching operation."""
+        operation = link.get("source_operation")
+        if "source_step_index" in link:
+            index = link["source_step_index"]
+            if type(index) is int and 0 <= index < len(history):
+                if operation is None or history[index].request.operation_id == operation:
+                    return index
+            return None
+        for index in reversed(range(len(history))):
+            if operation is None or history[index].request.operation_id == operation:
+                return index
+        return None
 
     def _variable_to_string(self, var_value: Any) -> str:
         """Convert a variable value to string for path/body substitution.
@@ -372,6 +378,7 @@ class Executor:
         self,
         template: RequestCase,
         variables: dict[str, Any],
+        linked_parameters: Collection[str] = (),
     ) -> RequestCase:
         """Apply extracted variables to a request template.
 
@@ -381,6 +388,7 @@ class Executor:
         Args:
             template: Request template with potential placeholders.
             variables: Extracted variables from previous steps.
+            linked_parameters: Parameters reserved for explicit link expressions.
 
         Returns:
             New RequestCase with variables substituted.
@@ -390,7 +398,7 @@ class Executor:
 
         # Apply variables to path parameters
         for key, value in list(request_dict.get("path_parameters", {}).items()):
-            if isinstance(value, str):
+            if key not in linked_parameters and isinstance(value, str):
                 for var_name, var_value in variables.items():
                     if f"{{{var_name}}}" in value:
                         value = value.replace(f"{{{var_name}}}", self._variable_to_string(var_value))
@@ -407,6 +415,8 @@ class Executor:
 
         # Apply variables to query parameters (dict[str, list[str]])
         for key, values in list(request_dict.get("query", {}).items()):
+            if key in linked_parameters:
+                continue
             new_values = []
             for value in values:
                 for var_name, var_value in variables.items():
