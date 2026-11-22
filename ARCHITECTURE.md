@@ -404,6 +404,9 @@ class ChainStepExecution:
 - Header/query values are lists (supports repeated params)
 - `body` and `body_base64` are mutually exclusive
 - Request artifacts store byte payloads in `body_base64` after redaction. For bytes supplied in a JSON media type's `body`, the artifact also records `body_encoding: "json-input-bytes"`. Loading restores those bytes for the executor's JSON parsing step. Explicit `body_base64` payloads are sent verbatim, including for JSON media types.
+- Generated binary uploads use the bytes supplied by Schemathesis. Multipart and URL-encoded forms retain their fields through chain substitution and artifact redaction. Each multipart case reuses its boundary across targets and replay. A generated binary field inside a JSON object or array is represented as a base64 string on the wire.
+- In structured request bodies, `binary_field_paths` identifies the individual base64-encoded fields. Other strings stay literal. Replay binary bundles with the writer's version or a version that supports its encoding fields.
+- Earlier writers could record binary uploads as empty strings or Python byte literals. To obtain a reliable replay for an affected upload, record a fresh explore run.
 - Chain templates separate from execution traces (enables replay)
 
 ---

@@ -465,7 +465,25 @@ class ArtifactWriter:
     @staticmethod
     def _encode_request_bytes(request: Any) -> None:
         """Encode only request payloads, after applying artifact redaction."""
-        if not isinstance(request, dict) or not isinstance(request.get("body"), bytes):
+        if not isinstance(request, dict):
+            return
+        if isinstance(request.get("body"), (list, dict)):
+            paths = []
+
+            def encode_fields(container, path):
+                items = container.items() if isinstance(container, dict) else enumerate(container)
+                for key, value in items:
+                    if isinstance(value, bytes):
+                        container[key] = base64.b64encode(value).decode("ascii")
+                        paths.append([*path, key])
+                    elif isinstance(value, (list, dict)):
+                        encode_fields(value, [*path, key])
+
+            encode_fields(request["body"], [])
+            if paths:
+                request["binary_field_paths"] = paths
+            return
+        if not isinstance(request.get("body"), bytes):
             return
         body = request["body"]
         request["body"] = None

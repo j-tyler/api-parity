@@ -9,6 +9,7 @@ See ARCHITECTURE.md "Case Generator Component" for specifications.
 
 from __future__ import annotations
 
+import base64
 import json
 import random
 import re
@@ -31,6 +32,7 @@ from schemathesis.config import (
     StatefulPhaseConfig,
 )
 from schemathesis.core.transport import Response as SchemathesisResponse
+from schemathesis.transport.serialization import Binary
 
 # Get InferenceConfig via public API indirection. InferenceConfig is not exported
 # in schemathesis.config.__all__, but we need it to disable inference algorithms.
@@ -41,6 +43,16 @@ from schemathesis.specs.openapi.stateful import OpenAPIStateMachine
 from api_parity.models import ChainCase, ChainStep, RequestCase
 from api_parity.schema_validator import build_operation_index
 from api_parity.schema_value_generator import SchemaValueGenerator
+
+
+def _unwrap_binary(value: Any, *, json_field: bool = False) -> Any:
+    if isinstance(value, Binary):
+        return base64.b64encode(value.data).decode("ascii") if json_field else value.data
+    if isinstance(value, dict):
+        return {key: _unwrap_binary(item, json_field=json_field) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_unwrap_binary(item, json_field=json_field) for item in value]
+    return value
 
 
 def _get_operation_id(raw_operation: dict[str, Any], method: str, path: str) -> str:
@@ -740,8 +752,9 @@ class CaseGenerator:
         body: Any = None
         media_type: str | None = None
         if case.body is not None and str(type(case.body).__name__) != "NotSet":
-            body = case.body
             media_type = case.media_type
+            structured_json = isinstance(case.body, (list, dict)) and "json" in (media_type or "").lower()
+            body = _unwrap_binary(case.body, json_field=structured_json)
 
         return RequestCase(
             case_id=str(uuid.uuid4()),
