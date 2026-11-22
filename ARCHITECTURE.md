@@ -166,13 +166,13 @@ Requests execute serially (A first, then B)—no concurrency, which would introd
 
 **Link expression resolution:** For linked steps (those with `link_source.parameters`), the executor resolves OpenAPI runtime expressions (`$response.body#/path`, `$response.header.X`, `$request.path.X`, `$request.header.X`) to actual values from prior step responses/requests, then overrides the fuzz-generated parameter values in the request template. Discovery maps the parent case ID on each Schemathesis transition to its captured step index and records the exact link used. Independent root cases have no link source. Explore and replay resolve both request and response expressions from that step on each target. Ordinary placeholders in other parameters can still use variables accumulated throughout the chain. The chain breaks early when resolution fails for both targets (for example, a missing value or unsupported expression). Explore records a separate incomplete outcome. Replay counts a blocked chain as incomplete only if the original mismatch has yet to be compared.
 
-**Content-type dispatch:** The executor routes request and response bodies based on content-type:
-- `"json" in content_type` → JSON (request: httpx `json=` param; response: `response.json()`)
-- `"xml" in content_type` → XML (request: `dict_to_xml()`; response: `xml_to_dict()`) — see `api_parity/xml_body.py`
-- `content_type.startswith("text/")` → text (response stored as string)
-- everything else → binary (base64-encoded)
+**Request body serialization.** An explicit `RequestCase.media_type` selects the serializer. When it is absent, the executor uses the request’s case-insensitive `Content-Type` header for structured bodies. OpenAPI-generated cases normally carry their media type. If the caller supplies both fields, the explicit header is sent on the wire.
 
-XML branch is ordered before `text/*` because `text/xml` is a valid content-type.
+- JSON bodies use HTTPX’s JSON encoder. Single-root XML dictionaries use `dict_to_xml()`.
+- URL-encoded dictionaries use form encoding. Multipart dictionaries use MIME parts and a boundary shared by the body and header.
+- Callers supplying only a header can pass pre-encoded strings or bytes verbatim. An explicit JSON media type retains its existing handling of string values and byte inputs.
+
+**Response parsing.** The response’s own content type selects JSON, XML, or plain text parsing. Other response bodies are stored as base64-encoded bytes.
 
 **Error handling:**
 - Connection errors/timeouts: skip test case, increment error count, continue run
