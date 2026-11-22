@@ -953,7 +953,7 @@ class TestLinkAttributionHistory:
         generator = CaseGenerator(spec_file)
 
         # Generate chains with enough steps to get create -> getStatus -> update pattern
-        chains = generator.generate_chains(max_chains=10, max_steps=3, seed=42)
+        chains = generator.generate_chains(max_chains=10, max_steps=3, seed=43)
 
         # Find a chain with the pattern: createOrder -> getOrderStatus -> updateOrder
         target_chain = None
@@ -1107,7 +1107,7 @@ class TestLinkAttributionHistory:
         from api_parity.executor import Executor
         from api_parity.models import ResponseCase, TargetConfig
 
-        def run_scenario(machine_type):
+        def run_scenario(machine_type, *, settings):
             machine = machine_type()
             create = generator._schema["/resources"]["POST"]
             update = generator._schema["/resources/{id}"]["PUT"]

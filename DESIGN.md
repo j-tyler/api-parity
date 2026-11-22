@@ -615,6 +615,20 @@ Date: 20260315
 
 ---
 
+# Coverage-guided chain discovery
+
+Date: 20261122
+
+Direct calls to `generate_chains()` cache the sampled operation sequences and link sources. Subsequent calls can regenerate values for those structures cheaply. Callers can request a fresh sample with `reuse_topologies=False`, which bypasses the cache for that call.
+
+Seed walking in `explore` and `graph-chains` counts unique operation sequences. Regenerating values from cached sequences cannot increase that count. Each seed therefore gets a fresh state-machine sample, with the seed and generation limits applied to Hypothesis itself. Only sequences retained within the chain limit contribute to coverage. The existing plateau and seed limits bound searches that keep sampling duplicates.
+
+The generator now passes the example and step limits to the state machine. Earlier versions attached them to a wrapper that Hypothesis did not run. The documented defaults of 20 chains and six steps can therefore produce fewer requests on upgrade. Increase the explicit limits to request more testing.
+
+Fresh sampling has a cost on difficult contracts. In the PR review’s nine-operation benchmark, a depth target of 30 was reached in about 35 seconds. At 200, sampling used all 100 seeds and took about 310 seconds. A coverage search now measures its plateau in needed operation hits. Users can also set `--max-seeds` to bound discovery even while it continues to make small gains.
+
+---
+
 # Merge Deduplication: Operation + Type + Paths
 
 Keywords: merge dedup key pattern

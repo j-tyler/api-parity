@@ -21,7 +21,7 @@ from typing import Any, Iterator
 import requests
 import schemathesis
 import yaml
-from hypothesis import Phase, settings
+from hypothesis import Phase, seed as hypothesis_seed, settings
 from hypothesis.errors import HypothesisException
 from hypothesis.stateful import run_state_machine_as_test
 from schemathesis.config import (
@@ -779,6 +779,8 @@ class CaseGenerator:
         max_chains: int | None = None,
         max_steps: int = 6,
         seed: int | None = None,
+        *,
+        reuse_topologies: bool = True,
     ) -> list[ChainCase]:
         """Generate stateful request chains following OpenAPI links.
 
@@ -789,22 +791,21 @@ class CaseGenerator:
         Args:
             max_chains: Maximum number of chains to generate (default 20).
             max_steps: Maximum steps per chain (default 6).
-            seed: Random seed for reproducibility.
+            seed: Seed for sampling. To repeat operation sequences across Python
+                processes, also fix PYTHONHASHSEED at process startup.
+            reuse_topologies: Reuse previously sampled structures with fresh inputs.
+                Set to False to sample structures independently for this seed.
 
         Returns:
             List of ChainCase objects ready for execution.
         """
         max_chains = max_chains or 20
 
-        # Performance optimization: if chain topologies were cached from a
-        # previous run, skip the expensive Hypothesis state machine and just
-        # regenerate fuzz values for the same chain structures. Chain topology
-        # (which operations link to which) is determined by the OpenAPI spec
-        # and doesn't change between seeds - only parameter values differ.
-        if self._cached_chain_topologies is not None:
-            return self._regenerate_chains_from_cache(
-                self._cached_chain_topologies, seed
-            )
+        if reuse_topologies and self._cached_chain_topologies is not None:
+            eligible = [topology for topology in self._cached_chain_topologies
+                        if len(topology) <= max_steps]
+            if eligible:
+                return self._regenerate_chains_from_cache(eligible[:max_chains], seed)
 
         # Seed Python's random module for reproducibility of status code selection.
         # Hypothesis has its own seeding via _hypothesis_internal_use_seed, but
@@ -1138,25 +1139,19 @@ class CaseGenerator:
         class CombinedMachine(ChainCapturingStateMachine, OriginalStateMachine):
             pass
 
-        # Run the state machine
-        @settings(
+        if seed is not None:
+            hypothesis_seed(seed)(CombinedMachine)
+        generation_settings = settings(
+            CombinedMachine.TestCase.settings,
             max_examples=max_chains,
             stateful_step_count=max_steps,
             database=None,
             phases=[Phase.generate],
             deadline=None,
-            derandomize=seed is not None,
         )
-        def run_generation():
-            run_state_machine_as_test(CombinedMachine)
-
-        # When a seed is provided, set Hypothesis's internal seed attribute.
-        # This makes different seed values produce different (but reproducible) chains.
-        if seed is not None:
-            run_generation._hypothesis_internal_use_seed = seed
 
         try:
-            run_generation()
+            run_state_machine_as_test(CombinedMachine, settings=generation_settings)
         except HypothesisException:
             # Normal termination: Hypothesis raises when it has explored all reachable
             # states in the state machine (e.g., fewer valid chains than max_chains).
@@ -1165,12 +1160,13 @@ class CaseGenerator:
             pass
 
         # Filter to chains with multiple steps (single-step chains aren't useful)
-        multi_step_chains = [c for c in captured_chains if len(c.steps) > 1]
+        # Hypothesis may run additional examples that it subsequently discards.
+        multi_step_chains = [c for c in captured_chains if len(c.steps) > 1][:max_chains]
 
         # Cache the chain topologies for reuse on subsequent calls with
         # different seeds. This avoids re-running the expensive Hypothesis
         # state machine when only the fuzz parameter values need to change.
-        if multi_step_chains:
+        if reuse_topologies and multi_step_chains:
             self._cached_chain_topologies = self._extract_chain_topologies(
                 multi_step_chains
             )

@@ -678,7 +678,7 @@ class TestGenerateChainsWithSeedWalking:
 
         mock_generator = MagicMock()
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             if seed == 42:
                 return [
                     self._make_chain(["op1", "op2"], "c1"),
@@ -690,7 +690,10 @@ class TestGenerateChainsWithSeedWalking:
                     self._make_chain(["op2", "op3"], "c4"),  # New
                 ]
             elif seed == 44:
-                return [self._make_chain(["op3", "op4"], "c5")]  # New
+                return [
+                    self._make_chain(["op3", "op4"], "c5"),
+                    self._make_chain(["op4", "op5"], "over-cap"),
+                ]
             return []
 
         mock_generator.generate_chains.side_effect = mock_generate
@@ -703,6 +706,7 @@ class TestGenerateChainsWithSeedWalking:
         )
 
         assert len(result.chains) == 4
+        assert "op5" not in result.operations_covered
         assert result.seeds_used == [42, 43, 44]
         assert result.stopped_reason == "max_chains"
 
@@ -719,7 +723,7 @@ class TestGenerateChainsWithSeedWalking:
         mock_generator = MagicMock()
         call_count = [0]
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             call_count[0] += 1
             return [self._make_chain([f"op{seed}", f"op{seed+100}"], f"c{seed}")]
 
@@ -770,7 +774,7 @@ class TestGenerateChainsWithSeedWalking:
 
         mock_generator = MagicMock()
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             if seed == 0:
                 return [self._make_chain(["opA", "opB"], "c1")]
             elif seed == 1:
@@ -793,6 +797,22 @@ class TestGenerateChainsWithSeedWalking:
         # 2 contributing + PLATEAU_THRESHOLD barren
         assert result.seeds_tried == 2 + PLATEAU_THRESHOLD
 
+    @pytest.mark.parametrize(("budget", "reason", "attempts"), [(2, "max_seeds", 2), (10, "plateau", 4)])
+    def test_seed_walk_stops_when_new_sequences_only_cover_satisfied_ops(self, monkeypatch, budget, reason, attempts):
+        from unittest.mock import Mock
+        from api_parity import cli
+
+        monkeypatch.setattr(cli, "PLATEAU_THRESHOLD", 2)
+        generator = Mock()
+        def sample(*, seed, **kwargs):
+            return [self._make_chain(["covered", f"extra{seed}"], str(seed))]
+        generator.generate_chains.side_effect = sample
+        result = cli._generate_chains_with_seed_walking(
+            generator, None, 3, 0, {"covered", "missing"}, min_hits_per_op=2, max_seeds=budget,
+        )
+        assert (result.stopped_reason, result.seeds_tried) == (reason, attempts)
+        assert len(result.chains) == attempts
+
     def test_plateau_resets_on_contributing_seed(self):
         """Plateau counter resets when a seed contributes new unique chains.
 
@@ -810,7 +830,7 @@ class TestGenerateChainsWithSeedWalking:
         # the counter just before plateau would trigger.
         contributing_seed = PLATEAU_THRESHOLD
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             if seed == 0:
                 return [self._make_chain(["opA"], "c1")]
             elif seed == contributing_seed:
@@ -845,7 +865,7 @@ class TestGenerateChainsWithSeedWalking:
         mock_generator = MagicMock()
         linked_ops = {"opA", "opB", "opC", "opD"}
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             if seed == 0:
                 # Covers opA, opB
                 return [self._make_chain(["opA", "opB"], "c1")]
@@ -937,7 +957,7 @@ class TestGenerateChainsWithSeedWalking:
         mock_generator = MagicMock()
         call_count = [0]
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             call_count[0] += 1
             return [self._make_chain([f"op{seed}", f"op{seed+10}"], f"c{seed}")]
 
@@ -1002,7 +1022,7 @@ class TestGenerateChainsWithSeedWalking:
         mock_generator = MagicMock()
         linked_ops = {"opA", "opB"}
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             # Each seed produces a unique chain (different signature via unique extra op)
             # All chains contain opA and opB, so both get a hit per unique chain
             return [self._make_chain(["opA", "opB", f"extra{seed}"], f"c{seed}")]
@@ -1042,7 +1062,7 @@ class TestGenerateChainsWithSeedWalking:
         mock_generator = MagicMock()
         linked_ops = {"opA", "opB"}  # 2 ops, 50% = 1 op
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             # Only opA gets hit every seed; opB never appears.
             # Each seed produces a unique chain (different signature via seed suffix).
             return [self._make_chain(["opA", f"filler{seed}"], f"c{seed}")]
@@ -1081,7 +1101,7 @@ class TestGenerateChainsWithSeedWalking:
 
         # Seed 0 and 1 produce the SAME chain (duplicate)
         # Seed 2 produces a different chain
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             if seed < 2:
                 return [self._make_chain(["opA", "opB"], f"c{seed}")]
             else:
@@ -1365,7 +1385,7 @@ class TestProgressReporterTimingInStatefulExplore:
         # Track when generate_chains finishes to verify start_time ordering
         generation_end_time = None
 
-        def mock_generate_chains(max_chains, max_steps, seed):
+        def mock_generate_chains(max_chains, max_steps, seed, *, reuse_topologies=False):
             nonlocal generation_end_time
             chains = [
                 self._make_chain(["op1", "op2"], "c1"),
