@@ -620,3 +620,56 @@ class TestChainLinkResolution:
             f"Expected 'fuzz-uuid' in target B step 1 path, "
             f"got {exec_b.steps[1].request.rendered_path!r}"
         )
+
+
+@pytest.mark.parametrize("source", [
+    {"source_operation": "createWidget"},
+    {"source_operation": "createWidget", "source_step_index": 0},
+])
+def test_link_reads_only_its_source_exchange(executor, source):
+    chain = _make_two_step_chain()
+    create, read = chain.steps
+    create.request_template.path_template = "/tenants/{tenant}/widgets"
+    create.request_template.path_parameters = {"tenant": "original"}
+    create.request_template.headers = {"x-owner": ["creator"]}
+    unrelated = create.model_copy(deep=True)
+    unrelated.step_index = 1
+    # An explicit position distinguishes two executions of the same operation.
+    if "source_step_index" not in source:
+        unrelated.request_template.operation_id = "other"
+    unrelated.request_template.path_parameters = {"tenant": "unrelated"}
+    unrelated.request_template.headers = {"x-owner": ["other"]}
+    read.step_index = 2
+    read.request_template.query = {"tenant": ["seed"], "owner": ["seed"], "location": ["seed"],
+                                   "ordinary": ["{id}"]}
+    read.link_source = {**source, "parameters": {
+        "widget_id": "$response.body#/id", "tenant": "$request.path.tenant",
+        "owner": "$request.header.X-Owner", "location": "$response.header.Location",
+    }}
+    chain.steps = [create, unrelated, read]
+    responses = [
+        ResponseCase(status_code=200, elapsed_ms=1, body={"id": value},
+                     headers={"location": [f"/{value}"]})
+        for value in ("id", "b", "wrong-a", "wrong-b", "done", "done")
+    ]
+    with patch.object(executor, "_execute_single", side_effect=responses):
+        histories = executor.execute_chain(chain)
+    for history, value, latest in zip(histories, ("id", "b"), ("wrong-a", "wrong-b"), strict=True):
+        request = history.steps[2].request
+        assert request.rendered_path == f"/widgets/{value}"
+        assert request.query == {"tenant": ["original"], "owner": ["creator"],
+                                 "location": [f"/{value}"], "ordinary": [latest]}
+
+
+def test_missing_source_value_does_not_borrow_another_operations_id(executor):
+    chain = _make_two_step_chain()
+    unrelated = chain.steps[0].model_copy(deep=True)
+    unrelated.request_template.operation_id = "other"
+    unrelated.step_index = 1
+    chain.steps[1].step_index = 2
+    chain.steps.insert(1, unrelated)
+    responses = [ResponseCase(status_code=200, elapsed_ms=1, body=body)
+                 for body in ({}, {}, {"id": "unrelated-a"}, {"id": "unrelated-b"}, {}, {})]
+    with patch.object(executor, "_execute_single", side_effect=responses):
+        histories = executor.execute_chain(chain)
+    assert all(len(history.steps) == 2 for history in histories)

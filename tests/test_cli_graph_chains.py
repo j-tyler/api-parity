@@ -985,6 +985,7 @@ class TestLinkAttributionHistory:
             f"updateOrder link should come from createOrder, not "
             f"{link_source.get('source_operation')}"
         )
+        assert link_source["source_step_index"] == 0
         assert link_source.get("link_name") == "UpdateOrder", (
             f"Link name should be UpdateOrder, got {link_source.get('link_name')}"
         )
@@ -1136,6 +1137,7 @@ class TestLinkAttributionHistory:
             f"getResource link should come from updateResource (most recent), not "
             f"{link_source.get('source_operation')}"
         )
+        assert link_source["source_step_index"] == 1
         assert link_source.get("link_name") == "GetUpdatedResource", (
             f"Link name should be GetUpdatedResource, got {link_source.get('link_name')}"
         )

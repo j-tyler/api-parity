@@ -953,7 +953,8 @@ class CaseGenerator:
                 """
                 # Use pre-built link index for O(1) lookup instead of scanning
                 # the entire spec (previously a 5-level nested loop).
-                for source_op, status_code in reversed(prev_steps):
+                for source_index in reversed(range(len(prev_steps))):
+                    source_op, status_code = prev_steps[source_index]
                     entries = generator_self._link_index.get((source_op, target_op))
                     if entries is None:
                         continue
@@ -962,6 +963,7 @@ class CaseGenerator:
                             return {
                                 "link_name": entry["link_name"],
                                 "source_operation": source_op,
+                                "source_step_index": source_index,
                                 "status_code": status_code,
                                 "is_inferred": entry["is_inferred"],
                                 "field": entry["field"],
