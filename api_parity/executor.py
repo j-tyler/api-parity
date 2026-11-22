@@ -824,7 +824,7 @@ class Executor:
                     content = request.body
                 else:
                     content = str(request.body).encode("utf-8")
-        elif request.body_base64:
+        elif request.body_base64 is not None:
             content = base64.b64decode(request.body_base64)
 
         # Add content-type if specified

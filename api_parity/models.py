@@ -5,6 +5,7 @@ All models use Pydantic v2. See ARCHITECTURE.md "Internal Data Models" for speci
 
 from __future__ import annotations
 
+import base64
 import re
 from enum import Enum
 from typing import Any
@@ -49,6 +50,18 @@ class RequestCase(BaseModel):
         default=None, description="Body as base64 if binary (mutually exclusive with body)"
     )
     media_type: str | None = Field(default=None, description="Content-Type, e.g., application/json")
+
+    @model_validator(mode="before")
+    @classmethod
+    def restore_json_input_bytes(cls, data: Any) -> Any:
+        """Restore the original JSON byte input before any chain or HTTP processing."""
+        if isinstance(data, dict) and data.get("body_encoding") == "json-input-bytes":
+            data = data.copy()
+            del data["body_encoding"]
+            if data.get("body") is not None or not isinstance(data.get("body_base64"), str):
+                raise ValueError("Encoded JSON input requires body_base64 and an absent body")
+            data["body"] = base64.b64decode(data.pop("body_base64"), validate=True)
+        return data
 
     @model_validator(mode="after")
     def check_body_exclusivity(self) -> Self:

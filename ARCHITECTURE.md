@@ -403,6 +403,7 @@ class ChainStepExecution:
 **Key design notes:**
 - Header/query values are lists (supports repeated params)
 - `body` and `body_base64` are mutually exclusive
+- Request artifacts store byte payloads in `body_base64` after redaction. For bytes supplied in a JSON media type's `body`, the artifact also records `body_encoding: "json-input-bytes"`. Loading restores those bytes for the executor's JSON parsing step. Explicit `body_base64` payloads are sent verbatim, including for JSON media types.
 - Chain templates separate from execution traces (enables replay)
 
 ---
