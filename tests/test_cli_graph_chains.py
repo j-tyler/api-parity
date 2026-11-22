@@ -1145,3 +1145,8 @@ class TestLinkAttributionHistory:
         for history in (a, b):
             assert history.steps[3].request.path_parameters["id"] == history.steps[0].response.body["id"]
         assert (a.steps[3].response.status_code, b.steps[3].response.status_code) == (200, 404)
+
+        filtered = CaseGenerator(spec_file, exclude_operations=["createResource"])
+        chain, = filtered.generate_chains(max_chains=1, max_steps=4, seed=42)
+        assert [step.request_template.operation_id for step in chain.steps] == ["updateResource", "getResource"]
+        assert all(step.link_source is None for step in chain.steps)

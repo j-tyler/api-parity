@@ -827,11 +827,10 @@ class CaseGenerator:
 
                 source = None
                 transition = input.transition
-                if transition is not None:
-                    parent = self.sources.get(transition.parent_id)
-                    if parent is None:
-                        # Its parent was excluded, so this traversal cannot be executed.
-                        return output
+                # Keep an included operation's generated template when its
+                # parent was excluded. There is no captured exchange to link.
+                parent = self.sources.get(transition.parent_id) if transition is not None else None
+                if parent is not None:
                     position, status = parent
                     link = links_by_id[transition.id]
                     parameters = {
