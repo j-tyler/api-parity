@@ -134,7 +134,7 @@ class SchemaValidator:
                 print(f"Schema violation: {violation.message}")
     """
 
-    def __init__(self, spec_path: Path) -> None:
+    def __init__(self, spec_path: Path, *, source_bytes: bytes | None = None) -> None:
         """Initialize the schema validator.
 
         Args:
@@ -148,11 +148,15 @@ class SchemaValidator:
         self._schema_cache: dict[tuple[str, int], ResponseSchema | None] = {}
 
         try:
-            with open(spec_path) as f:
-                if spec_path.suffix.lower() in (".yaml", ".yml"):
-                    self._spec = yaml.safe_load(f)
-                else:
-                    self._spec = json.load(f)
+            self.source_bytes = spec_path.read_bytes() if source_bytes is None else source_bytes
+            if spec_path.suffix.lower() in (".yaml", ".yml"):
+                self.snapshot_name = "openapi.yaml"
+                self._spec = yaml.safe_load(self.source_bytes)
+            else:
+                self.snapshot_name = "openapi.json"
+                self._spec = json.loads(self.source_bytes)
+            if not isinstance(self._spec, dict) or not isinstance(self._spec.get("paths"), dict):
+                raise ValueError("expected an OpenAPI document with a paths mapping")
         except Exception as e:
             raise SchemaExtractionError(
                 f"Failed to load OpenAPI spec from '{spec_path}': {e}"

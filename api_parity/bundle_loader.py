@@ -8,13 +8,13 @@ See ARCHITECTURE.md "Mismatch Report Bundle" for bundle specifications.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-import yaml
 
 from api_parity.artifact_writer import BUNDLE_SPEC_FILENAMES
 from api_parity.schema_validator import SchemaValidator
@@ -62,7 +62,6 @@ class LoadedBundle:
     # Absent in legacy bundles. Each bundle owns its contract, since merge
     # can combine runs made against different specifications.
     schema_validator: SchemaValidator | None = None
-    schema_path: Path | None = None
 
 
 def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
@@ -230,7 +229,10 @@ def detect_bundle_type(bundle_path: Path) -> BundleType:
     return _detect_bundle_type_from_data(diff_data, bundle_path)
 
 
-def load_bundle(bundle_path: Path) -> LoadedBundle:
+def load_bundle(
+    bundle_path: Path, *, schema_cache: dict | None = None,
+    schema_override: SchemaValidator | None = None,
+) -> LoadedBundle:
     """Load a single mismatch bundle from disk.
 
     Reads the bundle files and reconstructs the appropriate models.
@@ -306,22 +308,24 @@ def load_bundle(bundle_path: Path) -> LoadedBundle:
         except Exception as e:
             raise BundleLoadError(f"Invalid chain.json: {e}") from e
 
-    schema_validator = None
-    spec_paths = [bundle_path / name for name in BUNDLE_SPEC_FILENAMES
-                  if (bundle_path / name).exists()]
-    if len(spec_paths) > 1:
-        raise BundleLoadError("Bundle contains both openapi.json and openapi.yaml; keep only the original contract")
-    spec_path = spec_paths[0] if spec_paths else None
-    if spec_path is not None:
-        try:
-            # A corrupt/empty snapshot must never silently disable validation.
-            text = spec_path.read_text(encoding="utf-8")
-            spec = yaml.safe_load(text) if spec_path.suffix == ".yaml" else json.loads(text)
-            if not isinstance(spec, dict) or not isinstance(spec.get("paths"), dict):
-                raise ValueError("expected an OpenAPI document with a paths mapping")
-            schema_validator = SchemaValidator(spec_path)
-        except Exception as e:
-            raise BundleLoadError(f"Invalid {spec_path.name}: {e}") from e
+    schema_validator = schema_override
+    if schema_validator is None:
+        spec_paths = [bundle_path / name for name in BUNDLE_SPEC_FILENAMES
+                      if (bundle_path / name).exists()]
+        if len(spec_paths) > 1:
+            raise BundleLoadError("Bundle contains both openapi.json and openapi.yaml; keep only the original contract")
+        if spec_paths:
+            spec_path = spec_paths[0]
+            try:
+                raw = spec_path.read_bytes()
+                key = (spec_path.suffix, hashlib.sha256(raw).digest())
+                schema_validator = schema_cache.get(key) if schema_cache is not None else None
+                if schema_validator is None:
+                    schema_validator = SchemaValidator(spec_path, source_bytes=raw)
+                    if schema_cache is not None:
+                        schema_cache[key] = schema_validator
+            except Exception as e:
+                raise BundleLoadError(f"Invalid {spec_path.name}: {e}") from e
 
     return LoadedBundle(
         bundle_path=bundle_path,
@@ -331,5 +335,4 @@ def load_bundle(bundle_path: Path) -> LoadedBundle:
         original_diff=original_diff,
         metadata=metadata,
         schema_validator=schema_validator,
-        schema_path=spec_path,
     )

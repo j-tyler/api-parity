@@ -132,20 +132,22 @@ api-parity merge \
 | `--target-b NAME` | Second target name (required) |
 | `--in PATH` | Input directory with bundles (required) |
 | `--out PATH` | Output directory (required) |
+| `--spec PATH` | Use this OpenAPI spec for every input bundle, including legacy bundles (optional) |
 | `--validate` | Validate config without executing |
 
 **Replay classifications:** `FIXED` (now matches), `STILL MISMATCH` (same failure), `DIFFERENT MISMATCH` (fails differently)
 
-New explore bundles include an `openapi.json` or `openapi.yaml` snapshot,
-preserving the original specification format. Replay uses each bundle's
-snapshot for the same schema validation and extra-field comparisons as explore;
-merge and subsequent replay outputs preserve it. The original spec file is not
-needed for replay. Existing bundles without a snapshot still load. If their
-original failure was a schema violation or extra-field mismatch, replay reports
-an error instead of claiming it is fixed. Rerun explore, or copy the original
-OpenAPI specification into the bundle as `openapi.json` (JSON) or `openapi.yaml`
-(YAML), to verify
-those failures. Other legacy bundles retain rule-only replay.
+Replay uses the schema saved in each bundle. Pass `--spec corrected.yaml` to
+apply one contract to the entire input suite, including older bundles. Explore
+and replay omit the spec from artifacts when `secrets.redact_fields` is configured,
+since it can contain sensitive examples or validation constraints. For these
+runs, supply the spec externally with `--spec`.
+
+With neither a snapshot nor an explicit spec, replay still sends requests and
+reports mismatches found by the current rules. If the rules pass and the original
+failure required schema validation or extra-field comparison, replay lists the
+bundle in `replay_summary.json` under `unverifiable_bundles`, increments
+`errors`, and exits with status 1. Supply `--spec` to verify those bundles.
 
 ### merge
 

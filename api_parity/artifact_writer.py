@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from api_parity.schema_validator import SchemaValidator
 from api_parity.models import (
     ChainCase,
     ChainExecution,
@@ -85,6 +86,7 @@ class ReplayStats:
     fixed_bundles: list[str] = field(default_factory=list)
     persistent_bundles: list[str] = field(default_factory=list)
     changed_bundles: list[str] = field(default_factory=list)
+    unverifiable_bundles: list[str] = field(default_factory=list)
 
     # Set to True if run was interrupted (SIGINT)
     interrupted: bool = False
@@ -104,6 +106,7 @@ class ArtifactWriter:
         output_dir: Path,
         secrets_config: SecretsConfig | None = None,
         spec_path: Path | None = None,
+        *, schema_validator: SchemaValidator | None = None,
     ) -> None:
         """Initialize the artifact writer.
 
@@ -114,14 +117,17 @@ class ArtifactWriter:
         """
         self._output_dir = output_dir
         self._secrets_config = secrets_config
-        # Capture once and preserve the input format used by SchemaValidator.
-        # Reading JSON as YAML can reinterpret exponent-form numbers as strings;
-        # converting YAML to JSON can lose YAML-native values such as dates.
-        self._spec_bytes = spec_path.read_bytes() if spec_path is not None else None
-        self._spec_filename = (
-            "openapi.yaml" if spec_path is not None and spec_path.suffix.lower() in (".yaml", ".yml")
-            else BUNDLE_SPEC_FILENAME
-        )
+        self._spec_bytes = None
+        self._spec_filename = BUNDLE_SPEC_FILENAME
+        if not (secrets_config and secrets_config.redact_fields):
+            if schema_validator is None and spec_path is not None:
+                schema_validator = SchemaValidator(spec_path)
+            if schema_validator is not None:
+                self._spec_bytes = schema_validator.source_bytes
+                self._spec_filename = schema_validator.snapshot_name
+        # Redaction paths describe artifacts, not OpenAPI schema keywords.
+        # Copying the source can leak examples. Rewriting it could change
+        # constraints such as enum. Leave the contract external in this mode.
         self._mismatches_dir = output_dir / "mismatches"
 
         # Create directories
@@ -415,6 +421,7 @@ class ArtifactWriter:
             "fixed_bundles": stats.fixed_bundles,
             "persistent_bundles": stats.persistent_bundles,
             "changed_bundles": stats.changed_bundles,
+            "unverifiable_bundles": stats.unverifiable_bundles,
         }
         self._write_json(self._output_dir / "replay_summary.json", summary)
 

@@ -258,6 +258,7 @@ class ReplayArgs:
     validate: bool
     timeout: float
     operation_timeout: dict[str, float]
+    spec: Path | None = None
 
 
 @dataclass
@@ -485,6 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
         "replay",
         help="Re-execute previously saved mismatch bundles to confirm regressions",
     )
+    replay_parser.add_argument("--spec", type=Path, help="Validate all replay bundles against this OpenAPI spec, overriding saved snapshots")
     replay_parser.add_argument(
         "--config",
         type=Path,
@@ -628,6 +630,7 @@ def parse_replay_args(namespace: argparse.Namespace) -> ReplayArgs:
     """Convert parsed namespace to ReplayArgs dataclass."""
     op_timeouts = _build_operation_timeouts(namespace.operation_timeout or [])
     return ReplayArgs(
+        spec=getattr(namespace, "spec", None),
         config=namespace.config,
         target_a=namespace.target_a,
         target_b=namespace.target_b,
@@ -1925,7 +1928,6 @@ def run_explore(args: ExploreArgs) -> int:
 
     # Initialize components
     stats = RunStats()
-    writer = ArtifactWriter(args.out, runtime_config.secrets, spec_path=args.spec)
 
     target_a_info = TargetInfo(name=args.target_a, base_url=target_a_config.base_url)
     target_b_info = TargetInfo(name=args.target_b, base_url=target_b_config.base_url)
@@ -1936,6 +1938,8 @@ def run_explore(args: ExploreArgs) -> int:
     except SchemaExtractionError as e:
         print(f"Error loading schema for validation: {e}", file=sys.stderr)
         return 1
+
+    writer = ArtifactWriter(args.out, runtime_config.secrets, schema_validator=schema_validator)
 
     # Start CEL evaluator
     try:
@@ -2487,6 +2491,15 @@ def run_replay(args: ReplayArgs) -> int:
         print(f"Error loading comparison library: {e}", file=sys.stderr)
         return 1
 
+    from api_parity.schema_validator import SchemaExtractionError, SchemaValidator
+
+    try:
+        schema_override = SchemaValidator(args.spec) if args.spec is not None else None
+    except SchemaExtractionError as e:
+        print(f"Invalid replay spec: {e}", file=sys.stderr)
+        return 1
+    schema_cache = {}
+
     # Discover bundles
     bundles = discover_bundles(args.input_dir)
 
@@ -2504,7 +2517,7 @@ def run_replay(args: ReplayArgs) -> int:
         invalid_bundles = 0
         for bundle_path in bundles:
             try:
-                load_bundle(bundle_path)
+                load_bundle(bundle_path, schema_cache=schema_cache, schema_override=schema_override)
                 valid_bundles += 1
             except BundleLoadError as e:
                 print(f"    Invalid bundle: {bundle_path.name} - {e}", file=sys.stderr)
@@ -2537,7 +2550,7 @@ def run_replay(args: ReplayArgs) -> int:
 
     for bundle_path in bundles:
         try:
-            bundle = load_bundle(bundle_path)
+            bundle = load_bundle(bundle_path, schema_cache=schema_cache, schema_override=schema_override)
             loaded_bundles.append(bundle)
             # Extract link_fields from chain bundles for variable extraction
             if bundle.bundle_type == BundleType.CHAIN and bundle.chain_case is not None:
@@ -2626,7 +2639,7 @@ def run_replay(args: ReplayArgs) -> int:
                 )
                 bundle_writer = ArtifactWriter(
                     args.out, runtime_config.secrets,
-                    spec_path=bundle.schema_path,
+                    schema_validator=bundle.schema_validator,
                 )
                 _replay_loaded_bundle(
                     bundle=bundle,
@@ -2674,7 +2687,25 @@ def run_replay(args: ReplayArgs) -> int:
         for name in stats.fixed_bundles:
             print(f"  {name}")
 
-    return 0
+    return 1 if stats.unverifiable_bundles else 0
+
+
+def _record_replay_match(bundle, stats) -> bool:
+    """Record the classification and return whether a fix was verified."""
+    steps = bundle.original_diff.get("steps", [bundle.original_diff])
+    if bundle.schema_validator is None and any(
+        step.get("mismatch_type") == "schema_violation"
+        or step.get("details", {}).get("extra_fields", {}).get("differences")
+        for step in steps
+    ):
+        stats.errors += 1
+        stats.unverifiable_bundles.append(bundle.bundle_path.name)
+        print(f"UNVERIFIABLE: {bundle.bundle_path.name} - rules matched, "
+              "but the original schema check requires replay --spec")
+        return False
+    stats.now_match += 1
+    stats.fixed_bundles.append(bundle.bundle_path.name)
+    return True
 
 
 def _replay_loaded_bundle(
@@ -2692,28 +2723,6 @@ def _replay_loaded_bundle(
     from api_parity.bundle_loader import BundleType
 
     stats.total_bundles += 1
-
-    # Old bundles remain loadable, but we cannot prove a schema-dependent
-    # failure fixed without its original contract. Do not guess from the old
-    # error text or silently drop the check that produced the failure.
-    original_steps = (bundle.original_diff.get("steps", [])
-                      if bundle.bundle_type == BundleType.CHAIN
-                      else [bundle.original_diff])
-    needs_schema = any(
-        step.get("mismatch_type") == "schema_violation"
-        or step.get("details", {}).get("extra_fields", {}).get("differences")
-        for step in original_steps
-    )
-    if bundle.schema_validator is None and needs_schema:
-        if bundle.bundle_type == BundleType.STATELESS:
-            stats.stateless_bundles += 1
-        else:
-            stats.chain_bundles += 1
-        stats.errors += 1
-        print(f"ERROR: {bundle.bundle_path.name} - cannot verify the original "
-              "schema-dependent mismatch without its OpenAPI snapshot; rerun explore "
-              "or copy the original spec into the bundle as openapi.json or openapi.yaml")
-        return
 
     # Execute based on type
     if bundle.bundle_type == BundleType.STATELESS:
@@ -2776,9 +2785,8 @@ def _replay_stateless_bundle(
 
         # Classify outcome
         if result.match:
-            stats.now_match += 1
-            stats.fixed_bundles.append(bundle.bundle_path.name)
-            print("FIXED")
+            if _record_replay_match(bundle, stats):
+                print("FIXED")
         elif is_same_mismatch(bundle.original_diff, result):
             stats.still_mismatch += 1
             stats.persistent_bundles.append(bundle.bundle_path.name)
@@ -2860,9 +2868,8 @@ def _replay_chain_bundle(
 
         # Classify outcome
         if not mismatch_found:
-            stats.now_match += 1
-            stats.fixed_bundles.append(bundle.bundle_path.name)
-            print("  FIXED (all steps)")
+            if _record_replay_match(bundle, stats):
+                print("  FIXED (all steps)")
         elif is_same_chain_mismatch(bundle.original_diff, step_diffs):
             stats.still_mismatch += 1
             stats.persistent_bundles.append(bundle.bundle_path.name)

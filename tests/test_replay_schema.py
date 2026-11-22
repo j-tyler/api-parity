@@ -82,12 +82,12 @@ def make_bundle(out, spec, bodies, chain=False, legacy=False, case_id="case"):
     return writer.write_chain_mismatch(chain_case, *executions, [diff], 0, info, info)
 
 
-def replay(config, source, out, *flags):
+def replay(config, source, out, *flags, expected_exit=0):
     result = dispatch(parse_args([
         "replay", "--config", str(config), "--target-a", "a", "--target-b", "b",
         "--in", str(source), "--out", str(out), *flags,
     ]))
-    assert result == 0
+    assert result == expected_exit
     return json.loads((out / "replay_summary.json").read_text())
 
 
@@ -143,12 +143,12 @@ def test_legacy_schema_failures_are_unverifiable_until_spec_supplied(
     source = tmp_path / "explore"
     bundle = make_bundle(source, spec, bodies, chain=chain, legacy=True)
     assert load_bundle(bundle).schema_validator is None
-    result = replay(config, source, tmp_path / "replay")
+    result = replay(config, source, tmp_path / "replay", expected_exit=1)
     assert result["errors"] == 1
+    assert result["unverifiable_bundles"] == [bundle.name]
     assert result["now_match"] == 0
-    send.assert_not_called()
-    (bundle / BUNDLE_SPEC_FILENAME).write_bytes(spec.read_bytes())
-    assert replay(config, source, tmp_path / "recovered")["still_mismatch"] == 1
+    assert send.call_count == 2
+    assert replay(config, source, tmp_path / "recovered", "--spec", str(spec))["still_mismatch"] == 1
 
 
 def test_merged_bundles_use_their_own_contracts_and_legacy_still_loads(tmp_path, replay_env):
@@ -243,3 +243,74 @@ def test_ambiguous_snapshot_is_rejected(tmp_path, replay_env):
     (bundle / "openapi.yaml").write_bytes(spec.read_bytes())
     with pytest.raises(BundleLoadError, match="both openapi.json and openapi.yaml"):
         load_bundle(bundle)
+
+
+@pytest.mark.parametrize("chain", [False, True])
+def test_legacy_rule_failure_is_reported(tmp_path, replay_env, chain):
+    config, bodies, _ = replay_env
+    spec = write_spec(tmp_path / "spec.json")
+    make_bundle(tmp_path / "source", spec, bodies, chain=chain, legacy=True)
+    (tmp_path / "rules.json").write_text(json.dumps({"default_rules": {
+        "body": {"field_rules": {"$.id": {"predefined": "exact_match"}}},
+    }}))
+    bodies[1] = {"id": 5}
+    result = replay(config, tmp_path / "source", tmp_path / "out")
+    assert result["different_mismatch"] == 1
+    assert result["errors"] == 0
+
+
+@pytest.mark.parametrize("chain", [False, True])
+def test_changed_violation_path_and_spec_override(tmp_path, replay_env, chain):
+    config, bodies, _ = replay_env
+    spec = write_spec(tmp_path / "spec.json")
+    document = json.loads(spec.read_bytes())
+    props = document["components"]["schemas"]["Item"]["properties"]
+    props["name"] = {"type": "string"}
+    spec.write_text(json.dumps(document))
+    source = tmp_path / "source"
+    make_bundle(source, spec, bodies, chain=chain)
+    bodies[:] = [{"id": 1, "name": 42}] * 2
+    assert replay(config, source, tmp_path / "out")["different_mismatch"] == 1
+    props["name"] = {"type": "integer"}
+    spec.write_text(json.dumps(document))
+    assert replay(config, source, tmp_path / "fixed", "--spec", str(spec))["now_match"] == 1
+
+
+def test_redacted_run_keeps_sensitive_spec_external(tmp_path, replay_env):
+    config, bodies, _ = replay_env
+    spec = write_spec(tmp_path / "spec.json")
+    document = json.loads(spec.read_bytes())
+    document["components"]["schemas"]["Item"]["example"] = {"password": "example-secret"}
+    spec.write_text(json.dumps(document))
+    source = tmp_path / "legacy"
+    make_bundle(source, spec, bodies, legacy=True)
+    settings = json.loads(config.read_bytes())
+    settings["secrets"] = {"redact_fields": ["$..password"]}
+    config.write_text(json.dumps(settings))
+    out = tmp_path / "redacted"
+    assert replay(config, source, out, "--spec", str(spec))["still_mismatch"] == 1
+    bundle = discover_bundles(out)[0]
+    assert not (bundle / "openapi.json").exists()
+    assert all(b"example-secret" not in path.read_bytes() for path in bundle.iterdir())
+    bodies[:] = [{"id": 1}] * 2
+    assert replay(config, out, tmp_path / "fixed", "--spec", str(spec))["now_match"] == 1
+
+
+@pytest.mark.parametrize("validate", [False, True])
+def test_identical_snapshots_parse_once_per_run(tmp_path, replay_env, monkeypatch, validate):
+    config, bodies, _ = replay_env
+    spec = write_spec(tmp_path / "spec.json")
+    source = tmp_path / "source"
+    for index in range(4):
+        make_bundle(source, spec, bodies, case_id=str(index))
+    original = SchemaValidator.__init__
+    calls = []
+    def count(self, path, **kwargs):
+        calls.append(path)
+        original(self, path, **kwargs)
+    monkeypatch.setattr(SchemaValidator, "__init__", count)
+    flags = ["--validate"] if validate else []
+    assert dispatch(parse_args(["replay", "--config", str(config), "--in", str(source),
+                                "--out", str(tmp_path / "out"), "--target-a", "a",
+                                "--target-b", "b", *flags])) == 0
+    assert len(calls) == 1

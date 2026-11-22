@@ -426,18 +426,17 @@ mismatches/<timestamp>__<operation_id>__<case_id>/
 
 Replay writes only unresolved mismatches (STILL MISMATCH and DIFFERENT MISMATCH). FIXED bundles are not written — they represent resolved issues. This means the output directory contains only what still needs attention.
 
-`load_bundle` loads an optional `openapi.json` or `openapi.yaml` into the returned bundle's
-`schema_validator`. Replay constructs a comparator per bundle so merged inputs
-can use different schemas without sharing validation context. Unresolved output
-bundles retain their input schema snapshot. Invalid snapshots are load errors,
-including in `replay --validate`; they never silently disable validation.
+Replay uses an explicit `--spec` for the whole run when supplied, otherwise
+it loads each bundle's optional snapshot. Replay and `replay --validate` share
+validators within a run by snapshot format and SHA-256 digest. The writer
+reuses the bytes already parsed. Unresolved outputs carry the effective spec
+unless artifact redaction is configured. Malformed or ambiguous snapshots
+are load errors when a snapshot is the selected contract.
 
-Legacy bundles without snapshots retain rule-only comparison, except when the
-original diff records a schema violation or extra-field mismatch. Those failures
-cannot be verified without the schema and count as replay errors, not fixes.
-Users can copy the original spec to `openapi.json` or `openapi.yaml`, matching
-its format, or regenerate with explore. Bundles with both snapshots are rejected
-because the original contract is ambiguous.
+Bundles without a contract execute their configured rules. If those pass but
+the original failure required schema validation or extra-field comparison,
+replay records the name in `unverifiable_bundles`, increments `errors`, and
+returns exit code 1. Other legacy classifications follow the existing rules.
 
 ```
 <output_dir>/
