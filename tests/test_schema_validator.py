@@ -4,6 +4,7 @@ Tests schema extraction, validation, additionalProperties handling,
 and extra field detection.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -835,3 +836,29 @@ class TestBuildOperationIndex:
 
         # Non-existent operationId returns None
         assert validator._find_operation("nonExistent") is None
+
+
+def test_recursive_response_schema_checks_each_instance_level(tmp_path):
+    node_ref = {"$ref": "#/components/schemas/Node"}
+    node = {"type": "object", "required": ["id"], "properties": {
+        "id": {"type": "integer"},
+        "label": {"type": "string", "nullable": True},
+        "child": node_ref,
+        "branches": {"type": "array", "items": {"$ref": "#/components/schemas/Branch"}},
+    }}
+    branch = {"type": "object", "properties": {"node": node_ref}}
+    spec = {"openapi": "3.0.3", "components": {"schemas": {"Node": node, "Branch": branch}},
+            "paths": {"/node": {"get": {"operationId": "getNode", "responses": {
+                "200": {"content": {"application/json": {"schema": node_ref}}}}}}}}
+    validator = SchemaValidator(tmp_path / "openapi.json", source_bytes=json.dumps(spec).encode())
+    body = {"id": 1, "child": {"id": 2, "label": None},
+            "branches": [{"node": {"id": 3, "extra": True}}]}
+    result = validator.validate_response(body, "getNode", 200)
+    assert result.valid, result.violations
+    assert result.extra_fields == ["$.branches[0].node.extra"]
+    assert validator.get_extra_fields(body, "getNode", 200) == result.extra_fields
+
+    body["branches"][0]["node"]["id"] = "bad"
+    result = validator.validate_response(body, "getNode", 200)
+    assert [(v.path, v.violation_type) for v in result.violations] == [
+        ("$.branches[0].node.id", "wrong_type")]

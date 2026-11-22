@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from jsonschema import Draft4Validator, ValidationError
+from jsonschema import Draft4Validator, ValidationError, validators
+from referencing import Registry
+from referencing.exceptions import Unresolvable
+from referencing.jsonschema import DRAFT4
 
 
 # =============================================================================
@@ -84,6 +87,33 @@ class ResponseSchema:
 # =============================================================================
 # Helpers
 # =============================================================================
+
+
+def _openapi_keywords(schema: dict[str, Any]):
+    """Apply OpenAPI 3.0 nullable semantics at the schema node being validated."""
+    if "$ref" in schema:
+        # Draft 4 ignores siblings of a reference.
+        return [("$ref", schema["$ref"])]
+    if schema.get("nullable") is not True:
+        return schema.items()
+
+    non_nullable = {key: value for key, value in schema.items() if key != "nullable"}
+    if "type" not in non_nullable:
+        return [("anyOf", [non_nullable, {"type": "null"}])]
+    types = non_nullable["type"]
+    if not isinstance(types, list):
+        types = [types]
+    non_nullable["type"] = types if "null" in types else [*types, "null"]
+    return non_nullable.items()
+
+
+_OpenAPIResponseValidator = validators.create(
+    meta_schema=Draft4Validator.META_SCHEMA,
+    validators=Draft4Validator.VALIDATORS,
+    type_checker=Draft4Validator.TYPE_CHECKER,
+    id_of=Draft4Validator.ID_OF,
+    applicable_validators=_openapi_keywords,
+)
 
 
 def build_operation_index(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -162,6 +192,12 @@ class SchemaValidator:
                 f"Failed to load OpenAPI spec from '{spec_path}': {e}"
             ) from e
 
+        # Keep local references rooted in this contract, including during replay
+        # from a snapshot. An empty registry does not retrieve external documents.
+        registry = Registry()
+        self._document_validator = _OpenAPIResponseValidator(self._spec, registry=registry)
+        self._document_resolver = registry.resolver_with_root(DRAFT4.create_resource(self._spec))
+
         # Pre-build operationId -> operation dict index for O(1) lookups.
         # Without this, every _find_operation() call scans all paths × methods.
         self._operation_index: dict[str, dict[str, Any]] = build_operation_index(
@@ -202,10 +238,7 @@ class SchemaValidator:
         extra_fields: list[str] = []
 
         try:
-            # Draft4Validator chosen because OpenAPI 3.0 response schemas closely align
-            # with JSON Schema Draft 4. Using a newer draft would reject valid OpenAPI
-            # schemas that use Draft 4 keywords.
-            validator = Draft4Validator(response_schema.schema)
+            validator = self._document_validator.evolve(schema=response_schema.schema)
             errors = list(validator.iter_errors(body))
 
             for error in errors:
@@ -353,16 +386,7 @@ class SchemaValidator:
         if schema is None:
             return None
 
-        # Resolve $ref in schema
-        schema = self._resolve_schema_refs(schema)
-
-        # Convert OpenAPI 3.0 "nullable: true" to JSON Schema "type: [T, 'null']".
-        # Draft4Validator is a pure JSON Schema validator that ignores the nullable
-        # keyword, causing false violations when a field is null but spec allows it.
-        schema = self._resolve_nullable(schema)
-
-        # Determine if additionalProperties allows extra fields
-        allows_extra = self._allows_additional_properties(schema)
+        allows_extra = self._allows_additional_properties(self._resolve_ref(schema))
 
         return ResponseSchema(schema=schema, allows_extra_fields=allows_extra)
 
@@ -386,139 +410,19 @@ class SchemaValidator:
         Returns:
             The resolved object.
         """
-        if not isinstance(obj, dict):
-            return obj
-
-        ref = obj.get("$ref")
-        if ref is None:
-            return obj
-
-        # Parse the $ref path (e.g., "#/components/schemas/Widget")
-        if not ref.startswith("#/"):
-            # External refs not supported
-            return obj
-
-        parts = ref[2:].split("/")
-        resolved = self._spec
-        for part in parts:
-            if isinstance(resolved, dict):
-                resolved = resolved.get(part, {})
-            else:
-                return obj
-
-        return resolved if isinstance(resolved, dict) else obj
-
-    def _resolve_schema_refs(
-        self, schema: dict[str, Any], visited: frozenset[str] | None = None
-    ) -> dict[str, Any]:
-        """Recursively resolve all $ref references in a schema.
-
-        Args:
-            schema: The schema to resolve.
-            visited: Set of already-visited $ref paths to detect cycles.
-
-        Returns:
-            Schema with all refs resolved. Cycles are broken by returning
-            the unresolved $ref to prevent infinite recursion.
-
-        Cycles occur in OpenAPI specs for recursive data structures like trees:
-        TreeNode has children: array of TreeNode. Without cycle detection,
-        resolving TreeNode's $ref would infinitely recurse.
-        """
-        if visited is None:
-            visited = frozenset()
-
-        if not isinstance(schema, dict):
-            return schema
-
-        # Handle $ref at this level
-        if "$ref" in schema:
-            ref = schema["$ref"]
-            if ref in visited:
-                # Cycle detected - return unresolved to break recursion
-                return schema
-            resolved = self._resolve_ref(schema)
-            # Recursively resolve nested refs with updated visited set
-            return self._resolve_schema_refs(resolved, visited | {ref})
-
-        # Recursively process nested schemas
-        result = {}
-        for key, value in schema.items():
-            if key == "properties" and isinstance(value, dict):
-                result[key] = {
-                    prop: self._resolve_schema_refs(prop_schema, visited)
-                    for prop, prop_schema in value.items()
-                }
-            elif key == "items" and isinstance(value, dict):
-                result[key] = self._resolve_schema_refs(value, visited)
-            elif key in ("allOf", "anyOf", "oneOf") and isinstance(value, list):
-                result[key] = [self._resolve_schema_refs(item, visited) for item in value]
-            elif key == "additionalProperties" and isinstance(value, dict):
-                result[key] = self._resolve_schema_refs(value, visited)
-            else:
-                result[key] = value
-
-        return result
-
-    def _resolve_nullable(self, schema: Any) -> Any:
-        """Convert OpenAPI 3.0 nullable: true into JSON Schema type arrays.
-
-        OpenAPI 3.0 uses "nullable: true" to indicate a field can be null, but this
-        is an OpenAPI extension — not a JSON Schema keyword. Draft4Validator ignores it,
-        causing false "None is not of type 'X'" violations for valid null values.
-
-        This method recursively walks the schema and converts:
-            {"type": "string", "nullable": true}  ->  {"type": ["string", "null"]}
-        Removes the "nullable" key after conversion.
-
-        Args:
-            schema: Schema (or sub-schema) to process.
-
-        Returns:
-            Schema with nullable converted to JSON Schema type unions.
-        """
-        if not isinstance(schema, dict):
-            return schema
-
-        result = {}
-        for key, value in schema.items():
-            if key == "properties" and isinstance(value, dict):
-                result[key] = {
-                    prop: self._resolve_nullable(prop_schema)
-                    for prop, prop_schema in value.items()
-                }
-            elif key == "items" and isinstance(value, dict):
-                result[key] = self._resolve_nullable(value)
-            elif key in ("allOf", "anyOf", "oneOf") and isinstance(value, list):
-                result[key] = [self._resolve_nullable(item) for item in value]
-            elif key == "additionalProperties" and isinstance(value, dict):
-                result[key] = self._resolve_nullable(value)
-            else:
-                result[key] = value
-
-        # Convert nullable: true into JSON Schema equivalent.
-        # Two cases:
-        # 1. nullable + type: {"type": "string", "nullable": true}
-        #    -> {"type": ["string", "null"]}
-        # 2. nullable without type (composition): {"nullable": true, "allOf": [...]}
-        #    -> {"anyOf": [{allOf: [...]}, {"type": "null"}]}
-        #    This happens when nullable wraps a $ref or composition keyword.
-        if result.get("nullable") is True:
-            if "type" in result:
-                existing_type = result["type"]
-                if isinstance(existing_type, list):
-                    if "null" not in existing_type:
-                        result["type"] = existing_type + ["null"]
-                else:
-                    result["type"] = [existing_type, "null"]
-            else:
-                # No direct type key — wrap in anyOf with a null branch so
-                # Draft4Validator can match null against the type: null alternative.
-                non_nullable = {k: v for k, v in result.items() if k != "nullable"}
-                return {"anyOf": [non_nullable, {"type": "null"}]}
-            del result["nullable"]
-
-        return result
+        seen = set()
+        while isinstance(obj, dict) and isinstance(ref := obj.get("$ref"), str):
+            if not ref.startswith("#/") or ref in seen:
+                break
+            seen.add(ref)
+            try:
+                target = self._document_resolver.lookup(ref).contents
+            except Unresolvable:
+                break
+            if not isinstance(target, dict):
+                break
+            obj = target
+        return obj
 
     def _allows_additional_properties(self, schema: dict[str, Any]) -> bool:
         """Check if schema allows additional properties.

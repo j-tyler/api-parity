@@ -486,16 +486,17 @@ Date: 20260112
 
 ---
 
-# Schema Validator: Preprocessing OpenAPI nullable into JSON Schema
+# Recursive response schemas and OpenAPI nullable fields
 
-Keywords: nullable schema validator Draft4Validator preprocessing
+Keywords: nullable recursive schema validator Draft4Validator
 Date: 20260209
 
 OpenAPI 3.0 uses `nullable: true` to express that a field can be null, but this is an OpenAPI extension — not a JSON Schema keyword. `Draft4Validator` (from `jsonschema`) ignores it, causing false "None is not of type 'X'" violations.
 
-**Approach chosen:** Pre-process the resolved schema before handing it to `Draft4Validator`. A `_resolve_nullable()` method recursively walks the schema and converts `nullable: true` into the JSON Schema equivalent. This runs in `_extract_response_schema()` after `$ref` resolution.
+Response validation starts at the selected response schema and resolves local `$ref` pointers against the complete OpenAPI document. A recursive reference can therefore be followed at each level present in the response body. Replay uses the same resolution rules with the bundle’s contract or the supplied schema override.
 
-Two conversion cases:
+The Draft 4 validator applies the following OpenAPI 3.0 nullable conversions when it visits a schema node. This also covers nodes reached through recursive references.
+
 1. `nullable` + `type`: `{"type": "string", "nullable": true}` → `{"type": ["string", "null"]}`
 2. `nullable` without `type` (composition): `{"nullable": true, "allOf": [...]}` → `{"anyOf": [{allOf: [...]}, {"type": "null"}]}`
 
