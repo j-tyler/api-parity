@@ -428,6 +428,14 @@ mismatches/<timestamp>__<operation_id>__<case_id>/
 
 **diff.json:** `mismatch_type` (status_code|headers|body|schema_violation), `summary`, `details` with per-component differences. Chain diffs add `"type": "chain"`, `"mismatch_step"`, and `"steps"` (per-step comparison results).
 
+For stateless bundles, `case.json` keeps the shared request and a
+`session_cookies` map keyed by `target_a` and `target_b`. A side appears
+when its session changed the outgoing Cookie header. Its entry contains the
+wire value and a SHA-256 digest of the request scheme, authority and path.
+The target's execution trace also shows the header. A null entry means that a
+redaction rule withheld the header. An empty map records a case that can be
+replayed using only the explicit request and target configuration.
+
 ### Replay Output Structure
 
 Replay writes only unresolved mismatches (STILL MISMATCH and DIFFERENT MISMATCH). FIXED bundles are not written — they represent resolved issues. This means the output directory contains only what still needs attention.

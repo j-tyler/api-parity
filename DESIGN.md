@@ -286,6 +286,15 @@ Date: 20260108
 
 Users define which fields contain secrets via JSONPath in config. No automatic detection. Redaction applies when writing artifacts. Users know their sensitive fields better than heuristics.
 
+Stateless explore reuses a cookie jar per target. Replay saves the effective
+Cookie header when the jar changes what a target receives. The wire value
+preserves ordering and duplicate names from different cookie paths. Saving
+only the selected header keeps unrelated jar entries out of the bundle.
+Both the cookie's name and its request/response header representations are
+eligible for redaction. A redacted dependency requires an explicit Cookie
+header on replay so that matching authentication failures cannot mark it fixed.
+Target-configured headers continue to come from the current configuration.
+
 ---
 
 # Pydantic v2 for Data Models

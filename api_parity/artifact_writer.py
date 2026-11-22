@@ -14,6 +14,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,6 @@ from api_parity.models import (
     RequestCase,
     ResponseCase,
     SecretsConfig,
-    StatelessExecution,
     TargetInfo,
 )
 
@@ -36,6 +36,12 @@ TOOL_VERSION = "0.1.0"
 # Per-bundle so merge and moving bundles preserve their validation contract.
 BUNDLE_SPEC_FILENAME = "openapi.json"
 BUNDLE_SPEC_FILENAMES = (BUNDLE_SPEC_FILENAME, "openapi.yaml")
+
+
+@lru_cache(maxsize=128)
+def _redaction_path(expression: str):
+    from jsonpath_ng import parse
+    return parse(expression)
 
 
 @dataclass
@@ -175,24 +181,43 @@ class ArtifactWriter:
         self._write_spec(bundle_dir)
 
         # Redact secrets from case and responses if configured
-        case_data = self._redact(case.model_dump())
-        exec_a_data = self._redact(
-            StatelessExecution(request=case, response=response_a).model_dump()
-        )
-        exec_b_data = self._redact(
-            StatelessExecution(request=case, response=response_b).model_dump()
-        )
+        targets = (("target_a", response_a), ("target_b", response_b))
+        case_data = case.model_dump(exclude={"session_cookies"})
+        case_data["session_cookies"] = {
+            side: response._session_cookie.model_dump()
+            for side, response in targets if response._session_cookie is not None
+        }
+        case_data = self._redact(case_data)
+        saved_cookies = case_data.pop("session_cookies")
+        # Redacting an empty cookie/header map removes no input. Keep it loadable.
+        for field in ("cookies", "headers"):
+            if not getattr(case, field) and case_data[field] == "[REDACTED]":
+                case_data[field] = {}
 
+        session_cookies = {}
+        for side, response in targets:
+            request_data = copy.deepcopy(case_data)
+            cookie = response._session_cookie
+            if cookie is not None:
+                saved = saved_cookies.get(side) if isinstance(saved_cookies, dict) else None
+                if saved != cookie.model_dump() or self._cookie_is_redacted(cookie.value):
+                    saved = None
+                session_cookies[side] = saved
+                if isinstance(request_data["headers"], dict):
+                    request_data["headers"]["cookie"] = [cookie.value if saved is not None else "[REDACTED]"]
+            execution = self._redact({"request": request_data, "response": response.model_dump()})
+            trace_request = execution["request"]
+            if cookie is not None and session_cookies[side] is not None:
+                # A selector on the execution trace must also protect the replay copy.
+                trace_headers = trace_request.get("headers") if isinstance(trace_request, dict) else None
+                if not isinstance(trace_headers, dict) or trace_headers.get("cookie") != [cookie.value]:
+                    session_cookies[side] = None
+            self._encode_request_bytes(trace_request)
+            self._write_json(bundle_dir / f"{side}.json", execution)
+
+        case_data["session_cookies"] = session_cookies
         self._encode_request_bytes(case_data)
-        self._encode_request_bytes(exec_a_data["request"])
-        self._encode_request_bytes(exec_b_data["request"])
-
-        # Write case.json
         self._write_json(bundle_dir / "case.json", case_data)
-
-        # Write target_a.json and target_b.json
-        self._write_json(bundle_dir / "target_a.json", exec_a_data)
-        self._write_json(bundle_dir / "target_b.json", exec_b_data)
 
         # Write diff.json with type discriminator
         diff_data = {"type": "stateless", **diff.model_dump()}
@@ -534,6 +559,18 @@ class ArtifactWriter:
             safe = safe[:50]
         return safe or "unnamed"
 
+    def _cookie_is_redacted(self, header: str) -> bool:
+        """Withhold the whole wire header if a rule protects any of its cookies."""
+        if not (self._secrets_config and self._secrets_config.redact_fields):
+            return False
+        # A session cookie moves from Set-Cookie on an earlier response to Cookie
+        # on this request. Honor selectors for either header and for named cookies.
+        names = {part.partition("=")[0].strip(): True for part in header.split(";")}
+        request = {"cookies": names, "headers": {"Cookie": [header], "cookie": [header]}}
+        response = {"headers": {"Set-Cookie": [header], "set-cookie": [header]}}
+        views = (request, response, {"request": request, "response": response})
+        return any(self._redact(view) != view for view in views)
+
     def _redact(self, data: Any) -> Any:
         """Redact secret fields from data.
 
@@ -572,13 +609,11 @@ class ArtifactWriter:
             doesn't match or is invalid.
         """
         try:
-            from jsonpath_ng import parse as jsonpath_parse
-
-            compiled = jsonpath_parse(jsonpath)
+            compiled = _redaction_path(jsonpath)
             matches = compiled.find(data)
 
             for match in matches:
-                self._set_value(data, str(match.full_path), "[REDACTED]")
+                match.full_path.update(data, "[REDACTED]")
 
         except Exception:
             # Best-effort redaction: invalid paths or missing jsonpath_ng library
@@ -586,54 +621,3 @@ class ArtifactWriter:
             pass
 
         return data
-
-    def _set_value(self, data: Any, path: str, value: Any) -> None:
-        """Set a value at a JSONPath-like path.
-
-        This is a simplified path navigator that handles common cases from
-        jsonpath_ng output (e.g., "body.items[0].password"). It does NOT handle
-        wildcards or complex expressions - those are resolved by jsonpath_ng
-        into concrete paths before this method is called.
-
-        Silently does nothing if the path doesn't exist, which is intentional
-        for best-effort redaction.
-
-        Args:
-            data: Root data structure (modified in place).
-            path: Concrete path string (e.g., "body.password", "items[0].key").
-            value: Value to set at the path.
-        """
-        # Convert array notation to dot notation: "items[0].key" -> "items.0.key"
-        parts = path.replace("[", ".").replace("]", "").split(".")
-        parts = [p for p in parts if p]
-
-        current = data
-        for i, part in enumerate(parts[:-1]):
-            if isinstance(current, dict):
-                if part in current:
-                    current = current[part]
-                else:
-                    return
-            elif isinstance(current, list):
-                try:
-                    idx = int(part)
-                    if 0 <= idx < len(current):
-                        current = current[idx]
-                    else:
-                        return
-                except ValueError:
-                    return
-            else:
-                return
-
-        # Set the final value
-        final_part = parts[-1]
-        if isinstance(current, dict) and final_part in current:
-            current[final_part] = value
-        elif isinstance(current, list):
-            try:
-                idx = int(final_part)
-                if 0 <= idx < len(current):
-                    current[idx] = value
-            except ValueError:
-                pass

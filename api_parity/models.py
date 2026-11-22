@@ -9,7 +9,7 @@ import base64
 import re
 from copy import deepcopy
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from typing_extensions import Self
 
@@ -19,6 +19,15 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator,
 # =============================================================================
 # Core HTTP Models
 # =============================================================================
+
+
+class SessionCookieHeader(BaseModel):
+    """Cookie header contributed by a target's session, scoped to the original request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str
+    value: str
 
 
 class RequestCase(BaseModel):
@@ -49,6 +58,11 @@ class RequestCase(BaseModel):
         default_factory=dict, description="Request headers (arrays for repeated headers)"
     )
     cookies: dict[str, str] = Field(default_factory=dict, description="Cookies")
+    # Absent on ordinary inputs. A saved stateless case owns its cookie state:
+    # an omitted side used no session cookie, a null side required a redacted one.
+    session_cookies: dict[Literal["target_a", "target_b"], SessionCookieHeader | None] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     body: Any = Field(default=None, description="Body as JSON value if parseable")
     body_base64: str | None = Field(
         default=None, description="Body as base64 if binary (mutually exclusive with body)"
@@ -112,6 +126,7 @@ class ResponseCase(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    _session_cookie: SessionCookieHeader | None = PrivateAttr(default=None)
     status_code: int = Field(description="HTTP status code")
     headers: dict[str, list[str]] = Field(
         default_factory=dict, description="Response headers (lowercase keys, array values)"

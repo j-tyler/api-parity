@@ -30,6 +30,7 @@ from api_parity.models import (
     ChainStepExecution,
     RequestCase,
     ResponseCase,
+    SessionCookieHeader,
     TargetConfig,
 )
 from api_parity.path_rendering import decode_path_value, render_path
@@ -110,6 +111,30 @@ def _sanitize_header_value(value: str) -> str:
     """
     # Use 'replace' error handler to convert non-ASCII to '?'
     return value.encode('ascii', errors='replace').decode('ascii')
+
+
+def _cookie_scope(url: httpx.URL) -> str:
+    # A recorded wire header no longer has the jar's domain, path and Secure
+    # rules. Bind it to the original endpoint without duplicating URL secrets.
+    endpoint = url.copy_with(username=None, password=None, query=None, fragment=None)
+    return hashlib.sha256(str(endpoint).encode()).hexdigest()
+
+
+def _has_cookie_header(client: httpx.Client, request: RequestCase) -> bool:
+    return "cookie" in client.headers or any(
+        name.lower() == "cookie" and values for name, values in request.headers.items()
+    )
+
+
+def _inherited_cookie(case: RequestCase, sent: httpx.Request) -> SessionCookieHeader | None:
+    if "cookie" not in sent.headers:
+        return None
+    value = sent.headers["cookie"]
+    if case.cookies:
+        explicit = httpx.Request(case.method, sent.url, cookies=case.cookies)
+        if value == explicit.headers.get("cookie"):
+            return None
+    return SessionCookieHeader(scope=_cookie_scope(sent.url), value=value)
 
 
 class Executor:
@@ -260,17 +285,36 @@ class Executor:
         """
         timeout = self._get_timeout(request.operation_id)
 
-        # Execute against Target A
-        response_a = self._execute_single(
-            self._client_a, request, timeout, "Target A"
-        )
-
-        # Execute against Target B
-        response_b = self._execute_single(
-            self._client_b, request, timeout, "Target B"
-        )
+        # Resolve both saved cookie headers before sending either request, which may be a POST.
+        case_a, cookie_a = self._stateless_request(request, self._client_a, "target_a")
+        case_b, cookie_b = self._stateless_request(request, self._client_b, "target_b")
+        response_a = self._execute_single(self._client_a, case_a, timeout, "Target A", stateless=True)
+        response_b = self._execute_single(self._client_b, case_b, timeout, "Target B", stateless=True)
+        if cookie_a is not None:
+            response_a._session_cookie = cookie_a
+        if cookie_b is not None:
+            response_b._session_cookie = cookie_b
 
         return response_a, response_b
+
+    @staticmethod
+    def _stateless_request(
+        case: RequestCase, client: httpx.Client, side: str
+    ) -> tuple[RequestCase, SessionCookieHeader | None]:
+        if case.session_cookies is None or side not in case.session_cookies:
+            return case, None
+        if _has_cookie_header(client, case):
+            return case, None
+        cookie = case.session_cookies[side]
+        if cookie is None:
+            raise RequestError(f"{side} session cookie was redacted. Supply a Cookie header for this target.")
+        url = client.build_request(case.method, _percent_encode_control_chars(case.rendered_path)).url
+        if _cookie_scope(url) != cookie.scope:
+            raise RequestError(
+                f"{side} session cookie belongs to a different endpoint. Supply a Cookie header for this target."
+            )
+        headers = {**case.headers, "cookie": [cookie.value]}
+        return case.model_copy(update={"headers": headers}), cookie
 
     def execute_chain(
         self,
@@ -773,6 +817,7 @@ class Executor:
         request: RequestCase,
         timeout: float,
         target_name: str,
+        *, stateless: bool = False,
     ) -> ResponseCase:
         """Execute a request against a single target.
 
@@ -781,6 +826,7 @@ class Executor:
             request: The request to execute.
             timeout: Request timeout in seconds.
             target_name: Name for error messages.
+            stateless: Capture or restore session cookies for a standalone case.
 
         Returns:
             ResponseCase with the response.
@@ -879,25 +925,33 @@ class Executor:
         if request.media_type:
             headers.setdefault(content_type_key, request.media_type)
 
-        # Add cookies
-        cookies: dict[str, str] = request.cookies
-
         # Enforce rate limit before making request
         self._wait_for_rate_limit()
 
         try:
             start_time = time.perf_counter()
 
-            http_response = client.request(
+            request_args = dict(
                 method=request.method,
                 url=url,
                 params=params if params else None,
                 headers=headers if headers else None,
                 content=content,
                 json=json_body,
-                cookies=cookies if cookies else None,
+                cookies=request.cookies or None,
                 timeout=timeout,
             )
+            uses_jar = stateless and not _has_cookie_header(client, request)
+            if uses_jar and request.session_cookies is not None:
+                # This bundle had no inherited Cookie on this side. Remove cookies
+                # introduced by earlier replay bundles and retain the case's own cookies.
+                prepared = client.build_request(**request_args)
+                prepared.headers.pop("cookie", None)
+                if request.cookies:
+                    httpx.Cookies(request.cookies).set_cookie_header(prepared)
+                http_response = client.send(prepared)
+            else:
+                http_response = client.request(**request_args)
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
 
@@ -917,7 +971,11 @@ class Executor:
                 f"at position {e.start}. HTTP requires ASCII for these fields."
             ) from e
 
-        return self._convert_response(http_response, elapsed_ms)
+        response = self._convert_response(http_response, elapsed_ms)
+        if uses_jar and request.session_cookies is None:
+            # The response may already have rotated or deleted the cookie in the jar.
+            response._session_cookie = _inherited_cookie(request, http_response.request)
+        return response
 
     def _convert_response(
         self,

@@ -35,7 +35,7 @@ def replay_env(tmp_path, monkeypatch, fixture_cel_evaluator_path):
         "comparison_rules": str(rules),
     }))
     bodies = [{"id": "invalid"}, {"id": "invalid"}]
-    send = Mock(side_effect=lambda client, request, timeout, target_name: ResponseCase(
+    send = Mock(side_effect=lambda client, request, timeout, target_name, **kwargs: ResponseCase(
         status_code=200, body=bodies[0 if target_name == "Target A" else 1], elapsed_ms=1,
     ))
     monkeypatch.setattr(Executor, "_execute_single", send)

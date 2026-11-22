@@ -143,6 +143,11 @@ If a link cannot be resolved for either target, explore counts the chain in
 If that step now passes and a later link blocks, replay reports `FIXED` and
 identifies the unexecuted step. A later observed mismatch is still reported.
 
+Stateless replay restores the session cookies each target received during explore,
+including cookies set by earlier requests. If a required cookie was redacted or
+the target endpoint changed, replay reports an error before sending the case.
+Supply a current `Cookie` header in that target's configuration to replay it.
+
 Replay uses the schema saved in each bundle. Pass `--spec corrected.yaml` to
 apply one contract to the entire input suite, including older bundles. Explore
 and replay omit the spec from artifacts when `secrets.redact_fields` is configured,
