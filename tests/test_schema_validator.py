@@ -4,6 +4,7 @@ Tests schema extraction, validation, additionalProperties handling,
 and extra field detection.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -835,3 +836,52 @@ class TestBuildOperationIndex:
 
         # Non-existent operationId returns None
         assert validator._find_operation("nonExistent") is None
+
+
+def test_recursive_response_schema_checks_each_instance_level(tmp_path):
+    node_ref = {"$ref": "#/components/schemas/Node"}
+    node = {"type": "object", "required": ["id"], "properties": {
+        "id": {"type": "integer"},
+        "label": {"type": "string", "nullable": True},
+        "child": node_ref,
+        "branches": {"type": "array", "items": {"$ref": "#/components/schemas/Branch"}},
+    }}
+    branch = {"type": "object", "properties": {"node": node_ref}}
+    spec = {"openapi": "3.0.3", "components": {"schemas": {"Node": node, "Branch": branch}},
+            "paths": {"/node": {"get": {"operationId": "getNode", "responses": {
+                "200": {"content": {"application/json": {"schema": node_ref}}}}}}}}
+    validator = SchemaValidator(tmp_path / "openapi.json", source_bytes=json.dumps(spec).encode())
+    body = {"id": 1, "child": {"id": 2, "label": None},
+            "branches": [{"node": {"id": 3, "extra": True}}]}
+    result = validator.validate_response(body, "getNode", 200)
+    assert result.valid, result.violations
+    assert result.extra_fields == ["$.branches[0].node.extra"]
+    assert validator.get_extra_fields(body, "getNode", 200) == result.extra_fields
+
+    body["branches"][0]["node"]["id"] = "bad"
+    result = validator.validate_response(body, "getNode", 200)
+    assert [(v.path, v.violation_type) for v in result.violations] == [
+        ("$.branches[0].node.id", "wrong_type")]
+
+
+def test_dangling_pointer_preserves_sibling_validation_and_is_reported_by_lint(tmp_path):
+    from api_parity.spec_linter import SpecLinter
+
+    missing = "#/components/schemas/Missing"
+    node = {"type": "object", "properties": {
+        "id": {"$ref": "#/components/schemas/Item~1Id%20Type"},
+        "meta": {"$ref": missing}, "other": {"$ref": missing},
+        "child": {"$ref": "#/components/schemas/Node"}}}
+    spec = {"openapi": "3.0.3", "components": {"schemas": {
+        "Node": node, "Item/Id Type": {"type": "integer"}}},
+        "paths": {"/node": {"get": {"operationId": "getNode", "responses": {"200": {
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Node"}}}
+        }}}}}}
+    path = tmp_path / "openapi.json"
+    path.write_text(json.dumps(spec))
+    validator = SchemaValidator(path)
+    assert validator.validate_response({"id": 1, "meta": {}}, "getNode", 200).valid
+    result = validator.validate_response({"child": {"id": "bad", "meta": 1}}, "getNode", 200)
+    assert [(v.path, v.violation_type) for v in result.violations] == [("$.child.id", "wrong_type")]
+    messages = [m.message for m in SpecLinter(path).lint().errors if m.code == "missing_response_reference"]
+    assert messages == [f"Missing response reference {missing}"]
