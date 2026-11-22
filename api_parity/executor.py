@@ -9,15 +9,19 @@ See ARCHITECTURE.md "Executor" for specifications.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import ssl
 import time
 from collections.abc import Collection
+from email.message import Message
 from threading import Lock
 from typing import Any, Callable
+from urllib.parse import urlencode
 
 import httpx
+from urllib3.filepost import encode_multipart_formdata
 
 from api_parity.case_generator import LinkFields, _MISSING, extract_by_jsonpointer
 from api_parity.models import (
@@ -77,6 +81,17 @@ def _percent_encode_control_chars(path: str) -> str:
     return _URL_CONTROL_CHAR_RE.sub(
         lambda m: '%{:02X}'.format(ord(m.group())), path
     )
+
+
+def _form_fields(body: dict) -> list[tuple[str, str | bytes]]:
+    fields = []
+    for name, value in body.items():
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, (dict, list)):
+                # A structured form field is a single JSON part, not a Python repr.
+                item = json.dumps(item, default=lambda raw: base64.b64encode(raw).decode("ascii"))
+            fields.append((name, item if isinstance(item, bytes) else str(item)))
+    return fields
 
 
 def _sanitize_header_value(value: str) -> str:
@@ -781,7 +796,23 @@ class Executor:
         content: bytes | None = None
         json_body: Any = None
 
-        if request.body is not None:
+        content_type_key = next((k for k in headers if k.lower() == "content-type"), "Content-Type")
+        media = (request.media_type or "").partition(";")[0].lower().strip()
+
+        if isinstance(request.body, dict) and media == "application/x-www-form-urlencoded":
+            content = urlencode(_form_fields(request.body)).encode("ascii")
+        elif isinstance(request.body, dict) and media in {"multipart/form-data", "multipart/mixed"}:
+            header = Message()
+            header["Content-Type"] = headers.get(content_type_key, request.media_type)
+            if header.get_boundary() is None:
+                # Reuse the delimiter for both targets and when the saved case is replayed.
+                boundary = hashlib.sha256(request.case_id.encode()).hexdigest()[:32]
+                header.set_boundary(boundary)
+            headers[content_type_key] = header["Content-Type"]
+            parts = [(name, (name, value, "application/octet-stream") if isinstance(value, bytes) else value)
+                     for name, value in _form_fields(request.body)]
+            content, _ = encode_multipart_formdata(parts, boundary=header.get_boundary())
+        elif request.body is not None:
             if request.media_type and "json" in request.media_type.lower():
                 if isinstance(request.body, bytes):
                     # Body is raw bytes in a JSON-typed request slot (e.g.,
@@ -824,12 +855,12 @@ class Executor:
                     content = request.body
                 else:
                     content = str(request.body).encode("utf-8")
-        elif request.body_base64:
+        elif request.body_base64 is not None:
             content = base64.b64decode(request.body_base64)
 
         # Add content-type if specified
-        if request.media_type and "content-type" not in {k.lower() for k in headers}:
-            headers["Content-Type"] = request.media_type
+        if request.media_type:
+            headers.setdefault(content_type_key, request.media_type)
 
         # Add cookies
         cookies: dict[str, str] = request.cookies

@@ -8,6 +8,7 @@ See ARCHITECTURE.md "Mismatch Report Bundle" for specifications.
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import re
@@ -182,6 +183,10 @@ class ArtifactWriter:
             StatelessExecution(request=case, response=response_b).model_dump()
         )
 
+        self._encode_request_bytes(case_data)
+        self._encode_request_bytes(exec_a_data["request"])
+        self._encode_request_bytes(exec_b_data["request"])
+
         # Write case.json
         self._write_json(bundle_dir / "case.json", case_data)
 
@@ -257,6 +262,12 @@ class ArtifactWriter:
         chain_data = self._redact(chain.model_dump())
         exec_a_data = self._redact(execution_a.model_dump())
         exec_b_data = self._redact(execution_b.model_dump())
+
+        for data, key in ((chain_data, "request_template"), (exec_a_data, "request"),
+                          (exec_b_data, "request")):
+            for step in data["steps"]:
+                if isinstance(step, dict):
+                    self._encode_request_bytes(step[key])
 
         # Write chain.json
         self._write_json(bundle_dir / "chain.json", chain_data)
@@ -450,6 +461,40 @@ class ArtifactWriter:
         temp_path = spec_path.with_suffix(".tmp")
         temp_path.write_bytes(self._spec_bytes)
         temp_path.replace(spec_path)
+
+    @staticmethod
+    def _encode_request_bytes(request: Any) -> None:
+        """Encode only request payloads, after applying artifact redaction."""
+        if not isinstance(request, dict):
+            return
+        if isinstance(request.get("body"), (list, dict)):
+            paths = []
+
+            def encode_fields(container, path):
+                items = container.items() if isinstance(container, dict) else enumerate(container)
+                for key, value in items:
+                    if isinstance(value, bytes):
+                        container[key] = base64.b64encode(value).decode("ascii")
+                        paths.append([*path, key])
+                    elif isinstance(value, (list, dict)):
+                        encode_fields(value, [*path, key])
+
+            encode_fields(request["body"], [])
+            if paths:
+                request["binary_field_paths"] = paths
+            return
+        if not isinstance(request.get("body"), bytes):
+            return
+        body = request["body"]
+        request["body"] = None
+        if request["body_base64"] is not None:
+            # A redaction selected the encoded destination. Keep its replacement.
+            return
+        request["body_base64"] = base64.b64encode(body).decode("ascii")
+        if "json" in (request["media_type"] or "").lower():
+            # JSON body bytes use the executor's parse-or-send-raw behavior.
+            # Explicit body_base64 requests are always sent verbatim.
+            request["body_encoding"] = "json-input-bytes"
 
     def _write_json(self, path: Path, data: Any) -> None:
         """Write data as JSON to a file atomically.
