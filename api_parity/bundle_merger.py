@@ -19,6 +19,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from api_parity.artifact_writer import BUNDLE_SPEC_FILENAMES
 from api_parity.bundle_loader import BundleType, discover_bundles
 from api_parity.mismatch_classifier import mismatch_dedup_key
 
@@ -194,6 +195,11 @@ def merge_bundles(input_dirs: list[Path], output_dir: Path) -> MergeSummary:
             # dirs_exist_ok=True allows re-running merge into the same
             # output directory without FileExistsError. Previous winners
             # are overwritten with fresh copies.
+            # Re-merging a legacy bundle must not retain a schema snapshot
+            # left by an earlier version of a bundle with the same name.
+            for name in BUNDLE_SPEC_FILENAMES:
+                if not (bundle_info.path / name).exists():
+                    (dest / name).unlink(missing_ok=True)
             shutil.copytree(bundle_info.path, dest, dirs_exist_ok=True)
 
     # Write merge_summary.json

@@ -1925,7 +1925,7 @@ def run_explore(args: ExploreArgs) -> int:
 
     # Initialize components
     stats = RunStats()
-    writer = ArtifactWriter(args.out, runtime_config.secrets)
+    writer = ArtifactWriter(args.out, runtime_config.secrets, spec_path=args.spec)
 
     target_a_info = TargetInfo(name=args.target_a, base_url=target_a_config.base_url)
     target_b_info = TargetInfo(name=args.target_b, base_url=target_b_config.base_url)
@@ -2594,8 +2594,6 @@ def run_replay(args: ReplayArgs) -> int:
     progress_reporter: ProgressReporter | None = None
 
     try:
-        comparator = Comparator(cel_evaluator, comparison_library)
-
         # Start executor with link_fields for chain variable extraction
         requests_per_second = (
             runtime_config.rate_limit.requests_per_second
@@ -2621,12 +2619,21 @@ def run_replay(args: ReplayArgs) -> int:
 
             # Replay each pre-loaded bundle
             for bundle in loaded_bundles:
+                # Merged inputs can have different schemas. Never reuse one
+                # bundle's validator for another, including legacy bundles.
+                comparator = Comparator(
+                    cel_evaluator, comparison_library, bundle.schema_validator
+                )
+                bundle_writer = ArtifactWriter(
+                    args.out, runtime_config.secrets,
+                    spec_path=bundle.schema_path,
+                )
                 _replay_loaded_bundle(
                     bundle=bundle,
                     executor=executor,
                     comparator=comparator,
                     comparison_rules=comparison_rules,
-                    writer=writer,
+                    writer=bundle_writer,
                     stats=stats,
                     target_a_info=target_a_info,
                     target_b_info=target_b_info,
@@ -2686,6 +2693,28 @@ def _replay_loaded_bundle(
 
     stats.total_bundles += 1
 
+    # Old bundles remain loadable, but we cannot prove a schema-dependent
+    # failure fixed without its original contract. Do not guess from the old
+    # error text or silently drop the check that produced the failure.
+    original_steps = (bundle.original_diff.get("steps", [])
+                      if bundle.bundle_type == BundleType.CHAIN
+                      else [bundle.original_diff])
+    needs_schema = any(
+        step.get("mismatch_type") == "schema_violation"
+        or step.get("details", {}).get("extra_fields", {}).get("differences")
+        for step in original_steps
+    )
+    if bundle.schema_validator is None and needs_schema:
+        if bundle.bundle_type == BundleType.STATELESS:
+            stats.stateless_bundles += 1
+        else:
+            stats.chain_bundles += 1
+        stats.errors += 1
+        print(f"ERROR: {bundle.bundle_path.name} - cannot verify the original "
+              "schema-dependent mismatch without its OpenAPI snapshot; rerun explore "
+              "or copy the original spec into the bundle as openapi.json or openapi.yaml")
+        return
+
     # Execute based on type
     if bundle.bundle_type == BundleType.STATELESS:
         stats.stateless_bundles += 1
@@ -2741,7 +2770,7 @@ def _replay_stateless_bundle(
         # Re-execute
         response_a, response_b = executor.execute(case)
 
-        # Compare (operation_id passed for consistency, but replay has no schema validation)
+        # Compare using the bundle's original schema when available.
         rules = get_operation_rules(comparison_rules, case.operation_id)
         result = comparator.compare(response_a, response_b, rules, case.operation_id)
 

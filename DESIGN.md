@@ -44,6 +44,25 @@ For `additionalProperties: false`, extra fields are violations. For `true` or un
 
 **Key insight:** Schema validity and implementation equivalence are separate concerns. A response can be valid (matches schema) but not equivalent (differs from other implementation). Example: if the spec allows extras and Target A returns `{id: 1, debug: "foo"}` while Target B returns `{id: 1, trace_id: "bar"}`, both are schema-valid but they're not equivalent—the agent should know about this divergence.
 
+**Replay must retain this authority.** Each new explore mismatch bundle includes
+the original specification as `openapi.json` or `openapi.yaml`, preserving both
+the bytes and the parser used by validation. Merely renaming JSON to YAML can
+reinterpret exponent-form numbers as strings; converting YAML to JSON can lose
+YAML-native values such as dates in examples. Preserving the format avoids both
+changes. Bundles with both filenames are rejected as ambiguous.
+Keeping the whole document preserves local component references without changing
+the validator's existing schema resolution behavior. Per-bundle snapshots cost
+disk space, but survive moving bundles and merging runs made with different
+specifications. Replay preserves snapshots in unresolved output bundles and uses
+the same schema validation and extra-field comparison as explore. It does not
+depend on the original source path or a new required CLI argument.
+
+The existing JSON bundle files remain unchanged. Older bundles still load and
+retain rule-only replay for ordinary failures. A legacy schema violation or
+extra-field mismatch without its contract is unverifiable: count it as an error
+rather than marking it fixed by omitting the failed check. Supplying the original
+spec in the matching snapshot format restores verification. Corrupt snapshots are load errors.
+
 ---
 
 # User-Defined Comparison Rules Required

@@ -263,7 +263,7 @@ Rejects replay output (detected by `replay_summary.json` presence). Groups bundl
 
 ```python
 class ArtifactWriter:
-    def __init__(self, output_dir: Path, secrets_config: SecretsConfig | None = None): ...
+    def __init__(self, output_dir: Path, secrets_config: SecretsConfig | None = None, spec_path: Path | None = None): ...
     def write_mismatch(self, case, response_a, response_b, diff, ...) -> Path: ...
     def write_chain_mismatch(self, chain, execution_a, execution_b, ...) -> Path: ...
     def write_summary(self, stats: RunStats, seed: int | None = None) -> None: ...
@@ -417,6 +417,7 @@ mismatches/<timestamp>__<operation_id>__<case_id>/
   target_b.json    # Response/execution from Target B
   diff.json        # ComparisonResult
   metadata.json    # Run context (version, targets, seed)
+  openapi.json     # Original JSON spec snapshot (or openapi.yaml for YAML input)
 ```
 
 **diff.json:** `mismatch_type` (status_code|headers|body|schema_violation), `summary`, `details` with per-component differences. Chain diffs add `"type": "chain"`, `"mismatch_step"`, and `"steps"` (per-step comparison results).
@@ -425,12 +426,26 @@ mismatches/<timestamp>__<operation_id>__<case_id>/
 
 Replay writes only unresolved mismatches (STILL MISMATCH and DIFFERENT MISMATCH). FIXED bundles are not written — they represent resolved issues. This means the output directory contains only what still needs attention.
 
+`load_bundle` loads an optional `openapi.json` or `openapi.yaml` into the returned bundle's
+`schema_validator`. Replay constructs a comparator per bundle so merged inputs
+can use different schemas without sharing validation context. Unresolved output
+bundles retain their input schema snapshot. Invalid snapshots are load errors,
+including in `replay --validate`; they never silently disable validation.
+
+Legacy bundles without snapshots retain rule-only comparison, except when the
+original diff records a schema violation or extra-field mismatch. Those failures
+cannot be verified without the schema and count as replay errors, not fixes.
+Users can copy the original spec to `openapi.json` or `openapi.yaml`, matching
+its format, or regenerate with explore. Bundles with both snapshots are rejected
+because the original contract is ambiguous.
+
 ```
 <output_dir>/
   mismatches/             # Only STILL MISMATCH and DIFFERENT MISMATCH bundles
     <timestamp>__<op>__<id>/
       case.json or chain.json
       target_a.json, target_b.json, diff.json, metadata.json
+      openapi.json or openapi.yaml  # Preserved when present in the input bundle
   replay_summary.json     # Run statistics and classification results
 ```
 

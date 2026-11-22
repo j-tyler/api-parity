@@ -136,6 +136,17 @@ api-parity merge \
 
 **Replay classifications:** `FIXED` (now matches), `STILL MISMATCH` (same failure), `DIFFERENT MISMATCH` (fails differently)
 
+New explore bundles include an `openapi.json` or `openapi.yaml` snapshot,
+preserving the original specification format. Replay uses each bundle's
+snapshot for the same schema validation and extra-field comparisons as explore;
+merge and subsequent replay outputs preserve it. The original spec file is not
+needed for replay. Existing bundles without a snapshot still load. If their
+original failure was a schema violation or extra-field mismatch, replay reports
+an error instead of claiming it is fixed. Rerun explore, or copy the original
+OpenAPI specification into the bundle as `openapi.json` (JSON) or `openapi.yaml`
+(YAML), to verify
+those failures. Other legacy bundles retain rule-only replay.
+
 ### merge
 
 Combine mismatch bundles from multiple explore runs into a single deduplicated directory. Bundles with the same failure pattern (operation, mismatch type, failing paths) are deduplicated, keeping the latest.

@@ -14,6 +14,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+from api_parity.artifact_writer import BUNDLE_SPEC_FILENAMES
+from api_parity.schema_validator import SchemaValidator
+
 from api_parity.case_generator import HeaderRef, LinkFields, LINK_HEADER_PATTERN
 from api_parity.models import (
     ChainCase,
@@ -54,6 +59,10 @@ class LoadedBundle:
     original_diff: dict[str, Any]
     # Metadata for context
     metadata: MismatchMetadata
+    # Absent in legacy bundles. Each bundle owns its contract, since merge
+    # can combine runs made against different specifications.
+    schema_validator: SchemaValidator | None = None
+    schema_path: Path | None = None
 
 
 def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
@@ -297,6 +306,23 @@ def load_bundle(bundle_path: Path) -> LoadedBundle:
         except Exception as e:
             raise BundleLoadError(f"Invalid chain.json: {e}") from e
 
+    schema_validator = None
+    spec_paths = [bundle_path / name for name in BUNDLE_SPEC_FILENAMES
+                  if (bundle_path / name).exists()]
+    if len(spec_paths) > 1:
+        raise BundleLoadError("Bundle contains both openapi.json and openapi.yaml; keep only the original contract")
+    spec_path = spec_paths[0] if spec_paths else None
+    if spec_path is not None:
+        try:
+            # A corrupt/empty snapshot must never silently disable validation.
+            text = spec_path.read_text(encoding="utf-8")
+            spec = yaml.safe_load(text) if spec_path.suffix == ".yaml" else json.loads(text)
+            if not isinstance(spec, dict) or not isinstance(spec.get("paths"), dict):
+                raise ValueError("expected an OpenAPI document with a paths mapping")
+            schema_validator = SchemaValidator(spec_path)
+        except Exception as e:
+            raise BundleLoadError(f"Invalid {spec_path.name}: {e}") from e
+
     return LoadedBundle(
         bundle_path=bundle_path,
         bundle_type=bundle_type,
@@ -304,4 +330,6 @@ def load_bundle(bundle_path: Path) -> LoadedBundle:
         chain_case=chain_case,
         original_diff=original_diff,
         metadata=metadata,
+        schema_validator=schema_validator,
+        schema_path=spec_path,
     )
