@@ -32,6 +32,7 @@ from api_parity.models import (
     ResponseCase,
     TargetConfig,
 )
+from api_parity.path_rendering import decode_path_value, render_path
 from api_parity.xml_body import dict_to_xml, xml_to_dict
 
 
@@ -323,8 +324,9 @@ class Executor:
             # parameters belong to their source, and resolved values are literal.
             request_a = self._apply_variables(step.request_template, extracted_vars_a, linked_parameters)
             request_b = self._apply_variables(step.request_template, extracted_vars_b, linked_parameters)
-            request_a = self._apply_link_overrides(request_a, overrides_a)
-            request_b = self._apply_link_overrides(request_b, overrides_b)
+            if linked_parameters:
+                request_a = self._apply_link_overrides(request_a, overrides_a, linked_parameters, source_a.request)
+                request_b = self._apply_link_overrides(request_b, overrides_b, linked_parameters, source_b.request)
 
             timeout = self._get_timeout(request_a.operation_id)
 
@@ -411,22 +413,23 @@ class Executor:
         # Deep copy the template to avoid mutation
         request_dict = template.model_dump()
 
-        # Apply variables to path parameters
-        for key, value in list(request_dict.get("path_parameters", {}).items()):
-            if key not in linked_parameters and isinstance(value, str):
-                for var_name, var_value in variables.items():
-                    if f"{{{var_name}}}" in value:
-                        value = value.replace(f"{{{var_name}}}", self._variable_to_string(var_value))
-                    # Also check for direct match (Schemathesis may have already resolved)
-                    if value == var_name:
-                        value = self._variable_to_string(var_value)
-                request_dict["path_parameters"][key] = value
-
-        # Re-render the path with updated parameters
-        rendered_path = request_dict["path_template"]
-        for key, value in request_dict.get("path_parameters", {}).items():
-            rendered_path = rendered_path.replace(f"{{{key}}}", str(value))
-        request_dict["rendered_path"] = rendered_path
+        # Template values may already be percent-escaped. Decode the template
+        # text before rendering, but keep response values literal (including %).
+        for key, value in template.path_parameters.items():
+            if isinstance(value, str) and key not in linked_parameters and value in variables:
+                value = self._variable_to_string(variables[value])
+            elif isinstance(value, str) and key not in linked_parameters and "{" in value:
+                # Decode only literal spans. Escaped braces in generated IDs are data.
+                parts = re.split(r"(\{[^{}]+\})", value)
+                value = "".join(
+                    self._variable_to_string(variables[part[1:-1]])
+                    if index % 2 and part[1:-1] in variables else decode_path_value(part)
+                    for index, part in enumerate(parts)
+                )
+            else:
+                value = decode_path_value(value)
+            request_dict["path_parameters"][key] = value
+        request_dict["rendered_path"] = render_path(template.path_template, request_dict["path_parameters"])
 
         # Apply variables to query parameters (dict[str, list[str]])
         for key, values in list(request_dict.get("query", {}).items()):
@@ -689,6 +692,8 @@ class Executor:
         self,
         template: RequestCase,
         overrides: dict[str, Any],
+        expressions: dict[str, str] | None = None,
+        source_request: RequestCase | None = None,
     ) -> RequestCase:
         """Override request template parameters with link-resolved values.
 
@@ -696,11 +701,6 @@ class Executor:
         prior step responses. This is the key step that makes stateful chains
         work: instead of sending random UUIDs as path parameters, we send the
         actual resource IDs from prior create/update responses.
-
-        For path parameters, leading slashes are stripped because Location
-        headers often return paths like "/resourceId" — the leading slash is
-        the URL separator, not part of the value, and causes double-slashes
-        in rendered paths like "//resourceId/subResource".
 
         Args:
             template: Request template with fuzz-generated values.
@@ -714,12 +714,27 @@ class Executor:
 
         request_dict = template.model_dump()
 
+        uri_paths = {}
         for param_name, value in overrides.items():
             str_value = self._variable_to_string(value)
 
             if param_name in request_dict.get("path_parameters", {}):
-                # Strip leading slashes from path parameter values.
-                request_dict["path_parameters"][param_name] = str_value.lstrip("/")
+                expression = (expressions or {}).get(param_name, "")
+                path_source = _LINK_EXPR_REQUEST_PATH.fullmatch(expression)
+                if path_source and source_request is not None:
+                    # An ordinary source segment may decode to a leading slash.
+                    # Forward its original interpretation along with the value.
+                    reference = source_request._uri_path_references.get(path_source.group(1))
+                elif str_value.startswith("/") or re.fullmatch(
+                    r"\$(?:request|response)\.header\.(?:content-)?location(?:\[\d+\])?", expression, re.I
+                ):
+                    reference = str_value.lstrip("/")
+                else:
+                    reference = None
+                if reference is not None:
+                    uri_paths[param_name] = reference
+                    str_value = decode_path_value(reference)
+                request_dict["path_parameters"][param_name] = str_value
             elif param_name in request_dict.get("query", {}):
                 request_dict["query"][param_name] = [str_value]
             else:
@@ -730,13 +745,10 @@ class Executor:
                         request_dict["headers"][hdr_key] = [str_value]
                         break
 
-        # Re-render path with updated parameters
-        rendered_path = request_dict["path_template"]
-        for key, param_value in request_dict.get("path_parameters", {}).items():
-            rendered_path = rendered_path.replace(f"{{{key}}}", str(param_value))
-        request_dict["rendered_path"] = rendered_path
-
-        return RequestCase.model_validate(request_dict)
+        request_dict["rendered_path"] = render_path(template.path_template, request_dict["path_parameters"], uri_paths)
+        request = RequestCase.model_validate(request_dict)
+        request._uri_path_references = uri_paths
+        return request
 
     def _get_timeout(self, operation_id: str) -> float:
         """Get timeout for an operation."""

@@ -41,6 +41,7 @@ _InferenceConfig = type(StatefulPhaseConfig().inference)
 from schemathesis.specs.openapi.stateful import OpenAPIStateMachine
 
 from api_parity.models import ChainCase, ChainStep, RequestCase
+from api_parity.path_rendering import decode_path_value, render_path
 from api_parity.schema_validator import build_operation_index
 from api_parity.schema_value_generator import SchemaValueGenerator
 
@@ -717,13 +718,13 @@ class CaseGenerator:
         Returns:
             RequestCase model instance.
         """
-        # Path parameters
-        path_params = dict(case.path_parameters) if case.path_parameters else {}
-
-        # Compute rendered path
-        rendered_path = case.path
-        for key, value in path_params.items():
-            rendered_path = rendered_path.replace(f"{{{key}}}", str(value))
+        # Schemathesis quote_plus-encodes its serialized path parameters. In a
+        # URL path, a space must be %20 and an actual plus is already %2B.
+        path_params = {
+            key: value.replace("+", "%20") if isinstance(value, str) else value
+            for key, value in (case.path_parameters or {}).items()
+        }
+        rendered_path = render_path(case.path, {k: decode_path_value(v) for k, v in path_params.items()})
 
         # Query parameters - normalize to lists
         query: dict[str, list[str]] = {}

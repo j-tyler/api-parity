@@ -431,7 +431,7 @@ class TestApplyLinkOverrides:
             rendered_path="/widgets/fuzz-generated-uuid",
         )
         overrides = {"widget_id": "/real-widget-id"}
-        result = executor._apply_link_overrides(template, overrides)
+        result = executor._apply_link_overrides(template, overrides, {"widget_id": "$response.header.Location"})
 
         assert result.path_parameters["widget_id"] == "real-widget-id"
         assert result.rendered_path == "/widgets/real-widget-id"
@@ -494,7 +494,7 @@ class TestApplyLinkOverrides:
             rendered_path="/widgets/fuzz-uuid",
         )
         overrides = {"widget_id": ["/widgets/abc-123"]}
-        result = executor._apply_link_overrides(template, overrides)
+        result = executor._apply_link_overrides(template, overrides, {"widget_id": "$response.header.Location"})
 
         # First element, with leading slash stripped
         assert result.path_parameters["widget_id"] == "widgets/abc-123"
