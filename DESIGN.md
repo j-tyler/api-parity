@@ -550,7 +550,7 @@ Date: 20260216
 1. `_resolve_link_expression()` parses OpenAPI runtime expressions (`$response.body#/path`, `$response.header.X`, `$request.path.X`, `$request.header.X`) and maps them to extracted variable keys or prior request data.
 2. `_resolve_link_overrides()` processes all parameters in `link_source["parameters"]` and produces a dict of `{param_name: resolved_value}`.
 3. `_apply_link_overrides()` overrides the fuzz-generated path parameter, query parameter, or header values in the request template with the resolved values, then re-renders the path.
-4. Leading slashes are stripped from path parameter values (Location headers return `/resourceId` — the slash is the URL separator, not part of the value).
+4. A path parameter from a Location header retains its URI path separators and percent escapes after stripping the leading slash. Other resolved values are literal parameter data. For example, the ID `a#b` is sent as `a%23b`, and the literal ID `a%23b` is sent as `a%2523b`.
 5. Each target tracks the prior step's request for `$request.path/header` resolution.
 6. The chain breaks when link resolution fails for BOTH targets (source step returned errors, no variables extracted — continuing would produce noise).
 
