@@ -221,6 +221,14 @@ class TestExtraFieldsComparison:
         # Should have extra_fields in details
         assert "extra_fields" in result.details
 
+    @pytest.mark.parametrize(("left", "right"), [(True, 1), (2**53 + 1, float(2**53))])
+    def test_distinct_extra_field_values(self, comparator, left, right):
+        def response(value):
+            return make_response(body={"widgets": [], "extra": {"values": [value]}})
+
+        result = comparator.compare(response(left), response(right), OperationRules(), "listFlexibleWidgets")
+        assert not result.details["extra_fields"].match
+
     def test_same_extra_fields_match(self, comparator):
         """Same extra field values in flexible schemas match."""
         body_a = {"widgets": [{"id": "1", "name": "W"}], "extra": "same"}

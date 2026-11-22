@@ -155,7 +155,7 @@ class TestEdgeCases:
 
         assert result.details["body"].match is True
 
-    def test_unicode_values(self, comparator, mock_cel):
+    def test_unicode_values(self, comparator):
         """Unicode values are handled correctly."""
         response_a = make_response_case(body={"name": "日本語"})
         response_b = make_response_case(body={"name": "日本語"})
@@ -164,14 +164,12 @@ class TestEdgeCases:
                 field_rules={"$.name": FieldRule(predefined="exact_match")}
             ),
         )
-        mock_cel.evaluate.return_value = True
 
         result = comparator.compare(response_a, response_b, rules)
 
         assert result.details["body"].match is True
-        mock_cel.evaluate.assert_called_with("a == b", {"a": "日本語", "b": "日本語"})
 
-    def test_boolean_values(self, comparator, mock_cel):
+    def test_boolean_values(self, comparator):
         """Boolean values are handled correctly."""
         response_a = make_response_case(body={"active": True})
         response_b = make_response_case(body={"active": False})
@@ -180,14 +178,12 @@ class TestEdgeCases:
                 field_rules={"$.active": FieldRule(predefined="exact_match")}
             ),
         )
-        mock_cel.evaluate.return_value = False
 
         result = comparator.compare(response_a, response_b, rules)
 
         assert result.match is False
-        mock_cel.evaluate.assert_called_with("a == b", {"a": True, "b": False})
 
-    def test_array_as_field_value(self, comparator, mock_cel):
+    def test_array_as_field_value(self, comparator):
         """Array values can be compared."""
         response_a = make_response_case(body={"tags": ["a", "b", "c"]})
         response_b = make_response_case(body={"tags": ["a", "b", "c"]})
@@ -196,12 +192,10 @@ class TestEdgeCases:
                 field_rules={"$.tags": FieldRule(predefined="exact_match")}
             ),
         )
-        mock_cel.evaluate.return_value = True
 
         result = comparator.compare(response_a, response_b, rules)
 
         assert result.details["body"].match is True
-        mock_cel.evaluate.assert_called_with("a == b", {"a": ["a", "b", "c"], "b": ["a", "b", "c"]})
 
     def test_object_as_field_value(self, comparator, mock_cel):
         """Nested object values can be compared."""

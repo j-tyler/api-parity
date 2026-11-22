@@ -654,3 +654,16 @@ Discovery records the parent case ID as a position in the captured chain and
 uses the transition ID to identify the exact OpenAPI link. Explore and replay
 resolve that link against the selected exchange on each target. Explicit link
 values remain literal during placeholder substitution.
+
+## Exact comparison of JSON integers
+
+Keywords: CEL exact_match both_null_or_equal JSON integer precision
+Date: 20261121
+
+The standard `exact_match` and `both_null_or_equal` rules compare parsed JSON
+values directly because decoding integer IDs as doubles can discard low bits.
+Pairs of integers compare exactly. Pairs containing a float retain the double
+comparison used by existing configurations, since serializers can encode the
+same double with integer or exponent notation. Schema extra fields retain their
+existing numeric value comparison. All three distinguish booleans from numbers.
+Custom CEL expressions and arithmetic rules retain the evaluator's double semantics.

@@ -16,18 +16,26 @@ class TestPredefinedExpansion:
 
     def test_no_params(self, comparator, mock_cel):
         """Predefined with no params expands correctly."""
-        response_a = make_response_case(body={"value": 1})
-        response_b = make_response_case(body={"value": 1})
+        response_a = make_response_case(body={"value": "x"})
+        response_b = make_response_case(body={"value": "x"})
         rules = OperationRules(
             body=BodyRules(
-                field_rules={"$.value": FieldRule(predefined="exact_match")}
+                field_rules={"$.value": FieldRule(predefined="string_length_match")}
             ),
         )
         mock_cel.evaluate.return_value = True
 
         comparator.compare(response_a, response_b, rules)
 
-        mock_cel.evaluate.assert_called_with("a == b", {"a": 1, "b": 1})
+        mock_cel.evaluate.assert_called_with("size(a) == size(b)", {"a": "x", "b": "x"})
+
+    def test_library_override_of_exact_match(self, comparator, comparison_library, mock_cel):
+        comparison_library.predefined["exact_match"].expr = "a < b"
+        rules = OperationRules(body=BodyRules(field_rules={"$.id": FieldRule(predefined="exact_match")}))
+        result = comparator.compare(make_response_case(body={"id": 1}),
+                                    make_response_case(body={"id": 2}), rules)
+        assert result.match
+        mock_cel.evaluate.assert_called_once_with("a < b", {"a": 1, "b": 2})
 
     def test_numeric_param(self, comparator, mock_cel):
         """Numeric parameter substituted correctly."""

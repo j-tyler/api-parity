@@ -98,6 +98,42 @@ class TestExactMatch:
         assert result.match is False
         assert result.mismatch_type == MismatchType.BODY
 
+    @pytest.mark.parametrize(("left", "right", "expected"), [
+        (2**53, 2**53 + 1, False),
+        (-(2**63), -(2**63) + 1, False),
+        ({"rows": [{"id": 2**64 - 1}]}, {"rows": [{"id": 2**64 - 2}]}, False),
+        (2**53 + 1, float(2**53), True),
+        (12345678901234567000, 1.2345678901234567e19, True),
+        (1.0, 10**350, False),
+        (2**53, float(2**53), True),
+        ({"id": 10**350, "flags": [True]}, {"flags": [True], "id": 10**350}, True),
+        ([{"flag": True}], [{"flag": 1}], False),
+    ])
+    @pytest.mark.parametrize("rule", ["exact_match", "both_null_or_equal"])
+    def test_exact_json_numbers(self, comparator, left, right, expected, rule):
+        rules = OperationRules(
+            body=BodyRules(field_rules={"$.value": FieldRule(predefined=rule)})
+        )
+        result = comparator.compare(make_response_case(body={"value": left}),
+                                    make_response_case(body={"value": right}), rules)
+        assert result.match is expected
+
+    @pytest.mark.parametrize("leaf", ["1", "2"])
+    def test_deep_json(self, comparator, leaf):
+        def response(value):
+            # Alternate arrays and objects so both traversal paths are exercised.
+            return make_response_case(body={"value": json.loads('[{"v":' * 300 + value + '}]' * 300)})
+
+        rules = OperationRules(body=BodyRules(field_rules={"$.value": FieldRule(predefined="exact_match")}))
+        result = comparator.compare(response("1"), response(leaf), rules)
+        assert result.match is (leaf == "1")
+
+    def test_custom_cel_keeps_double_arithmetic(self, comparator):
+        rule = FieldRule(expr="type(a) == double && a / 2.0 == b")
+        rules = OperationRules(body=BodyRules(field_rules={"$.value": rule}))
+        assert comparator.compare(make_response_case(body={"value": 3}),
+                                  make_response_case(body={"value": 1.5}), rules).match
+
     def test_strings_equal(self, comparator):
         """Strings that are equal pass."""
         response_a = make_response_case(body={"name": "Alice"})

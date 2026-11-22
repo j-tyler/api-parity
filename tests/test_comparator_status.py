@@ -93,9 +93,9 @@ class TestComparisonOrder:
             body={"id": 2},
         )
         rules = OperationRules(
-            headers={"content-type": FieldRule(predefined="exact_match")},
+            headers={"content-type": FieldRule(expr="a == b")},
             body=BodyRules(
-                field_rules={"$.id": FieldRule(predefined="exact_match")}
+                field_rules={"$.id": FieldRule(expr="a == b")}
             ),
         )
         # Header check fails

@@ -65,7 +65,7 @@ class TestHeaderComparison:
         response_a = make_response_case(headers={"x-custom": ["first", "second"]})
         response_b = make_response_case(headers={"x-custom": ["first", "different"]})
         rules = OperationRules(
-            headers={"x-custom": FieldRule(predefined="exact_match")},
+            headers={"x-custom": FieldRule(expr="a == b")},
         )
         mock_cel.evaluate.return_value = True
 
@@ -207,9 +207,9 @@ class TestMultipleHeaderRules:
         )
         rules = OperationRules(
             headers={
-                "content-type": FieldRule(predefined="exact_match"),
+                "content-type": FieldRule(expr="a == b"),
                 "x-request-id": FieldRule(predefined="ignore"),
-                "x-version": FieldRule(predefined="exact_match"),
+                "x-version": FieldRule(expr="a == b"),
             },
         )
         mock_cel.evaluate.return_value = True
