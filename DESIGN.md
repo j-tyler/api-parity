@@ -667,3 +667,15 @@ comparison used by existing configurations, since serializers can encode the
 same double with integer or exponent notation. Schema extra fields retain their
 existing numeric value comparison. All three distinguish booleans from numbers.
 Custom CEL expressions and arithmetic rules retain the evaluator's double semantics.
+
+## JSONPath match locations
+
+Keywords: JSONPath wildcard presence mismatch classification
+Date: 20261122
+
+A selection returns both a value and its location. Matching those locations keeps
+a moved field visible and allows object keys to appear in either order. Required
+queries need at least one match and check the locations selected on either side.
+For a length-only array failure, the configured query identifies the count
+difference. This keeps the failure recognizable on replay when the excess tail
+grows or shrinks and avoids storing the contents of each excess element.

@@ -72,7 +72,7 @@ class TestWildcardPaths:
         diff, = result.details["body"].differences
         assert (diff.path, diff.target_a, diff.target_b) == ("groups.[0].items.[2].id", 5, 6)
 
-    def test_required_checks_each_existing_element(self, comparator):
+    def test_required_checks_selected_locations(self, comparator):
         rule = FieldRule(presence="required")
         rules = OperationRules(body=BodyRules(field_rules={"$.items[*].record.id": rule}))
         a = make_response_case(body={"items": [{"record": {"id": 1}}, {}, {}]})
@@ -80,9 +80,45 @@ class TestWildcardPaths:
         result = comparator.compare(a, b, rules)
         assert [(d.path, d.target_a, d.target_b) for d in result.details["body"].differences
                 if d.rule == "presence:required"] == [
-            ("items.[1].record.id", "<missing>", "<missing>"),
             ("items.[2].record.id", "<missing>", 2),
         ]
+
+        assert comparator.compare(a, a, rules).match
+        missing = make_response_case(body={"items": [{}]})
+        assert not comparator.compare(missing, missing, rules).match
+
+    @pytest.mark.parametrize("presence", ["parity", "required", "optional"])
+    def test_length_only_failure_is_compact_and_stable(self, comparator, presence):
+        query = "$.items[*].id"
+        rules = OperationRules(body=BodyRules(field_rules={query: FieldRule(presence=presence)}))
+        def response(size):
+            return make_response_case(body={"items": [{"id": i} for i in range(size)]})
+
+        for size in (6, 500):
+            result = comparator.compare(response(5), response(size), rules)
+            diff, = result.details["body"].differences
+            assert (diff.path, diff.rule) == (query, "wildcard_count_mismatch")
+            assert (diff.target_a, diff.target_b) == ("<5 matches>", f"<{size} matches>")
+
+    @pytest.mark.parametrize("query", ["$..id", "$.items[0:2].id", "$.items.*.id"])
+    def test_selectors_pair_by_location(self, comparator, query):
+        a, b = [{"id": 1}, {}], [{}, {"id": 1}]
+        if query == "$.items.*.id":
+            a, b = dict(zip(("x", "y"), a)), dict(zip(("x", "y"), b))
+        rules = OperationRules(body=BodyRules(field_rules={query: FieldRule(predefined="exact_match")}))
+        result = comparator.compare(make_response_case(body={"items": a}),
+                                    make_response_case(body={"items": b}), rules)
+        diffs = result.details["body"].differences
+        assert len(diffs) == 2 and diffs[0].path != diffs[1].path
+        assert [(d.target_a, d.target_b) for d in diffs] == [(1, "<missing>"), ("<missing>", 1)]
+
+    def test_same_single_location_keeps_query_path(self, comparator):
+        query = "$.items[*].id"
+        rules = OperationRules(body=BodyRules(field_rules={query: FieldRule(predefined="exact_match")}))
+        result = comparator.compare(make_response_case(body={"items": [{"id": 1}]}),
+                                    make_response_case(body={"items": [{"id": 2}]}), rules)
+        diff, = result.details["body"].differences
+        assert (diff.path, diff.target_a, diff.target_b) == (query, 1, 2)
 
     def test_wildcard_element_mismatch(self, comparator, mock_cel):
         """Wildcard paths report which element mismatched."""
