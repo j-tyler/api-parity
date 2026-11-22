@@ -1302,6 +1302,7 @@ def _generate_chains_with_seed_walking(
             max_chains=max_chains or 20,
             max_steps=max_steps,
             seed=current_seed,
+            reuse_topologies=False,
         )
 
         # Deduplicate and track hits from new unique chains
@@ -1316,17 +1317,9 @@ def _generate_chains_with_seed_walking(
                 _add_hits_from_chain(chain)
                 seed_contributed = True
                 new_chains_this_seed += 1
-
-        # Track binary coverage from ALL chains (including duplicates).
-        # This is separate from _add_hits_from_chain because they serve
-        # different purposes:
-        # - operations_covered (binary set): "was this op seen at all?"
-        #   Used by --ensure-coverage to know which ops need backfill.
-        #   Counts ALL chains including duplicates.
-        # - operation_hit_counts (per-op int): "how many unique chains
-        #   include this op?" Used by --min-hits-per-op depth targeting.
-        #   Only counts deduplicated chains.
-        _collect_coverage(chains)
+                operations_covered.update(sig)
+                if max_chains is not None and len(accumulated_chains) >= max_chains:
+                    break
 
         if seed_contributed:
             seeds_used.append(current_seed)

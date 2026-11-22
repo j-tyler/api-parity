@@ -330,3 +330,22 @@ class TestCacheIntegration:
         chains = generator.generate_chains(max_chains=5, seed=42)
         cache = generator._cached_chain_topologies
         assert cache is None or (isinstance(cache, list) and len(cache) > 0)
+
+
+def test_seed_walk_discovers_structures_with_a_warm_cache(monkeypatch):
+    from api_parity import cli
+
+    generator = CaseGenerator(TEST_API_SPEC)
+    assert generator.generate_chains(max_chains=5, max_steps=3, seed=42)
+    cached = generator._cached_chain_topologies
+    monkeypatch.setattr(generator, "_regenerate_chains_from_cache",
+                        lambda *args: pytest.fail("Seed walking regenerated cached values"))
+    monkeypatch.setattr(cli, "MAX_SEED_INCREMENTS", 2)
+
+    result = cli._generate_chains_with_seed_walking(generator, None, 3, 42)
+    assert result.seeds_used == [42, 43]
+    assert result.stopped_reason == "max_seeds"
+    assert generator._cached_chain_topologies is cached
+    assert all(2 <= len(chain.steps) <= 3 for chain in result.chains)
+    signatures = [cli._chain_signature(chain) for chain in result.chains]
+    assert len(signatures) == len(set(signatures))

@@ -319,7 +319,7 @@ class TestEffectiveTargetsInCoverageCheck:
         # opA can only appear in 1 unique chain structure
         max_achievable = {"opA": 1, "opB": 10}
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             # Seed 0: unique chain covering opA and opB
             # Seed 1-4: unique chains covering only opB (with unique extra ops)
             if seed == 0:
@@ -360,7 +360,7 @@ class TestEffectiveTargetsInCoverageCheck:
 
         max_achievable = {"opA": 10}
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             return [self._make_chain(["opA", f"x{seed}"], f"c{seed}")]
 
         mock_generator.generate_chains.side_effect = mock_generate
@@ -389,7 +389,7 @@ class TestEffectiveTargetsInCoverageCheck:
         mock_generator = MagicMock()
         linked_ops = {"opA"}
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             return [self._make_chain(["opA", f"filler{seed}"], f"c{seed}")]
 
         mock_generator.generate_chains.side_effect = mock_generate
@@ -424,7 +424,7 @@ class TestEffectiveTargetsInCoverageCheck:
 
         call_count = [0]
 
-        def mock_generate(max_chains, max_steps, seed):
+        def mock_generate(max_chains, max_steps, seed, *, reuse_topologies=False):
             call_count[0] += 1
             # Both ops in every chain, with unique signatures
             return [self._make_chain(["opCapped", "opFull", f"x{seed}"], f"c{seed}")]
