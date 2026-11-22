@@ -63,7 +63,7 @@ Write arbitrary CEL:
 |------|------------|-------------|
 | **Core** |
 | `ignore` | — | Field completely skipped (presence defaults to optional) |
-| `exact_match` | — | Values equal (`a == b`) |
+| `exact_match` | — | Equal JSON values, preserving integer precision in scalars, arrays, and objects |
 | **Format Validation** |
 | `uuid_format` | — | Both match UUID regex |
 | `uuid_v4_format` | — | Both match UUID v4 regex |

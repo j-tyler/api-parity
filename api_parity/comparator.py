@@ -80,6 +80,21 @@ class _NotFound:
 NOT_FOUND = _NotFound()
 
 
+def _json_equal(left: Any, right: Any) -> bool:
+    """Compare parsed JSON without rounding integers or treating booleans as numbers."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return left is right
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(
+            _json_equal(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(
+            _json_equal(a, b) for a, b in zip(left, right)
+        )
+    return left == right
+
+
 # =============================================================================
 # Presence Check Result
 # =============================================================================
@@ -896,6 +911,8 @@ class Comparator:
         elif rule.predefined is not None:
             # Expand predefined to CEL expression
             expr = self._expand_predefined(rule)
+            if rule.predefined == "exact_match" and expr == "a == b":
+                return _json_equal(value_a, value_b)
         else:
             # No comparison specified (presence-only) - treat as pass
             return True

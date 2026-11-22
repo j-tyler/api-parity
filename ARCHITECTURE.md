@@ -509,7 +509,7 @@ JSON file referenced by runtime config.
 **Override semantics:** Operation rules completely replace defaults for any key they define (no deep merging).
 
 **Rule types:**
-- Predefined: `{"predefined": "uuid_format"}` — expands to CEL at load time
+- Predefined rules use expressions from the comparison library. The standard `exact_match` compares parsed JSON directly to preserve integer precision.
 - Custom CEL: `{"expr": "a == b"}` — variables `a` (Target A) and `b` (Target B)
 
 **Presence modes:** `parity` (default), `required`, `forbidden`, `optional`

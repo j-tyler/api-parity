@@ -19,7 +19,7 @@ class TestWildcardPaths:
         response_b = make_response_case(body={"items": [{"id": 1}, {"id": 2}]})
         rules = OperationRules(
             body=BodyRules(
-                field_rules={"$.items[*].id": FieldRule(predefined="exact_match")}
+                field_rules={"$.items[*].id": FieldRule(expr="a == b")}
             ),
         )
         mock_cel.evaluate.return_value = True
@@ -155,7 +155,7 @@ class TestRecursiveDescentWildcard:
         )
         rules = OperationRules(
             body=BodyRules(
-                field_rules={"$..value": FieldRule(predefined="exact_match")}
+                field_rules={"$..value": FieldRule(expr="a == b")}
             ),
         )
         mock_cel.evaluate.return_value = True

@@ -294,7 +294,7 @@ class TestBodyComparison:
 
         assert result.details["body"].match is True
 
-    def test_simple_field_match(self, comparator, mock_cel):
+    def test_simple_field_match(self, comparator):
         """Simple field comparison works."""
         response_a = make_response_case(body={"name": "Alice"})
         response_b = make_response_case(body={"name": "Alice"})
@@ -303,12 +303,10 @@ class TestBodyComparison:
                 field_rules={"$.name": FieldRule(predefined="exact_match")}
             ),
         )
-        mock_cel.evaluate.return_value = True
 
         result = comparator.compare(response_a, response_b, rules)
 
         assert result.details["body"].match is True
-        mock_cel.evaluate.assert_called_with("a == b", {"a": "Alice", "b": "Alice"})
 
     def test_nested_field_path(self, comparator, mock_cel):
         """Nested JSONPath works."""
@@ -347,9 +345,9 @@ class TestBodyComparison:
         rules = OperationRules(
             body=BodyRules(
                 field_rules={
-                    "$.id": FieldRule(predefined="exact_match"),
-                    "$.name": FieldRule(predefined="exact_match"),
-                    "$.age": FieldRule(predefined="exact_match"),
+                    "$.id": FieldRule(expr="a == b"),
+                    "$.name": FieldRule(expr="a == b"),
+                    "$.age": FieldRule(expr="a == b"),
                 }
             ),
         )
@@ -387,7 +385,7 @@ class TestBodyComparison:
 class TestNullValues:
     """Tests for JSON null value handling."""
 
-    def test_null_vs_null(self, comparator, mock_cel):
+    def test_null_vs_null(self, comparator):
         """null == null comparison."""
         response_a = make_response_case(body={"value": None})
         response_b = make_response_case(body={"value": None})
@@ -396,13 +394,10 @@ class TestNullValues:
                 field_rules={"$.value": FieldRule(predefined="exact_match")}
             ),
         )
-        mock_cel.evaluate.return_value = True
 
         result = comparator.compare(response_a, response_b, rules)
 
         assert result.details["body"].match is True
-        # Should pass None values to CEL
-        mock_cel.evaluate.assert_called_with("a == b", {"a": None, "b": None})
 
     def test_null_vs_value(self, comparator, mock_cel):
         """null vs non-null comparison."""
@@ -492,19 +487,17 @@ class TestBinaryBodyComparison:
 
         assert result.details["binary_body"].match is True  # Not compared, default match
 
-    def test_binary_exact_match_same(self, comparator, mock_cel):
+    def test_binary_exact_match_same(self, comparator):
         """Binary exact match with identical content."""
         response_a = make_response_case(body=None, body_base64="SGVsbG8=")
         response_b = make_response_case(body=None, body_base64="SGVsbG8=")
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         )
-        mock_cel.evaluate.return_value = True
 
         result = comparator.compare(response_a, response_b, rules)
 
         assert result.details["binary_body"].match is True
-        mock_cel.evaluate.assert_called_with("a == b", {"a": "SGVsbG8=", "b": "SGVsbG8="})
 
     def test_binary_exact_match_different(self, comparator, mock_cel):
         """Binary exact match with different content - mismatch."""
@@ -561,20 +554,17 @@ class TestBinaryBodyComparison:
 
         assert "Binary body mismatch" in result.summary
 
-    def test_empty_base64_vs_empty_base64(self, comparator, mock_cel):
+    def test_empty_base64_vs_empty_base64(self, comparator):
         """Empty base64 strings ('') are compared, not treated as missing."""
         response_a = make_response_case(body=None, body_base64="")
         response_b = make_response_case(body=None, body_base64="")
         rules = OperationRules(
             body=BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         )
-        mock_cel.evaluate.return_value = True
 
         result = comparator.compare(response_a, response_b, rules)
 
         assert result.details["binary_body"].match is True
-        # CEL should be called with empty strings, not skipped
-        mock_cel.evaluate.assert_called_with("a == b", {"a": "", "b": ""})
 
     def test_empty_base64_vs_none(self, comparator):
         """Empty string is distinct from None - presence mismatch."""

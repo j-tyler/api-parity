@@ -654,3 +654,11 @@ Discovery records the parent case ID as a position in the captured chain and
 uses the transition ID to identify the exact OpenAPI link. Explore and replay
 resolve that link against the selected exchange on each target. Explicit link
 values remain literal during placeholder substitution.
+
+## Exact comparison of JSON integers
+
+The built-in `exact_match` rule compares parsed JSON values before they cross the
+Go evaluator boundary. Decoding JSON into Go doubles can round adjacent integer
+IDs to the same value. Exact equality compares numbers by value, distinguishes
+booleans from numbers, compares arrays in order, and ignores object key order.
+Custom CEL expressions and arithmetic rules retain the evaluator's double semantics.
