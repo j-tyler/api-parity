@@ -489,11 +489,15 @@ Date: 20260112
 # Recursive response schemas and OpenAPI nullable fields
 
 Keywords: nullable recursive schema validator Draft4Validator
-Date: 20260209
+Originally documented 2026-02-09. Updated 2026-11-22.
 
 OpenAPI 3.0 uses `nullable: true` to express that a field can be null, but this is an OpenAPI extension — not a JSON Schema keyword. `Draft4Validator` (from `jsonschema`) ignores it, causing false "None is not of type 'X'" violations.
 
+The original implementation expanded references and converted nullable fields before validation. This let Draft 4 validate a plain schema efficiently, but the expansion stopped at recursive references, leaving them detached from their document.
+
 Response validation starts at the selected response schema and resolves local `$ref` pointers against the complete OpenAPI document. A recursive reference can therefore be followed at each level present in the response body. Replay uses the same resolution rules with the bundle’s contract or the supplied schema override.
+
+Each contract caches resolved local JSON pointers, including missing targets. During comparison a missing pointer leaves that field unconstrained, so other fields and parity checks can still run. `lint-spec` and `explore --validate` report each missing pointer reachable from a JSON response schema once per check.
 
 The Draft 4 validator applies the following OpenAPI 3.0 nullable conversions when it visits a schema node. This also covers nodes reached through recursive references.
 

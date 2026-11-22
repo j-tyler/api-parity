@@ -42,7 +42,7 @@ from schemathesis.specs.openapi.stateful import OpenAPIStateMachine
 
 from api_parity.models import ChainCase, ChainStep, RequestCase
 from api_parity.path_rendering import decode_path_value, render_path
-from api_parity.schema_validator import build_operation_index
+from api_parity.schema_validator import build_operation_index, missing_response_references
 from api_parity.schema_value_generator import SchemaValueGenerator
 
 
@@ -489,6 +489,9 @@ class CaseGenerator:
             LinkFields with body_pointers and header_names sets.
         """
         return self._link_fields
+
+    def missing_response_references(self) -> list[str]:
+        return missing_response_references(self._raw_spec)
 
     def get_operations(self) -> list[dict[str, Any]]:
         """Get all operations from the spec.

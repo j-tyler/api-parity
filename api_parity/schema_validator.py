@@ -107,13 +107,59 @@ def _openapi_keywords(schema: dict[str, Any]):
     return non_nullable.items()
 
 
-_OpenAPIResponseValidator = validators.create(
-    meta_schema=Draft4Validator.META_SCHEMA,
-    validators=Draft4Validator.VALIDATORS,
-    type_checker=Draft4Validator.TYPE_CHECKER,
-    id_of=Draft4Validator.ID_OF,
-    applicable_validators=_openapi_keywords,
-)
+class _DocumentReferences:
+    """Resolve each local JSON pointer once per contract, including aliases."""
+
+    def __init__(self, spec: dict):
+        self.resolver = Registry().resolver_with_root(DRAFT4.create_resource(spec))
+        self.targets = {}
+        self.missing: set[str] = set()
+
+    def resolve(self, schema):
+        if not isinstance(schema, dict) or "$ref" not in schema:
+            return schema
+        ref = schema["$ref"]
+        if not isinstance(ref, str):
+            return schema
+        if ref in self.targets:
+            return self.targets[ref]
+
+        seen = set()
+        while isinstance(ref, str) and ref.startswith("#/") and ref not in seen:
+            if ref in self.targets:
+                schema = self.targets[ref]
+                break
+            seen.add(ref)
+            try:
+                schema = self.resolver.lookup(ref).contents
+            except Unresolvable:
+                self.missing.add(ref)
+                schema = {}
+                break
+            ref = schema.get("$ref") if isinstance(schema, dict) else None
+        for alias in seen:
+            self.targets[alias] = schema
+        return schema
+
+
+def missing_response_references(spec: dict) -> list[str]:
+    """Check JSON response contracts without requiring a response instance."""
+    refs = _DocumentReferences(spec)
+    pending = []
+    for operation in build_operation_index(spec).values():
+        for response in operation.get("responses", {}).values():
+            response = refs.resolve(response)
+            if isinstance(response, dict):
+                media = response.get("content", {}).get("application/json", {})
+                pending.append(media.get("schema"))
+
+    visited = set()
+    while pending:
+        schema = refs.resolve(pending.pop())
+        if isinstance(schema, dict) and id(schema) not in visited:
+            visited.add(id(schema))
+            pending.extend(DRAFT4.subresources_of(schema))
+    return sorted(refs.missing)
 
 
 def build_operation_index(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -194,9 +240,23 @@ class SchemaValidator:
 
         # Keep local references rooted in this contract, including during replay
         # from a snapshot. An empty registry does not retrieve external documents.
-        registry = Registry()
-        self._document_validator = _OpenAPIResponseValidator(self._spec, registry=registry)
-        self._document_resolver = registry.resolver_with_root(DRAFT4.create_resource(self._spec))
+        refs = _DocumentReferences(self._spec)
+        self._references = refs
+
+        def validate_ref(validator, ref, instance, schema):
+            if isinstance(ref, str) and ref.startswith("#/"):
+                yield from validator.descend(instance, refs.resolve(schema))
+            else:
+                yield from Draft4Validator.VALIDATORS["$ref"](validator, ref, instance, schema)
+
+        validator_class = validators.create(
+            meta_schema=Draft4Validator.META_SCHEMA,
+            validators={**Draft4Validator.VALIDATORS, "$ref": validate_ref},
+            type_checker=Draft4Validator.TYPE_CHECKER,
+            id_of=Draft4Validator.ID_OF,
+            applicable_validators=_openapi_keywords,
+        )
+        self._document_validator = validator_class(self._spec, registry=Registry())
 
         # Pre-build operationId -> operation dict index for O(1) lookups.
         # Without this, every _find_operation() call scans all paths × methods.
@@ -376,9 +436,11 @@ class SchemaValidator:
             return None
 
         # Handle $ref if present
-        response_def = self._resolve_ref(response_def)
+        response_def = self._references.resolve(response_def)
 
         # Get content -> application/json -> schema
+        if not isinstance(response_def, dict):
+            return None
         content = response_def.get("content", {})
         json_content = content.get("application/json", {})
         schema = json_content.get("schema")
@@ -386,7 +448,7 @@ class SchemaValidator:
         if schema is None:
             return None
 
-        allows_extra = self._allows_additional_properties(self._resolve_ref(schema))
+        allows_extra = self._allows_additional_properties(self._references.resolve(schema))
 
         return ResponseSchema(schema=schema, allows_extra_fields=allows_extra)
 
@@ -400,29 +462,6 @@ class SchemaValidator:
             The operation definition dict, or None if not found.
         """
         return self._operation_index.get(operation_id)
-
-    def _resolve_ref(self, obj: dict[str, Any]) -> dict[str, Any]:
-        """Resolve a $ref reference in the spec.
-
-        Args:
-            obj: Object that may contain a $ref.
-
-        Returns:
-            The resolved object.
-        """
-        seen = set()
-        while isinstance(obj, dict) and isinstance(ref := obj.get("$ref"), str):
-            if not ref.startswith("#/") or ref in seen:
-                break
-            seen.add(ref)
-            try:
-                target = self._document_resolver.lookup(ref).contents
-            except Unresolvable:
-                break
-            if not isinstance(target, dict):
-                break
-            obj = target
-        return obj
 
     def _allows_additional_properties(self, schema: dict[str, Any]) -> bool:
         """Check if schema allows additional properties.
@@ -477,7 +516,7 @@ class SchemaValidator:
         if ref:
             if ref in visited:
                 return {}  # Circular reference
-            resolved = self._resolve_ref(schema)
+            resolved = self._references.resolve(schema)
             if resolved != schema:
                 return self._collect_properties(resolved, visited | {ref})
 
@@ -527,7 +566,9 @@ class SchemaValidator:
             return extra
 
         # Resolve $ref at top level
-        schema = self._resolve_ref(schema)
+        schema = self._references.resolve(schema)
+        if not isinstance(schema, dict):
+            return extra
 
         # Handle arrays - check items in the array
         if isinstance(body, list):

@@ -862,3 +862,26 @@ def test_recursive_response_schema_checks_each_instance_level(tmp_path):
     result = validator.validate_response(body, "getNode", 200)
     assert [(v.path, v.violation_type) for v in result.violations] == [
         ("$.branches[0].node.id", "wrong_type")]
+
+
+def test_dangling_pointer_preserves_sibling_validation_and_is_reported_by_lint(tmp_path):
+    from api_parity.spec_linter import SpecLinter
+
+    missing = "#/components/schemas/Missing"
+    node = {"type": "object", "properties": {
+        "id": {"$ref": "#/components/schemas/Item~1Id%20Type"},
+        "meta": {"$ref": missing}, "other": {"$ref": missing},
+        "child": {"$ref": "#/components/schemas/Node"}}}
+    spec = {"openapi": "3.0.3", "components": {"schemas": {
+        "Node": node, "Item/Id Type": {"type": "integer"}}},
+        "paths": {"/node": {"get": {"operationId": "getNode", "responses": {"200": {
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Node"}}}
+        }}}}}}
+    path = tmp_path / "openapi.json"
+    path.write_text(json.dumps(spec))
+    validator = SchemaValidator(path)
+    assert validator.validate_response({"id": 1, "meta": {}}, "getNode", 200).valid
+    result = validator.validate_response({"child": {"id": "bad", "meta": 1}}, "getNode", 200)
+    assert [(v.path, v.violation_type) for v in result.violations] == [("$.child.id", "wrong_type")]
+    messages = [m.message for m in SpecLinter(path).lint().errors if m.code == "missing_response_reference"]
+    assert messages == [f"Missing response reference {missing}"]

@@ -1845,6 +1845,8 @@ def run_explore(args: ExploreArgs) -> int:
 
         # Merge results
         rules_result.merge(cli_result)
+        for ref in generator.missing_response_references():
+            rules_result.add_error("response_schema", f"Missing response reference {ref}")
 
         # Report warnings
         if rules_result.warnings:
