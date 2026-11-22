@@ -55,6 +55,8 @@ class RunStats:
     # Set to True if run was interrupted (SIGINT)
     interrupted: bool = False
 
+    chain_incomplete: int = 0
+
     def add_operation(self, operation_id: str) -> None:
         """Record a case for an operation."""
         self.operations[operation_id] = self.operations.get(operation_id, 0) + 1
@@ -89,6 +91,7 @@ class ReplayStats:
 
     # Set to True if run was interrupted (SIGINT)
     interrupted: bool = False
+    incomplete_bundles: list[str] = field(default_factory=list)
 
 
 class ArtifactWriter:
@@ -291,6 +294,7 @@ class ArtifactWriter:
         outcomes: list[str],
         max_chains: int | None,
         max_steps: int,
+        compared_counts: list[int] | None = None,
     ) -> Path:
         """Write all executed chains to chains.txt for debugging.
 
@@ -299,7 +303,8 @@ class ArtifactWriter:
 
         Args:
             chains: List of chains that were executed.
-            outcomes: Outcome for each chain ("match", "mismatch", or "error").
+            outcomes: Outcome for each chain ("match", "mismatch", "incomplete", or "error").
+            compared_counts: Number of compared steps per chain, if known.
             max_chains: Max chains setting used.
             max_steps: Max steps setting used.
 
@@ -321,16 +326,20 @@ class ArtifactWriter:
             ops = [step.request_template.operation_id for step in chain.steps]
             lines.append("")
             lines.append(f"[Chain {i}] " + " -> ".join(ops))
+            compared = len(chain.steps) if compared_counts is None else compared_counts[i - 1]
             lines.append(f"  Steps: {len(chain.steps)}")
+            if compared < len(chain.steps):
+                lines.append(f"  Compared: {compared}/{len(chain.steps)}")
             lines.append(f"  Outcome: {outcome.upper()}")
 
-            for step in chain.steps:
+            for position, step in enumerate(chain.steps):
                 step_num = step.step_index + 1
                 op_id = step.request_template.operation_id
                 method = step.request_template.method
                 path = step.request_template.path_template
 
-                lines.append(f"  {step_num}. {op_id}: {method} {path}")
+                suffix = " (not compared)" if position >= compared else ""
+                lines.append(f"  {step_num}. {op_id}: {method} {path}{suffix}")
 
                 # Show link info for steps after the first
                 if step.step_index > 0:
@@ -339,7 +348,8 @@ class ArtifactWriter:
                         status_code = step.link_source.get("status_code", "?")
                         source_op = step.link_source.get("source_operation", "?")
                         lines.append(f"      via link: {link_name} ({status_code})")
-                        used_links.add((source_op, str(status_code), op_id))
+                        if position < compared:
+                            used_links.add((source_op, str(status_code), op_id))
                     else:
                         lines.append("      via unknown link (not in spec)")
 
@@ -355,6 +365,8 @@ class ArtifactWriter:
         lines.append(f"Matches: {match_count}")
         lines.append(f"Mismatches: {mismatch_count}")
         lines.append(f"Errors: {error_count}")
+        if "incomplete" in outcomes:
+            lines.append(f"Incomplete: {outcomes.count('incomplete')}")
         lines.append(f"Links traversed: {len(used_links)}")
 
         # Write to file
@@ -388,6 +400,7 @@ class ArtifactWriter:
             "chain_matches": stats.chain_matches,
             "chain_mismatches": stats.chain_mismatches,
             "chain_errors": stats.chain_errors,
+            "chain_incomplete": stats.chain_incomplete,
         }
         self._write_json(self._output_dir / "summary.json", summary)
 
@@ -420,6 +433,8 @@ class ArtifactWriter:
             "fixed_bundles": stats.fixed_bundles,
             "persistent_bundles": stats.persistent_bundles,
             "changed_bundles": stats.changed_bundles,
+            "incomplete": len(stats.incomplete_bundles),
+            "incomplete_bundles": stats.incomplete_bundles,
         }
         self._write_json(self._output_dir / "replay_summary.json", summary)
 
