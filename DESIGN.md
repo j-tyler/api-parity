@@ -44,6 +44,22 @@ For `additionalProperties: false`, extra fields are violations. For `true` or un
 
 **Key insight:** Schema validity and implementation equivalence are separate concerns. A response can be valid (matches schema) but not equivalent (differs from other implementation). Example: if the spec allows extras and Target A returns `{id: 1, debug: "foo"}` while Target B returns `{id: 1, trace_id: "bar"}`, both are schema-valid but they're not equivalent—the agent should know about this divergence.
 
+**Replay uses the saved contract by default.** Explore includes the source JSON
+or YAML bytes in each mismatch bundle. Preserving the format keeps local
+component references and parser semantics intact. A per-bundle snapshot costs
+disk space but makes moved bundles and merged suites self-contained. A run
+shares one validator per distinct snapshot format and content digest.
+
+An explicit `replay --spec` takes precedence for every bundle so teams can
+verify a corrected contract. Unresolved output
+carries the effective contract for subsequent runs. When artifact redaction is
+configured, keep the spec external: examples, defaults, and even validation
+constraints can contain sensitive values. Editing those constraints would
+change what replay validates.
+
+All bundles use the same schema-based comparison and classification. A missing
+schema is an input error with guidance to supply `--spec`.
+
 ---
 
 # User-Defined Comparison Rules Required

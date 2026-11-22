@@ -55,6 +55,10 @@ def _extract_paths_from_step_diff(step_diff: dict) -> frozenset[str]:
 
         return frozenset()
 
+    if mismatch_type == "schema_violation":
+        differences = details.get("schema", {}).get("differences", [])
+        return frozenset(d.get("path", "") for d in differences)
+
     if mismatch_type == "headers":
         headers = details.get("headers", {})
         differences = headers.get("differences", [])
@@ -97,16 +101,7 @@ def mismatch_dedup_key(operation_id: str, diff_data: dict) -> tuple:
         return (operation_id, "status_code")
 
     if mismatch_type == "schema_violation":
-        # Extract per-field paths from schema differences so that distinct
-        # schema violations on the same operation (e.g. missing $.id vs
-        # unexpected $.debug) produce different dedup keys.
-        details = diff_data.get("details", {})
-        schema = details.get("schema", {})
-        differences = schema.get("differences", [])
-        if differences:
-            paths = frozenset(d.get("path", "") for d in differences)
-            return (operation_id, "schema_violation", paths)
-        return (operation_id, "schema_violation", frozenset())
+        return (operation_id, mismatch_type, _extract_paths_from_step_diff(diff_data))
 
     if mismatch_type == "headers":
         paths = _extract_paths_from_step_diff(diff_data)
@@ -187,6 +182,11 @@ def is_same_mismatch(original_diff: dict, new_result: ComparisonResult) -> bool:
 
     if original_type != new_type:
         return False
+
+    if original_type == "schema_violation":
+        return _extract_paths_from_step_diff(original_diff) == _extract_paths_from_step_diff(
+            new_result.model_dump(mode="json")
+        )
 
     # For body mismatches, check if same paths failed.
     # The comparator produces mismatch_type=BODY for three distinct sub-cases:

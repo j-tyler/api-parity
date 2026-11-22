@@ -85,6 +85,7 @@ MATCH   GET /widgets/{id} (getWidget)
   target_a.json     # Response from production
   target_b.json     # Response from staging
   diff.json         # What differed
+  openapi.yaml       # Optional spec snapshot (openapi.json for JSON specs)
   metadata.json     # Run context
 ```
 

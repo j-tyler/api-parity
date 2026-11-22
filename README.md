@@ -132,9 +132,18 @@ api-parity merge \
 | `--target-b NAME` | Second target name (required) |
 | `--in PATH` | Input directory with bundles (required) |
 | `--out PATH` | Output directory (required) |
+| `--spec PATH` | Use this OpenAPI spec for every input bundle (optional) |
 | `--validate` | Validate config without executing |
 
 **Replay classifications:** `FIXED` (now matches), `STILL MISMATCH` (same failure), `DIFFERENT MISMATCH` (fails differently)
+
+Replay uses the schema saved in each bundle. Pass `--spec corrected.yaml` to
+apply one contract to the entire input suite, including older bundles. Explore
+and replay omit the spec from artifacts when `secrets.redact_fields` is configured,
+since it can contain sensitive examples or validation constraints. For these
+runs, supply the spec externally with `--spec`.
+
+If a bundle has no snapshot, supply its schema with `replay --spec PATH`.
 
 ### merge
 

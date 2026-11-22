@@ -297,7 +297,7 @@ python -m pytest tests/ -x -q --tb=short
 
 1. **Classification by pattern** — Compares mismatch_type + paths, not values.
 2. **DIFFERENT MISMATCH expected** — After rule changes, same bundle may fail differently.
-3. **No spec in replay** — Chain replay parses link_source from stored data.
+3. **Replay schema** — An explicit `--spec` overrides saved snapshots. Chain links still come from the stored chain.
 4. **--in is explore output** — Not a specific bundle path.
 
 ## Gotchas: Task Tool
@@ -352,6 +352,7 @@ cel.close()
 ```bash
 # In a mismatch directory
 cat metadata.json  # Run context, seed, targets
+# openapi.json or openapi.yaml holds the optional comparison schema.
 cat case.json      # Request that was sent
 cat diff.json      # What differed and where
 cat target_a.json  # Full response from A

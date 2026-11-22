@@ -8,11 +8,16 @@ See ARCHITECTURE.md "Mismatch Report Bundle" for bundle specifications.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+
+from api_parity.artifact_writer import BUNDLE_SPEC_FILENAMES
+from api_parity.schema_validator import SchemaValidator
 
 from api_parity.case_generator import HeaderRef, LinkFields, LINK_HEADER_PATTERN
 from api_parity.models import (
@@ -54,6 +59,7 @@ class LoadedBundle:
     original_diff: dict[str, Any]
     # Metadata for context
     metadata: MismatchMetadata
+    schema_validator: SchemaValidator
 
 
 def extract_link_fields_from_chain(chain: ChainCase) -> LinkFields:
@@ -221,7 +227,10 @@ def detect_bundle_type(bundle_path: Path) -> BundleType:
     return _detect_bundle_type_from_data(diff_data, bundle_path)
 
 
-def load_bundle(bundle_path: Path) -> LoadedBundle:
+def load_bundle(
+    bundle_path: Path, *, schema_cache: dict | None = None,
+    schema_override: SchemaValidator | None = None,
+) -> LoadedBundle:
     """Load a single mismatch bundle from disk.
 
     Reads the bundle files and reconstructs the appropriate models.
@@ -297,6 +306,26 @@ def load_bundle(bundle_path: Path) -> LoadedBundle:
         except Exception as e:
             raise BundleLoadError(f"Invalid chain.json: {e}") from e
 
+    schema_validator = schema_override
+    if schema_validator is None:
+        spec_paths = [bundle_path / name for name in BUNDLE_SPEC_FILENAMES
+                      if (bundle_path / name).exists()]
+        if len(spec_paths) > 1:
+            raise BundleLoadError("Bundle contains both openapi.json and openapi.yaml; keep only the original contract")
+        if not spec_paths:
+            raise BundleLoadError("Missing OpenAPI snapshot. Supply the schema with replay --spec PATH.")
+        spec_path = spec_paths[0]
+        try:
+            raw = spec_path.read_bytes()
+            key = (spec_path.suffix, hashlib.sha256(raw).digest())
+            schema_validator = schema_cache.get(key) if schema_cache is not None else None
+            if schema_validator is None:
+                schema_validator = SchemaValidator(spec_path, source_bytes=raw)
+                if schema_cache is not None:
+                    schema_cache[key] = schema_validator
+        except Exception as e:
+            raise BundleLoadError(f"Invalid {spec_path.name}: {e}") from e
+
     return LoadedBundle(
         bundle_path=bundle_path,
         bundle_type=bundle_type,
@@ -304,4 +333,5 @@ def load_bundle(bundle_path: Path) -> LoadedBundle:
         chain_case=chain_case,
         original_diff=original_diff,
         metadata=metadata,
+        schema_validator=schema_validator,
     )

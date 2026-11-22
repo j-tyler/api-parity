@@ -263,7 +263,7 @@ Rejects replay output (detected by `replay_summary.json` presence). Groups bundl
 
 ```python
 class ArtifactWriter:
-    def __init__(self, output_dir: Path, secrets_config: SecretsConfig | None = None): ...
+    def __init__(self, output_dir: Path, secrets_config: SecretsConfig | None = None, spec_path: Path | None = None): ...
     def write_mismatch(self, case, response_a, response_b, diff, ...) -> Path: ...
     def write_chain_mismatch(self, chain, execution_a, execution_b, ...) -> Path: ...
     def write_summary(self, stats: RunStats, seed: int | None = None) -> None: ...
@@ -417,6 +417,7 @@ mismatches/<timestamp>__<operation_id>__<case_id>/
   target_b.json    # Response/execution from Target B
   diff.json        # ComparisonResult
   metadata.json    # Run context (version, targets, seed)
+  openapi.json     # Original JSON spec snapshot (or openapi.yaml for YAML input)
 ```
 
 **diff.json:** `mismatch_type` (status_code|headers|body|schema_violation), `summary`, `details` with per-component differences. Chain diffs add `"type": "chain"`, `"mismatch_step"`, and `"steps"` (per-step comparison results).
@@ -425,12 +426,22 @@ mismatches/<timestamp>__<operation_id>__<case_id>/
 
 Replay writes only unresolved mismatches (STILL MISMATCH and DIFFERENT MISMATCH). FIXED bundles are not written — they represent resolved issues. This means the output directory contains only what still needs attention.
 
+Replay uses an explicit `--spec` for the whole run when supplied, otherwise
+it loads each bundle's optional snapshot. Replay and `replay --validate` share
+validators within a run by snapshot format and SHA-256 digest. The writer
+reuses the bytes already parsed. Unresolved outputs carry the effective spec
+unless artifact redaction is configured. Malformed or ambiguous snapshots
+are load errors when a snapshot is the selected contract.
+
+Replay requires a schema for each bundle. Supply `--spec` for bundles without a snapshot.
+
 ```
 <output_dir>/
   mismatches/             # Only STILL MISMATCH and DIFFERENT MISMATCH bundles
     <timestamp>__<op>__<id>/
       case.json or chain.json
       target_a.json, target_b.json, diff.json, metadata.json
+      openapi.json or openapi.yaml  # Preserved when present in the input bundle
   replay_summary.json     # Run statistics and classification results
 ```
 

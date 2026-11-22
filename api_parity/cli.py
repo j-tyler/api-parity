@@ -258,6 +258,7 @@ class ReplayArgs:
     validate: bool
     timeout: float
     operation_timeout: dict[str, float]
+    spec: Path | None = None
 
 
 @dataclass
@@ -485,6 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
         "replay",
         help="Re-execute previously saved mismatch bundles to confirm regressions",
     )
+    replay_parser.add_argument("--spec", type=Path, help="Validate all replay bundles against this OpenAPI spec, overriding saved snapshots")
     replay_parser.add_argument(
         "--config",
         type=Path,
@@ -628,6 +630,7 @@ def parse_replay_args(namespace: argparse.Namespace) -> ReplayArgs:
     """Convert parsed namespace to ReplayArgs dataclass."""
     op_timeouts = _build_operation_timeouts(namespace.operation_timeout or [])
     return ReplayArgs(
+        spec=getattr(namespace, "spec", None),
         config=namespace.config,
         target_a=namespace.target_a,
         target_b=namespace.target_b,
@@ -1925,7 +1928,6 @@ def run_explore(args: ExploreArgs) -> int:
 
     # Initialize components
     stats = RunStats()
-    writer = ArtifactWriter(args.out, runtime_config.secrets)
 
     target_a_info = TargetInfo(name=args.target_a, base_url=target_a_config.base_url)
     target_b_info = TargetInfo(name=args.target_b, base_url=target_b_config.base_url)
@@ -1936,6 +1938,8 @@ def run_explore(args: ExploreArgs) -> int:
     except SchemaExtractionError as e:
         print(f"Error loading schema for validation: {e}", file=sys.stderr)
         return 1
+
+    writer = ArtifactWriter(args.out, runtime_config.secrets, schema_validator=schema_validator)
 
     # Start CEL evaluator
     try:
@@ -2487,6 +2491,15 @@ def run_replay(args: ReplayArgs) -> int:
         print(f"Error loading comparison library: {e}", file=sys.stderr)
         return 1
 
+    from api_parity.schema_validator import SchemaExtractionError, SchemaValidator
+
+    try:
+        schema_override = SchemaValidator(args.spec) if args.spec is not None else None
+    except SchemaExtractionError as e:
+        print(f"Invalid replay spec: {e}", file=sys.stderr)
+        return 1
+    schema_cache = {}
+
     # Discover bundles
     bundles = discover_bundles(args.input_dir)
 
@@ -2504,7 +2517,7 @@ def run_replay(args: ReplayArgs) -> int:
         invalid_bundles = 0
         for bundle_path in bundles:
             try:
-                load_bundle(bundle_path)
+                load_bundle(bundle_path, schema_cache=schema_cache, schema_override=schema_override)
                 valid_bundles += 1
             except BundleLoadError as e:
                 print(f"    Invalid bundle: {bundle_path.name} - {e}", file=sys.stderr)
@@ -2537,7 +2550,7 @@ def run_replay(args: ReplayArgs) -> int:
 
     for bundle_path in bundles:
         try:
-            bundle = load_bundle(bundle_path)
+            bundle = load_bundle(bundle_path, schema_cache=schema_cache, schema_override=schema_override)
             loaded_bundles.append(bundle)
             # Extract link_fields from chain bundles for variable extraction
             if bundle.bundle_type == BundleType.CHAIN and bundle.chain_case is not None:
@@ -2574,7 +2587,7 @@ def run_replay(args: ReplayArgs) -> int:
 
     if not loaded_bundles:
         print("No valid bundles to replay")
-        return 0
+        return 1
 
     # Initialize components
     stats = ReplayStats()
@@ -2594,8 +2607,6 @@ def run_replay(args: ReplayArgs) -> int:
     progress_reporter: ProgressReporter | None = None
 
     try:
-        comparator = Comparator(cel_evaluator, comparison_library)
-
         # Start executor with link_fields for chain variable extraction
         requests_per_second = (
             runtime_config.rate_limit.requests_per_second
@@ -2621,12 +2632,21 @@ def run_replay(args: ReplayArgs) -> int:
 
             # Replay each pre-loaded bundle
             for bundle in loaded_bundles:
+                # Merged inputs can have different schemas. Never reuse one
+                # bundle's validator for another, including bundles from different runs.
+                comparator = Comparator(
+                    cel_evaluator, comparison_library, bundle.schema_validator
+                )
+                bundle_writer = ArtifactWriter(
+                    args.out, runtime_config.secrets,
+                    schema_validator=bundle.schema_validator,
+                )
                 _replay_loaded_bundle(
                     bundle=bundle,
                     executor=executor,
                     comparator=comparator,
                     comparison_rules=comparison_rules,
-                    writer=writer,
+                    writer=bundle_writer,
                     stats=stats,
                     target_a_info=target_a_info,
                     target_b_info=target_b_info,
@@ -2741,7 +2761,7 @@ def _replay_stateless_bundle(
         # Re-execute
         response_a, response_b = executor.execute(case)
 
-        # Compare (operation_id passed for consistency, but replay has no schema validation)
+        # Compare using the bundle's original schema when available.
         rules = get_operation_rules(comparison_rules, case.operation_id)
         result = comparator.compare(response_a, response_b, rules, case.operation_id)
 

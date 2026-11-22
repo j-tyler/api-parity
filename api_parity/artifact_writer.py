@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from api_parity.schema_validator import SchemaValidator
 from api_parity.models import (
     ChainCase,
     ChainExecution,
@@ -30,6 +31,10 @@ from api_parity.models import (
 
 # Version of the tool (used in metadata)
 TOOL_VERSION = "0.1.0"
+
+# Per-bundle so merge and moving bundles preserve their validation contract.
+BUNDLE_SPEC_FILENAME = "openapi.json"
+BUNDLE_SPEC_FILENAMES = (BUNDLE_SPEC_FILENAME, "openapi.yaml")
 
 
 @dataclass
@@ -99,15 +104,29 @@ class ArtifactWriter:
         self,
         output_dir: Path,
         secrets_config: SecretsConfig | None = None,
+        spec_path: Path | None = None,
+        *, schema_validator: SchemaValidator | None = None,
     ) -> None:
         """Initialize the artifact writer.
 
         Args:
             output_dir: Base directory for artifacts.
             secrets_config: Optional secret redaction configuration.
+            spec_path: Optional OpenAPI snapshot to include in each bundle.
         """
         self._output_dir = output_dir
         self._secrets_config = secrets_config
+        self._spec_bytes = None
+        self._spec_filename = BUNDLE_SPEC_FILENAME
+        if not (secrets_config and secrets_config.redact_fields):
+            if schema_validator is None and spec_path is not None:
+                schema_validator = SchemaValidator(spec_path)
+            if schema_validator is not None:
+                self._spec_bytes = schema_validator.source_bytes
+                self._spec_filename = schema_validator.snapshot_name
+        # Redaction paths describe artifacts, not OpenAPI schema keywords.
+        # Copying the source can leak examples. Rewriting it could change
+        # constraints such as enum. Leave the contract external in this mode.
         self._mismatches_dir = output_dir / "mismatches"
 
         # Create directories
@@ -149,6 +168,7 @@ class ArtifactWriter:
         bundle_dir = self._mismatches_dir / bundle_name
 
         bundle_dir.mkdir(parents=True, exist_ok=True)
+        self._write_spec(bundle_dir)
 
         # Redact secrets from case and responses if configured
         case_data = self._redact(case.model_dump())
@@ -228,6 +248,7 @@ class ArtifactWriter:
         bundle_dir = self._mismatches_dir / bundle_name
 
         bundle_dir.mkdir(parents=True, exist_ok=True)
+        self._write_spec(bundle_dir)
 
         # Redact secrets from chain and executions
         chain_data = self._redact(chain.model_dump())
@@ -401,6 +422,19 @@ class ArtifactWriter:
             "changed_bundles": stats.changed_bundles,
         }
         self._write_json(self._output_dir / "replay_summary.json", summary)
+
+    def _write_spec(self, bundle_dir: Path) -> None:
+        """Keep the original validation contract with every unresolved failure."""
+        for name in BUNDLE_SPEC_FILENAMES:
+            if name != self._spec_filename or self._spec_bytes is None:
+                # Repeated writes must not retain another bundle's contract.
+                (bundle_dir / name).unlink(missing_ok=True)
+        if self._spec_bytes is None:
+            return
+        spec_path = bundle_dir / self._spec_filename
+        temp_path = spec_path.with_suffix(".tmp")
+        temp_path.write_bytes(self._spec_bytes)
+        temp_path.replace(spec_path)
 
     def _write_json(self, path: Path, data: Any) -> None:
         """Write data as JSON to a file atomically.
