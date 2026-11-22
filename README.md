@@ -137,6 +137,10 @@ api-parity merge \
 
 **Replay classifications:** `FIXED` (now matches), `STILL MISMATCH` (same failure), `DIFFERENT MISMATCH` (fails differently)
 
+If neither target supplies the link values needed for the next step, explore and
+replay count the incomplete chain as an error and identify the first unexecuted
+operation. A mismatch observed before the chain stops is still reported.
+
 Replay uses the schema saved in each bundle. Pass `--spec corrected.yaml` to
 apply one contract to the entire input suite, including older bundles. Explore
 and replay omit the spec from artifacts when `secrets.redact_fields` is configured,

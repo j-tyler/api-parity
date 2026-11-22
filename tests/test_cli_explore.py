@@ -1382,7 +1382,7 @@ class TestProgressReporterTimingInStatefulExplore:
 
         mock_executor = MagicMock()
         # execute_chain returns (ChainExecution, ChainExecution).
-        # Don't call on_step -- chains count as matches (no comparator needed).
+        # An empty trace suffices for this progress-timing test.
         mock_executor.execute_chain.return_value = (
             ChainExecution(steps=[]),
             ChainExecution(steps=[]),

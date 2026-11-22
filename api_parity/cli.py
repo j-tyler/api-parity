@@ -2112,6 +2112,18 @@ def _run_stateless_explore(
             progress_reporter.increment()
 
 
+def _require_complete_chain(chain: ChainCase, compared: int) -> None:
+    """A matching prefix is inconclusive if the executor could not follow a link."""
+    if compared < len(chain.steps):
+        from api_parity.executor import RequestError
+
+        next_op = chain.steps[compared].request_template.operation_id
+        raise RequestError(
+            f"Incomplete chain: compared {compared}/{len(chain.steps)} steps. "
+            f"Step {compared} ({next_op}) could not resolve link parameters on either target."
+        )
+
+
 def _run_stateful_explore(
     generator: CaseGenerator,
     executor: Executor,
@@ -2233,8 +2245,8 @@ def _run_stateful_explore(
                     print(f"    ... and {len(sorted_below) - 5} more")
     print()
 
-    # Use coverage data from generation (already computed during seed walking)
-    operations_covered_by_chains: set[str] = set(gen_result.operations_covered)
+    # Backfill operations that never produced a pair of live responses.
+    operations_covered_by_chains: set[str] = set()
 
     # Start the progress reporter now that chain generation is complete.
     # set_total() first so the very first progress line shows a percentage,
@@ -2271,6 +2283,7 @@ def _run_stateful_explore(
                 step_idx = len(step_diffs)
                 op_id = chain.steps[step_idx].request_template.operation_id
                 step_ops.append(op_id)
+                operations_covered_by_chains.add(op_id)
 
                 rules = get_operation_rules(comparison_rules, op_id)
                 result = comparator.compare(response_a, response_b, rules, op_id)
@@ -2286,16 +2299,15 @@ def _run_stateful_explore(
 
             # Determine overall result
             if not mismatch_found:
+                _require_complete_chain(chain, len(step_diffs))
                 stats.chain_matches += 1
                 print("  MATCH (all steps)")
-                executed_chains.append(chain)
                 chain_outcomes.append("match")
             else:
                 stats.chain_mismatches += 1
                 mismatch_step = len(step_diffs) - 1
                 mismatch_op = step_ops[mismatch_step]
                 print(f"  MISMATCH at step {mismatch_step} ({mismatch_op}): {step_diffs[mismatch_step].summary}")
-                executed_chains.append(chain)
                 chain_outcomes.append("mismatch")
 
                 # Write chain mismatch bundle
@@ -2314,8 +2326,10 @@ def _run_stateful_explore(
         except RequestError as e:
             stats.chain_errors += 1
             print(f"  ERROR: {e}")
-            executed_chains.append(chain)
             chain_outcomes.append("error")
+
+        if log_chains:
+            executed_chains.append(chain.model_copy(update={"steps": chain.steps[:len(step_diffs)]}))
 
         # Update progress reporter
         if progress_reporter is not None:
@@ -2851,6 +2865,7 @@ def _replay_chain_bundle(
 
         # Classify outcome
         if not mismatch_found:
+            _require_complete_chain(chain, len(step_diffs))
             stats.now_match += 1
             stats.fixed_bundles.append(bundle.bundle_path.name)
             print("  FIXED (all steps)")
