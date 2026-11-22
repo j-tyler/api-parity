@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from jsonpath_ng import parse as jsonpath_parse
+from jsonpath_ng.jsonpath import Child, DatumInContext, Fields, Index, JSONPath, Slice
 from jsonpath_ng.exceptions import JsonPathLexerError, JsonPathParserError
 
 from api_parity.cel_evaluator import CELEvaluator, CELEvaluationError
@@ -692,76 +693,90 @@ class Comparator:
             return f"Binary body mismatch: {diff.rule}"
         return f"Binary body mismatches: {len(differences)} differences"
 
+    @staticmethod
+    def _optional_array_length_change(
+        query: JSONPath, body_a: Any, body_b: Any,
+    ) -> tuple[int, int] | None:
+        """An optional leaf can be absent even when its containing array has changed size."""
+        while isinstance(query, Child):
+            if query.right == Slice():
+                lengths = {m.full_path: len(m.value) for m in query.left.find(body_a)
+                           if isinstance(m.value, list)}
+                for match in query.left.find(body_b):
+                    if isinstance(match.value, list):
+                        size_a = lengths.get(match.full_path)
+                        if size_a is not None and size_a != len(match.value):
+                            return size_a, len(match.value)
+            query = query.left
+        if query == Slice() and isinstance(body_a, list) and isinstance(body_b, list):
+            if len(body_a) != len(body_b):
+                return len(body_a), len(body_b)
+        return None
+
+    @staticmethod
+    def _outside_array(match: DatumInContext, other: Any) -> bool:
+        """Is the first missing part of this location an out-of-range array index?"""
+        selectors = []
+        while match.context is not None:
+            selectors.append(match.path)
+            match = match.context
+        for selector in reversed(selectors):
+            if isinstance(selector, Index) and isinstance(other, list):
+                if not -len(other) <= selector.index < len(other):
+                    return True
+                other = other[selector.index]
+            elif isinstance(selector, Fields) and isinstance(other, dict):
+                other = other.get(selector.fields[0], NOT_FOUND)
+            else:
+                return False
+        return False
+
     def _compare_jsonpath(
-        self,
-        body_a: Any,
-        body_b: Any,
-        jsonpath: str,
-        rule: FieldRule,
+        self, body_a: Any, body_b: Any, jsonpath: str, rule: FieldRule,
     ) -> list[FieldDifference]:
-        """Compare values at a JSONPath location.
-
-        Handles wildcards by expanding the path and comparing paired values.
-
-        Args:
-            body_a: Body from target A.
-            body_b: Body from target B.
-            jsonpath: JSONPath expression.
-            rule: Field comparison rule.
-
-        Returns:
-            List of FieldDifference for any mismatches.
-        """
-        differences: list[FieldDifference] = []
-
         try:
-            matches_a = self._expand_jsonpath(body_a, jsonpath)
-            matches_b = self._expand_jsonpath(body_b, jsonpath)
+            query = self._compile_jsonpath(jsonpath)
         except JSONPathError as e:
-            # Invalid JSONPath - treat as error
-            return [
-                FieldDifference(
-                    path=jsonpath,
-                    target_a="<error>",
-                    target_b="<error>",
-                    rule=f"jsonpath_error: {e}",
-                )
-            ]
+            return [FieldDifference(path=jsonpath, target_a="<error>", target_b="<error>",
+                                    rule=f"jsonpath_error: {e}")]
 
-        # Detect multi-match paths by actual match count, not by inspecting the path syntax.
-        # This handles all wildcards: [*], .., [?()], [0:5], [0,1,2], etc.
-        # We compare by index pairing (matches_a[i] vs matches_b[i]), which requires equal counts.
-        # If counts differ, we report count mismatch rather than trying element-wise comparison.
-        is_multi_match = len(matches_a) > 1 or len(matches_b) > 1
+        a = {match.full_path: match for match in query.find(body_a)}
+        b = {match.full_path: match for match in query.find(body_b)}
+        counts = None
+        if rule.presence == PresenceMode.OPTIONAL:
+            counts = self._optional_array_length_change(query, body_a, body_b)
+        elif max(len(a), len(b)) > 1 and len(a) != len(b):
+            counts = len(a), len(b)
 
-        if not is_multi_match:
-            # Single-value path - extract the value (or NOT_FOUND if no match)
-            value_a = matches_a[0][1] if matches_a else NOT_FOUND
-            value_b = matches_b[0][1] if matches_b else NOT_FOUND
+        differences = []
+        if counts is not None:
+            differences.append(FieldDifference(
+                path=jsonpath, target_a=f"<{counts[0]} matches>", target_b=f"<{counts[1]} matches>",
+                rule="wildcard_count_mismatch",
+            ))
 
+        # Single-location failures keep the configured query as their diagnostic path.
+        # Two singleton results at different locations still need separate presence checks.
+        if max(len(a), len(b)) <= 1 and (not a or not b or a.keys() == b.keys()) and counts is None:
+            value_a = next(iter(a.values())).value if a else NOT_FOUND
+            value_b = next(iter(b.values())).value if b else NOT_FOUND
             diff = self._compare_single_field(jsonpath, value_a, value_b, rule)
+            return [diff] if diff else []
+
+        for path, match in a.items():
+            other = b.pop(path, None)
+            if other is None and counts is not None and self._outside_array(match, body_b):
+                continue
+            value_b = NOT_FOUND if other is None else other.value
+            diff = self._compare_single_field(str(path), match.value, value_b, rule)
             if diff:
                 differences.append(diff)
-        else:
-            # Multi-match path - compare matched sets
-            # First check match count parity
-            if len(matches_a) != len(matches_b):
-                differences.append(
-                    FieldDifference(
-                        path=jsonpath,
-                        target_a=f"<{len(matches_a)} matches>",
-                        target_b=f"<{len(matches_b)} matches>",
-                        rule="wildcard_count_mismatch",
-                    )
-                )
-            else:
-                # Compare paired by index
-                for (path_a, value_a), (path_b, value_b) in zip(matches_a, matches_b):
-                    # Use the concrete path from target A for reporting
-                    diff = self._compare_single_field(path_a, value_a, value_b, rule)
-                    if diff:
-                        differences.append(diff)
-
+        for path, match in b.items():
+            if counts is not None and self._outside_array(match, body_a):
+                continue
+            diff = self._compare_single_field(str(path), NOT_FOUND, match.value, rule)
+            if diff:
+                differences.append(diff)
         return differences
 
     def _compare_single_field(
@@ -992,6 +1007,10 @@ class Comparator:
         Raises:
             JSONPathError: If path is syntactically invalid.
         """
+        matches = self._compile_jsonpath(path).find(body)
+        return [(str(match.full_path), match.value) for match in matches]
+
+    def _compile_jsonpath(self, path: str) -> JSONPath:
         # Use cache for compiled paths
         if path not in self._jsonpath_cache:
             try:
@@ -1003,10 +1022,7 @@ class Comparator:
                 # fuzz-generated names containing non-ASCII bytes)
                 raise JSONPathError(f"Invalid JSONPath '{path}': {e}") from e
 
-        compiled = self._jsonpath_cache[path]
-        matches = compiled.find(body)
-
-        return [(str(match.full_path), match.value) for match in matches]
+        return self._jsonpath_cache[path]
 
     def _get_header_value(
         self,

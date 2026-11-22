@@ -283,6 +283,7 @@ python -m pytest tests/ -x -q --tb=short
 2. **unordered_array** — Doesn't handle duplicates. `[1,1,2]` matches `[1,2,2]`.
 3. **Escape strings in CEL** — `foo"bar` becomes `"foo\"bar"`.
 4. **Headers are lists** — First value only used for comparison.
+5. **JSONPath pairing** — Compare matches by concrete location. Keep length-only failures compact so their paths stay stable across replay and merge.
 
 ## Gotchas: CEL Evaluator
 
