@@ -16,7 +16,7 @@ import pytest
 from unittest.mock import patch
 
 from api_parity.case_generator import HeaderRef, LinkFields, _MISSING
-from api_parity.executor import Executor
+from api_parity.executor import Executor, RequestError
 from api_parity.models import (
     ChainCase,
     ChainStep,
@@ -673,3 +673,12 @@ def test_missing_source_value_does_not_borrow_another_operations_id(executor):
     with patch.object(executor, "_execute_single", side_effect=responses):
         histories = executor.execute_chain(chain)
     assert all(len(history.steps) == 2 for history in histories)
+
+@pytest.mark.parametrize("position", [1, "0"])
+def test_invalid_source_identifies_the_broken_reference(executor, position):
+    chain = _make_two_step_chain()
+    chain.steps[1].link_source["source_step_index"] = position
+    response = ResponseCase(status_code=200, body={"id": "ok"}, elapsed_ms=1)
+    with patch.object(executor, "_execute_single", return_value=response):
+        with pytest.raises(RequestError, match="getWidget.*no matching prior link source.*createWidget"):
+            executor.execute_chain(chain)

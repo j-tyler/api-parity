@@ -293,7 +293,11 @@ class Executor:
             if linked_parameters:
                 source = self._link_source_position(link, steps_a)
                 if source is None:
-                    break
+                    raise RequestError(
+                        f"Step {step.step_index} ({step.request_template.operation_id}) has no "
+                        f"matching prior link source: source_step_index={link.get('source_step_index')!r}, "
+                        f"source_operation={link.get('source_operation')!r}"
+                    )
                 source_a, source_b = steps_a[source], steps_b[source]
                 overrides_a = self._resolve_link_overrides(link, source_a.extracted, source_a.request)
                 overrides_b = self._resolve_link_overrides(link, source_b.extracted, source_b.request)

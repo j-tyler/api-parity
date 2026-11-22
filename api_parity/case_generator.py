@@ -339,13 +339,6 @@ class CaseGenerator:
         # Used by _find_status_code_with_links() instead of scanning all paths × methods.
         self._operation_index = build_operation_index(self._raw_spec)
 
-        # Pre-build link index for O(1) lookups in _find_link_between().
-        # Without this, every chain step scans all paths × methods × responses
-        # × links in the spec (5-level nested loop).  With the index, the
-        # lookup is O(prev_steps × matching_entries) which is typically O(1).
-        self._link_index: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        self._build_link_index()
-
         # Cache for chain topology reuse across seeds. After the first
         # generate_chains() call discovers chain structures via the expensive
         # Hypothesis state machine, subsequent calls with different seeds
@@ -358,57 +351,6 @@ class CaseGenerator:
         # lazily on first use. Needed to generate fresh fuzz values for cached
         # chain topologies without re-running the state machine.
         self._schemathesis_op_index: dict[str, Any] | None = None
-
-    def _build_link_index(self) -> None:
-        """Scan the spec once and index all OpenAPI links by (source_op, target_op).
-
-        Each entry stores the link metadata needed by _find_link_between() so
-        the inner method can do a dict lookup instead of re-scanning the spec.
-        """
-        paths = self._raw_spec.get("paths", {})
-        for path_template, path_item in paths.items():
-            if not isinstance(path_item, dict):
-                continue
-            for method_or_key, operation in path_item.items():
-                if not isinstance(operation, dict) or method_or_key.startswith("$"):
-                    continue
-                source_op = _get_operation_id(operation, method_or_key, path_template)
-                responses = operation.get("responses", {})
-                for resp_code, response_def in responses.items():
-                    if not isinstance(response_def, dict):
-                        continue
-                    links = response_def.get("links", {})
-                    for link_name, link_def in links.items():
-                        if not isinstance(link_def, dict):
-                            continue
-                        link_target = (
-                            link_def.get("operationId")
-                            or link_def.get("operationRef")
-                        )
-                        if not link_target:
-                            continue
-                        parameters = link_def.get("parameters", {})
-                        param_expressions = {
-                            k: v for k, v in parameters.items()
-                            if isinstance(v, str)
-                        }
-                        field_expr = (
-                            next(iter(param_expressions.values()), None)
-                            if param_expressions
-                            else None
-                        )
-                        entry = {
-                            "link_name": link_name,
-                            "source_operation": source_op,
-                            "resp_code_str": str(resp_code),
-                            "is_inferred": False,
-                            "field": field_expr,
-                            "parameters": param_expressions,
-                        }
-                        key = (source_op, link_target)
-                        if key not in self._link_index:
-                            self._link_index[key] = []
-                        self._link_index[key].append(entry)
 
     def _get_schemathesis_op_index(self) -> dict[str, Any]:
         """Build or return cached index of operation_id -> Schemathesis operation object.
@@ -855,15 +797,7 @@ class CaseGenerator:
 
         # Create capturing state machine
         captured_chains: list[ChainCase] = []
-        current_steps: list[ChainStep] = []
-        step_counter = 0
-
         generator_self = self
-        # Track all previous operations and status codes for link detection.
-        # Schemathesis can use extracted variables from ANY previous step, not just
-        # the immediately previous one. This list enables searching back through
-        # the chain history to find the source of a link.
-        prev_steps: list[tuple[str, int]] = []  # (operation_id, status_code)
 
         class ChainCapturingStateMachine(OpenAPIStateMachine):
             """State machine that captures chains without making HTTP calls."""
@@ -874,121 +808,54 @@ class CaseGenerator:
 
             def setup(self):
                 """Called before each test run - start a new chain."""
-                nonlocal current_steps, step_counter, prev_steps
-                current_steps = []
-                step_counter = 0
-                prev_steps = []
+                self.steps: list[ChainStep] = []
+                self.sources: dict[str, tuple[int, int]] = {}
 
             def teardown(self):
-                """Called after each test run - save the completed chain."""
-                nonlocal captured_chains, current_steps
-                if current_steps:
-                    chain = ChainCase(
-                        chain_id=str(uuid.uuid4()),
-                        steps=list(current_steps),
-                    )
-                    captured_chains.append(chain)
-                current_steps = []
+                if self.steps:
+                    captured_chains.append(ChainCase(chain_id=str(uuid.uuid4()), steps=self.steps))
 
             def call(self, case, **kwargs) -> SchemathesisResponse:
-                """Capture the case instead of making HTTP request.
+                return self._synthetic_response(case)
 
-                During chain discovery, we don't make real HTTP calls. Instead we
-                return synthetic responses with placeholder data so Schemathesis
-                can resolve OpenAPI links and discover possible chain paths.
-                """
-                nonlocal current_steps, step_counter, prev_steps
-
-                # Extract operation info - use consistent ID generation
-                op_id = _get_operation_id(
-                    case.operation.definition.raw, case.method, case.path
-                )
+            def step(self, input):
+                output = super().step(input)
+                case = input.case
+                op_id = _get_operation_id(case.operation.definition.raw, case.method, case.path)
                 if op_id in generator_self._exclude:
-                    # Return synthetic response for excluded operations
-                    return self._synthetic_response(case)
+                    return output
 
-                # Convert to our RequestCase
-                request_case = generator_self._convert_case(case, op_id)
+                source = None
+                transition = input.transition
+                if transition is not None:
+                    parent = self.sources.get(transition.parent_id)
+                    if parent is None:
+                        # Its parent was excluded, so this traversal cannot be executed.
+                        return output
+                    position, status = parent
+                    link = links_by_id[transition.id]
+                    parameters = {
+                        (f"{p.location.value}.{p.name}" if p.location else p.name): p.expression
+                        for p in link.parameters if isinstance(p.expression, str)
+                    }
+                    source = {
+                        "link_name": link.name,
+                        "source_operation": self.steps[position].request_template.operation_id,
+                        "source_step_index": position,
+                        "status_code": status,
+                        "is_inferred": link.is_inferred,
+                        "field": next(iter(parameters.values()), None),
+                        "parameters": parameters,
+                    }
 
-                # Find link source if this is not the first step.
-                # Search ALL previous steps (most recent first) for a matching link.
-                link_source = None
-                if prev_steps:
-                    link_source = self._find_link_between(prev_steps, op_id)
-
-                # Create chain step
-                step = ChainStep(
-                    step_index=step_counter,
-                    request_template=request_case,
-                    link_source=link_source,
-                )
-                current_steps.append(step)
-                step_counter += 1
-
-                # Append to history for future link lookups
-                response = self._synthetic_response(case)
-                prev_steps.append((op_id, response.status_code))
-
-                return response
-
-            def _find_link_between(
-                self, prev_steps: list[tuple[str, int]], target_op: str
-            ) -> dict | None:
-                """Find the link definition connecting a previous operation to the target.
-
-                Searches ALL previous steps in the chain (most recent first) to find
-                a link that targets this operation. This handles cases where Schemathesis
-                uses extracted variables from a step earlier than the immediately
-                previous one.
-
-                Args:
-                    prev_steps: List of (operation_id, status_code) tuples from
-                                all previous steps in the chain.
-                    target_op: The operation ID of the current step.
-
-                Returns:
-                    Dict with link_name, source_operation, status_code, is_inferred,
-                    and field (the raw expression for replay), or None if no explicit
-                    link found in the spec.
-                """
-                # Use pre-built link index for O(1) lookup instead of scanning
-                # the entire spec (previously a 5-level nested loop).
-                for source_index in reversed(range(len(prev_steps))):
-                    source_op, status_code = prev_steps[source_index]
-                    entries = generator_self._link_index.get((source_op, target_op))
-                    if entries is None:
-                        continue
-                    for entry in entries:
-                        if self._matches_status_code(entry["resp_code_str"], status_code):
-                            return {
-                                "link_name": entry["link_name"],
-                                "source_operation": source_op,
-                                "source_step_index": source_index,
-                                "status_code": status_code,
-                                "is_inferred": entry["is_inferred"],
-                                "field": entry["field"],
-                                "parameters": dict(entry["parameters"]),
-                            }
-
-                # No explicit link found in spec
-                return None
-
-            def _matches_status_code(self, spec_code: str, actual_code: int) -> bool:
-                """Check if a spec response code matches an actual status code.
-
-                Handles exact matches, wildcards (2XX), and 'default'.
-                """
-                actual_str = str(actual_code)
-                # Exact match
-                if spec_code == actual_str:
-                    return True
-                # 'default' matches any status code
-                if spec_code == "default":
-                    return True
-                # Wildcard like '2XX' matches any 2xx code
-                if len(spec_code) == 3 and spec_code.endswith("XX"):
-                    return spec_code[0] == actual_str[0]
-                return False
+                position = len(self.steps)
+                self.sources[case.id] = (position, output.response.status_code)
+                self.steps.append(ChainStep(
+                    step_index=position,
+                    request_template=generator_self._convert_case(case, op_id),
+                    link_source=source,
+                ))
+                return output
 
             def _find_status_code_with_links(self, operation_id: str, method: str) -> int:
                 """Find a status code that has links defined for this operation.
@@ -1244,6 +1111,12 @@ class CaseGenerator:
                 f"Failed to create state machine from '{self._spec_path}'. "
                 f"Verify the spec has valid operations and links: {e}"
             ) from e
+
+        links_by_id = {
+            link.full_name: link
+            for operation in OriginalStateMachine._transitions.operations.values()
+            for link in operation.outgoing
+        }
 
         # Create combined class
         class CombinedMachine(ChainCapturingStateMachine, OriginalStateMachine):

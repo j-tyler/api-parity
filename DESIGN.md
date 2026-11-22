@@ -551,7 +551,7 @@ Date: 20260216
 2. `_resolve_link_overrides()` processes all parameters in `link_source["parameters"]` and produces a dict of `{param_name: resolved_value}`.
 3. `_apply_link_overrides()` overrides the fuzz-generated path parameter, query parameter, or header values in the request template with the resolved values, then re-renders the path.
 4. Leading slashes are stripped from path parameter values (Location headers return `/resourceId` — the slash is the URL separator, not part of the value).
-5. The generator records the selected source step index so repeated operations are unambiguous. Each target reads request and response values from its own execution of that step. Explicit link parameters are excluded from general placeholder substitution so resolved IDs remain literal.
+5. Each target tracks the prior step's request for `$request.path/header` resolution.
 6. The chain breaks when link resolution fails for BOTH targets (source step returned errors, no variables extracted — continuing would produce noise).
 
 **Why not fix `_apply_variables` instead:** `_apply_variables` matches by pattern (`{var_name}` in value) or identity (value == var_name). Neither works when the value is a random UUID and the variable key is `"id"` — there's no syntactic relationship. The fix requires semantic knowledge from `link_source.parameters` to map parameter names to expressions to extracted variable keys. This is a fundamentally different operation from placeholder substitution.
@@ -640,3 +640,17 @@ Replay verifies the saved failing step and continues to check reachable steps.
 A blocked link before that comparison leaves the bundle inconclusive. After
 the saved step passes, a blocked tail can be reported alongside the verified
 fix. A new mismatch on a reachable step takes precedence.
+
+## Chain link source identity
+
+Date: 20261121
+
+Two earlier operations can both declare links to the same read operation. For
+example, a create can return an ID and a later update can return 422 on both
+targets. A read discovered through the create must still run against that ID.
+A read discovered through the update is incomplete if its link cannot resolve.
+
+Discovery records the parent case ID as a position in the captured chain and
+uses the transition ID to identify the exact OpenAPI link. Explore and replay
+resolve that link against the selected exchange on each target. Explicit link
+values remain literal during placeholder substitution.
