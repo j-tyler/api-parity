@@ -809,7 +809,8 @@ class Executor:
         json_body: Any = None
 
         content_type_key = next((k for k in headers if k.lower() == "content-type"), "Content-Type")
-        media = (request.media_type or "").partition(";")[0].lower().strip()
+        form_content_type = request.media_type or headers.get(content_type_key, "")
+        media = form_content_type.partition(";")[0].lower().strip()
 
         if isinstance(request.body, dict) and media == "application/x-www-form-urlencoded":
             content = urlencode(_form_fields(request.body)).encode("ascii")
