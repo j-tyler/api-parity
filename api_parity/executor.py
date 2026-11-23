@@ -18,7 +18,7 @@ from collections.abc import Collection
 from email.message import Message
 from threading import Lock
 from typing import Any, Callable
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode
 
 import httpx
 from urllib3.filepost import encode_multipart_formdata
@@ -33,7 +33,7 @@ from api_parity.models import (
     TargetConfig,
 )
 from api_parity.session_cookies import BundleCookies
-from api_parity.path_rendering import decode_path_value, render_path
+from api_parity.path_rendering import decode_path_value, path_parameter_names, render_path
 from api_parity.xml_body import dict_to_xml, xml_to_dict
 
 
@@ -317,9 +317,25 @@ class Executor:
                         f"source_operation={link.get('source_operation')!r}"
                     )
                 source_a, source_b = steps_a[source], steps_b[source]
-                overrides_a = self._resolve_link_overrides(link, source_a.extracted, source_a.request)
-                overrides_b = self._resolve_link_overrides(link, source_b.extracted, source_b.request)
+                # Use the same destination for deciding whether a step can run
+                # and for applying the value. Qualified keys may share a name.
+                required = set(link.get("required_parameters") or ())
+                linked_parameters = {
+                    ".".join(self._link_destination(key, step.request_template, required)): expr
+                    for key, expr in linked_parameters.items()
+                }
+                link = {**link, "parameters": linked_parameters}
+                path_keys = {key for key in linked_parameters if key.startswith("path.")}
+                overrides_a = self._resolve_link_overrides(link, source_a.extracted, source_a.request, path_keys)
+                overrides_b = self._resolve_link_overrides(link, source_b.extracted, source_b.request, path_keys)
                 if not overrides_a and not overrides_b:
+                    break
+                unresolved = linked_parameters.keys() - overrides_a.keys() - overrides_b.keys()
+                if any(
+                    isinstance(linked_parameters[key], str)
+                    and (linked_parameters[key].startswith("$") or "{$" in linked_parameters[key])
+                    for key in unresolved & (required | path_keys)
+                ):
                     break
 
             # Ordinary placeholders may use accumulated variables. Explicit link
@@ -418,9 +434,9 @@ class Executor:
         # Template values may already be percent-escaped. Decode the template
         # text before rendering, but keep response values literal (including %).
         for key, value in template.path_parameters.items():
-            if isinstance(value, str) and key not in linked_parameters and value in variables:
+            if isinstance(value, str) and f"path.{key}" not in linked_parameters and value in variables:
                 value = self._variable_to_string(variables[value])
-            elif isinstance(value, str) and key not in linked_parameters and "{" in value:
+            elif isinstance(value, str) and f"path.{key}" not in linked_parameters and "{" in value:
                 # Decode only literal spans. Escaped braces in generated IDs are data.
                 parts = re.split(r"(\{[^{}]+\})", value)
                 value = "".join(
@@ -435,7 +451,7 @@ class Executor:
 
         # Apply variables to query parameters (dict[str, list[str]])
         for key, values in list(request_dict.get("query", {}).items()):
-            if key in linked_parameters:
+            if f"query.{key}" in linked_parameters:
                 continue
             new_values = []
             for value in values:
@@ -584,6 +600,8 @@ class Executor:
             $response.header.Name    → first element of extracted_vars["header/{name}"]
             $response.header.Name[i] → extracted_vars["header/{name}/{i}"]
             $request.path.paramName  → prev_request.path_parameters["paramName"]
+            $request.query.name      → source query values
+            $request.body#/path      → JSON Pointer into the source request body
             $request.header.Name     → prev_request.headers["{name}"][0]
 
         Args:
@@ -634,6 +652,33 @@ class Executor:
                 return value
             return _MISSING
 
+        if prev_request is not None and expression.startswith("$request.query."):
+            values = prev_request.query.get(expression.removeprefix("$request.query."))
+            if values:
+                return values[0] if len(values) == 1 else values
+            return _MISSING
+
+        if prev_request is not None and expression.startswith("$request.body#/"):
+            # A JSON Pointer selects from the body of this target's source
+            # request, after any earlier substitutions in the chain.
+            body = prev_request.body
+            content_type = next((v[0] for h, v in prev_request.headers.items()
+                                 if h.lower() == "content-type" and v), "")
+            media = (prev_request.media_type or content_type).partition(";")[0].lower()
+            if isinstance(body, (dict, list)) and "json" not in media:
+                return _MISSING
+            if prev_request.body_base64 is not None:
+                body = base64.b64decode(prev_request.body_base64)
+            if isinstance(body, bytes) or (isinstance(body, str) and not prev_request.media_type):
+                try:
+                    body = json.loads(body)
+                except ValueError:
+                    return _MISSING
+            pointer = unquote(expression.removeprefix("$request.body#/"))
+            if not pointer:  # "/" addresses an empty member name.
+                return body.get("", _MISSING) if isinstance(body, dict) else _MISSING
+            return extract_by_jsonpointer(body, pointer)
+
         # $request.path.paramName
         match = _LINK_EXPR_REQUEST_PATH.match(expression)
         if match and prev_request is not None:
@@ -656,6 +701,7 @@ class Executor:
         link_source: dict[str, Any],
         extracted_vars: dict[str, Any],
         prev_request: RequestCase | None,
+        path_keys: Collection[str] = (),
     ) -> dict[str, Any]:
         """Resolve all link parameter expressions to concrete values.
 
@@ -685,10 +731,28 @@ class Executor:
             value = self._resolve_link_expression(
                 expression, extracted_vars, prev_request
             )
-            if value is not _MISSING:
-                overrides[param_name] = value
+            if value is _MISSING:
+                continue
+            if param_name in path_keys and (value is None or self._variable_to_string(value) == ""):
+                continue
+            overrides[param_name] = value
 
         return overrides
+
+    @staticmethod
+    def _link_destination(key: str, template: RequestCase, required: Collection[str] = ()) -> tuple[str, str]:
+        location, dot, name = key.partition(".")
+        if dot and location in {"path", "query", "header", "cookie"}:
+            return location, name.lower() if location == "header" else name
+        if key in template.path_parameters or key in path_parameter_names(template.path_template):
+            return "path", key
+        if key in template.query or f"query.{key}" in required:
+            return "query", key
+        if any(h.lower() == key.lower() for h in template.headers) or f"header.{key.lower()}" in required:
+            return "header", key.lower()
+        if key in template.cookies or f"cookie.{key}" in required:
+            return "cookie", key
+        return "", key
 
     def _apply_link_overrides(
         self,
@@ -717,11 +781,12 @@ class Executor:
         request_dict = template.model_dump()
 
         uri_paths = {}
-        for param_name, value in overrides.items():
+        for key, value in overrides.items():
+            location, param_name = self._link_destination(key, template)
             str_value = self._variable_to_string(value)
 
-            if param_name in request_dict.get("path_parameters", {}):
-                expression = (expressions or {}).get(param_name, "")
+            if location == "path":
+                expression = (expressions or {}).get(key, "")
                 path_source = _LINK_EXPR_REQUEST_PATH.fullmatch(expression)
                 if path_source and source_request is not None:
                     # An ordinary source segment may decode to a leading slash.
@@ -737,15 +802,17 @@ class Executor:
                     uri_paths[param_name] = reference
                     str_value = decode_path_value(reference)
                 request_dict["path_parameters"][param_name] = str_value
-            elif param_name in request_dict.get("query", {}):
-                request_dict["query"][param_name] = [str_value]
-            else:
-                # Check headers (case-insensitive)
-                lower_param = param_name.lower()
-                for hdr_key in list(request_dict.get("headers", {})):
-                    if hdr_key.lower() == lower_param:
-                        request_dict["headers"][hdr_key] = [str_value]
-                        break
+            elif location == "query":
+                if isinstance(value, list) and (expressions or {}).get(key, "").startswith("$request.query."):
+                    request_dict["query"][param_name] = list(value)
+                else:
+                    request_dict["query"][param_name] = [str_value]
+            elif location == "header":
+                headers = request_dict["headers"]
+                name = next((h for h in headers if h.lower() == param_name.lower()), param_name.lower())
+                headers[name] = [str_value]
+            elif location == "cookie":
+                request_dict["cookies"][param_name] = str_value
 
         request_dict["rendered_path"] = render_path(template.path_template, request_dict["path_parameters"], uri_paths)
         request = RequestCase.model_validate(request_dict)

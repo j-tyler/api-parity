@@ -8,6 +8,11 @@ from urllib.parse import quote, unquote
 _PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
 
 
+def path_parameter_names(template: str) -> list[str]:
+    """Return the parameter slots recognized by render_path."""
+    return _PLACEHOLDER.findall(template)
+
+
 def decode_path_value(value: Any) -> Any:
     """Read an already serialized template value, preserving arbitrary escaped octets."""
     return unquote(value, errors="surrogateescape") if isinstance(value, str) else value
