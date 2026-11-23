@@ -54,6 +54,20 @@ rules against the captured tree, such as `$.Item.count`. The executor retains
 the XML root and string leaf values, so it skips automatic body schema checks
 for that representation.
 
+### Schema version and response direction
+
+OpenAPI 3.1 response schemas use JSON Schema 2020-12 by default. For example,
+if `state` has `const: ready`, a target returning `"corrupted"` produces a
+schema violation at `$.state`. A supported `jsonSchemaDialect` selects a
+different default draft, and a schema resource can override it with `$schema`.
+
+In OpenAPI 3.0, a required property marked `writeOnly: true` can be omitted
+from a response. For example, a response can omit a required input password
+while still having to provide a required, read-only `id`. If the response
+includes the password, its declared type and other constraints still apply.
+Replay applies the same checks using the bundle’s OpenAPI snapshot or the
+schema supplied with `--spec`.
+
 ### JSON null, empty bodies, and malformed JSON
 
 The four bytes `null` are a present JSON value. They satisfy a nullable schema

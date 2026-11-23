@@ -374,3 +374,25 @@ def test_generated_json_null_and_response_states_survive_replay(
     second_body = b"null"
     assert replay(config, out, tmp_path / "fixed")["now_match"] == 1
     assert received == [(side, "application/json", b"null") for side in "ab"] * 5
+
+
+def test_openapi31_const_explore_and_replay_use_the_saved_dialect(tmp_path, monkeypatch, replay_env):
+    config, bodies, _ = replay_env
+    spec = write_spec(tmp_path / "spec.json")
+    document = json.loads(spec.read_bytes())
+    document["openapi"] = "3.1.0"
+    document["components"]["schemas"]["Item"]["properties"]["id"] = {"const": 42}
+    spec.write_text(json.dumps(document))
+    bodies[:] = [{"id": 42}, {"id": 43}]
+    monkeypatch.setattr(CaseGenerator, "generate", lambda *a, **kw: iter([request()]))
+    out = tmp_path / "out"
+    assert dispatch(parse_args(["explore", "--spec", str(spec), "--config", str(config),
+                                "--target-a", "a", "--target-b", "b", "--out", str(out)])) == 0
+    bundle, = discover_bundles(out)
+    diff = json.loads((bundle / "diff.json").read_text())
+    violation, = diff["details"]["schema"]["differences"]
+    assert (violation["path"], violation["target_b"]) == ("$.id", "<violation: invalid_const>")
+    spec.unlink()
+    assert replay(config, out, tmp_path / "persistent")["still_mismatch"] == 1
+    bodies[1] = {"id": 42}
+    assert replay(config, out, tmp_path / "fixed")["now_match"] == 1
