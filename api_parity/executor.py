@@ -23,7 +23,7 @@ from urllib.parse import unquote, urlencode
 import httpx
 from urllib3.filepost import encode_multipart_formdata
 
-from api_parity.case_generator import LinkFields, _MISSING, extract_by_jsonpointer
+from api_parity.case_generator import LINK_BODY_PATTERN, LinkFields, _MISSING, extract_by_jsonpointer
 from api_parity.models import (
     ChainCase,
     ChainExecution,
@@ -33,7 +33,7 @@ from api_parity.models import (
     TargetConfig,
 )
 from api_parity.session_cookies import BundleCookies
-from api_parity.path_rendering import decode_path_value, path_parameter_names, render_path
+from api_parity.path_rendering import collection_path, decode_path_value, path_parameter_names, render_path
 from api_parity.xml_body import dict_to_xml, xml_to_dict
 
 
@@ -49,7 +49,6 @@ class RequestError(ExecutorError):
 # Used during chain execution to map link_source.parameters expressions
 # (e.g., "$response.body#/id") to extracted variable keys or request data.
 # See OpenAPI 3.0 spec section "Runtime Expressions".
-_LINK_EXPR_RESPONSE_BODY = re.compile(r'\$response\.body#/(.+)$')
 _LINK_EXPR_RESPONSE_HEADER = re.compile(
     r'\$response\.header\.([A-Za-z0-9\-_]+)(?:\[(\d+)\])?$', re.IGNORECASE
 )
@@ -63,6 +62,23 @@ _LINK_EXPR_REQUEST_HEADER = re.compile(
 # Covers 0x00-0x1F and 0x7F (DEL).  httpx handles spaces and non-ASCII (unicode)
 # via its own percent-encoding, but control characters raise InvalidURL.
 _URL_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _response_pointer(body: Any, pointer: str) -> Any:
+    """Preserve literal member names accepted by older versions, then try the URI fragment."""
+    value = extract_by_jsonpointer(body, pointer)
+    if value is _MISSING and "%" in pointer:
+        try:
+            decoded = unquote(pointer, errors="strict")
+        except UnicodeDecodeError:
+            return _MISSING
+        if decoded != pointer:
+            return extract_by_jsonpointer(body, decoded)
+    return value
+
+
+class _SerializedPath(str):
+    """A collection path whose components and style delimiters are already encoded."""
 
 
 def _percent_encode_control_chars(path: str) -> str:
@@ -326,8 +342,8 @@ class Executor:
                 }
                 link = {**link, "parameters": linked_parameters}
                 path_keys = {key for key in linked_parameters if key.startswith("path.")}
-                overrides_a = self._resolve_link_overrides(link, source_a.extracted, source_a.request, path_keys)
-                overrides_b = self._resolve_link_overrides(link, source_b.extracted, source_b.request, path_keys)
+                overrides_a = self._resolve_link_overrides(link, source_a.response, source_a.request, path_keys)
+                overrides_b = self._resolve_link_overrides(link, source_b.response, source_b.request, path_keys)
                 if not overrides_a and not overrides_b:
                     break
                 unresolved = linked_parameters.keys() - overrides_a.keys() - overrides_b.keys()
@@ -535,16 +551,15 @@ class Executor:
         """
         extracted: dict[str, Any] = {}
 
-        # Extract body fields (if response has a dict body)
-        if isinstance(response.body, dict):
+        if isinstance(response.body, (dict, list)):
             # First pass: extract all values under full pointer paths
             for field_pointer in self._link_fields.body_pointers:
-                value = extract_by_jsonpointer(response.body, field_pointer)
+                value = _response_pointer(response.body, field_pointer)
                 if value is not _MISSING:
                     extracted[field_pointer] = value
 
             # Add shortcut aliases: "userId" -> value (from "data/user/userId")
-            # Only when unambiguous (single pointer with that last segment)
+            # Only when unambiguous among all requested pointers, including root fields.
             last_segments: dict[str, list[str]] = {}
             for field_pointer in self._link_fields.body_pointers:
                 last_segment = field_pointer.split("/")[-1]
@@ -552,7 +567,7 @@ class Executor:
                     last_segments.setdefault(last_segment, []).append(field_pointer)
 
             for last_segment, pointers in last_segments.items():
-                if len(pointers) == 1:
+                if len(pointers) == 1 and last_segment not in self._link_fields.body_pointers:
                     pointer = pointers[0]
                     if pointer in extracted:
                         extracted[last_segment] = extracted[pointer]
@@ -584,73 +599,19 @@ class Executor:
     @staticmethod
     def _resolve_link_expression(
         expression: str,
-        extracted_vars: dict[str, Any],
+        source_response: ResponseCase,
         prev_request: RequestCase | None,
     ) -> Any:
-        """Resolve an OpenAPI runtime expression to a concrete value.
-
-        OpenAPI link parameters map target operation parameter names to runtime
-        expressions that reference data from the source step's request/response.
-        This method resolves those expressions to actual values using the
-        extracted variables dict (keyed by _extract_variables) or the prior
-        step's request data.
-
-        Supported expressions:
-            $response.body#/path     → extracted_vars["path"]
-            $response.header.Name    → first element of extracted_vars["header/{name}"]
-            $response.header.Name[i] → extracted_vars["header/{name}/{i}"]
-            $request.path.paramName  → prev_request.path_parameters["paramName"]
-            $request.query.name      → source query values
-            $request.body#/path      → JSON Pointer into the source request body
-            $request.header.Name     → prev_request.headers["{name}"][0]
-
-        Args:
-            expression: OpenAPI runtime expression (e.g., "$response.body#/id").
-            extracted_vars: Variables extracted from prior step responses.
-            prev_request: The request sent in the prior step (for $request expressions).
-
-        Returns:
-            Resolved value (may be None for JSON null), or _MISSING if the
-            expression cannot be resolved (e.g., the source step returned an
-            error and no variables were extracted).
-        """
-        # $response.body#/path
-        match = _LINK_EXPR_RESPONSE_BODY.match(expression)
+        """Resolve an explicit link against its source exchange, or return _MISSING."""
+        match = LINK_BODY_PATTERN.fullmatch(expression)
         if match:
-            json_pointer = match.group(1)
-            value = extracted_vars.get(json_pointer, _MISSING)
-            if value is not _MISSING:
-                return value
-            # Try last segment shortcut (e.g., "userId" alias for "data/user/userId")
-            last_segment = json_pointer.split("/")[-1]
-            if last_segment != json_pointer:
-                return extracted_vars.get(last_segment, _MISSING)
-            return _MISSING
+            return _response_pointer(source_response.body, match.group(1))
 
-        # $response.header.Name or $response.header.Name[index]
-        match = _LINK_EXPR_RESPONSE_HEADER.match(expression)
+        match = _LINK_EXPR_RESPONSE_HEADER.fullmatch(expression)
         if match:
-            header_name = match.group(1).lower()
-            index_str = match.group(2)
-            if index_str is not None:
-                # Specific index: header/{name}/{index}
-                key = f"header/{header_name}/{index_str}"
-                value = extracted_vars.get(key, _MISSING)
-                if value is not _MISSING:
-                    return value
-            # Full header list: header/{name}
-            key = f"header/{header_name}"
-            value = extracted_vars.get(key, _MISSING)
-            if value is not _MISSING:
-                if isinstance(value, list) and value:
-                    # Use the requested index if specified, otherwise first element.
-                    # This fixes the fallback path: when the indexed key (e.g.,
-                    # "header/set-cookie/2") is missing from extracted_vars but the
-                    # full list exists, we must use the requested index — not always [0].
-                    idx = int(index_str) if index_str is not None else 0
-                    return value[idx] if idx < len(value) else _MISSING
-                return value
-            return _MISSING
+            values = source_response.headers.get(match.group(1).lower(), [])
+            index = int(match.group(2) or 0)
+            return values[index] if index < len(values) else _MISSING
 
         if prev_request is not None and expression.startswith("$request.query."):
             values = prev_request.query.get(expression.removeprefix("$request.query."))
@@ -699,7 +660,7 @@ class Executor:
     def _resolve_link_overrides(
         self,
         link_source: dict[str, Any],
-        extracted_vars: dict[str, Any],
+        source_response: ResponseCase,
         prev_request: RequestCase | None,
         path_keys: Collection[str] = (),
     ) -> dict[str, Any]:
@@ -707,11 +668,11 @@ class Executor:
 
         Reads link_source["parameters"] (a dict mapping target operation
         parameter names to OpenAPI runtime expressions) and resolves each
-        expression to an actual value from extracted variables or prior request.
+        expression to its value in the selected source response or request.
 
         Args:
             link_source: The step's link_source dict containing "parameters".
-            extracted_vars: Variables extracted from prior step responses.
+            source_response: The selected source response from this target.
             prev_request: The request from the prior step (for $request expressions).
 
         Returns:
@@ -729,10 +690,18 @@ class Executor:
             if not isinstance(expression, str):
                 continue
             value = self._resolve_link_expression(
-                expression, extracted_vars, prev_request
+                expression, source_response, prev_request
             )
             if value is _MISSING:
                 continue
+            if (param_name in path_keys and isinstance(value, (list, dict))
+                    and expression.startswith(("$response.body#/", "$request.body#/"))):
+                name = param_name.removeprefix("path.")
+                options = link_source.get("collection_paths", {}).get(name, {})
+                wire = collection_path(name, value, options)
+                if not wire:
+                    continue
+                value = _SerializedPath(wire)
             if param_name in path_keys and (value is None or self._variable_to_string(value) == ""):
                 continue
             overrides[param_name] = value
@@ -788,7 +757,9 @@ class Executor:
             if location == "path":
                 expression = (expressions or {}).get(key, "")
                 path_source = _LINK_EXPR_REQUEST_PATH.fullmatch(expression)
-                if path_source and source_request is not None:
+                if isinstance(value, _SerializedPath):
+                    reference = str_value
+                elif path_source and source_request is not None:
                     # An ordinary source segment may decode to a leading slash.
                     # Forward its original interpretation along with the value.
                     reference = source_request._uri_path_references.get(path_source.group(1))

@@ -8,6 +8,7 @@ import pytest
 from api_parity.case_generator import CaseGenerator, HeaderRef, LinkFields
 from api_parity.executor import Executor
 from api_parity.models import ChainCase, ChainStep, RequestCase, TargetConfig
+from api_parity.path_rendering import collection_path
 
 
 def capture_targets(monkeypatch, handler, link_fields=None):
@@ -107,3 +108,55 @@ def test_forwarded_request_path_reuses_each_targets_resource(monkeypatch, source
         executor.execute_chain(chain)
     assert received == [(host, method, f"/{expected}-{host}".encode())
                         for method in ("GET", "DELETE") for host in ("a", "b")]
+
+
+@pytest.mark.parametrize(("schema", "style", "explode", "value", "expected"), [
+    ({"type": "object", "additionalProperties": {"type": "string"}}, "simple", False,
+     {"k": "a/b", "n": "x,y"}, b"k,a%2Fb,n,x%2Cy"),
+    ({"type": "array", "items": {"type": "string"}}, "matrix", True,
+     ["a/b", "x,y"], b";id=a%2Fb;id=x%2Cy"),
+])
+def test_generated_collection_link_survives_bundle_round_trip(
+    tmp_path, monkeypatch, schema, style, explode, value, expected,
+):
+    parameter = {"in": "path", "name": "id", "required": True, "style": style, "explode": explode,
+                 "schema": {"$ref": "#/components/schemas/Owner"}}
+    response = {"description": "ok", "links": {
+        "read": {"operationId": "read", "parameters": {"id": "$response.body#/owner"}}
+    }, "content": {"application/json": {"schema": {
+        "type": "object", "required": ["owner"], "properties": {"owner": schema},
+    }}}}
+    spec = {"openapi": "3.0.3", "info": {"title": "collection link", "version": "1"},
+            "components": {"schemas": {"Owner": schema}}, "paths": {
+                "/start": {"post": {"operationId": "start", "responses": {"200": response}}},
+                "/items/{id}": {"get": {"operationId": "read", "parameters": [parameter],
+                                        "responses": {"200": {"description": "ok"}}}},
+            }}
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(spec))
+    chains = CaseGenerator(path).generate_chains(max_chains=16, max_steps=2, seed=42)
+    linked = next(chain for chain in chains if any(step.link_source for step in chain.steps))
+    reads = []
+
+    def handle(request):
+        if request.method == "POST":
+            return httpx.Response(200, json={"owner": value})
+        reads.append(request.url.raw_path)
+        return httpx.Response(200)
+
+    with capture_targets(monkeypatch, handle) as executor:
+        executor.execute_chain(ChainCase.model_validate_json(linked.model_dump_json()))
+    assert reads == [b"/items/" + expected] * 2
+
+
+@pytest.mark.parametrize(("style", "explode", "value", "expected"), [
+    ("simple", True, {"k": True, "n": "a=b"}, "k=true,n=a%3Db"),
+    ("label", True, ["a.b", "c/d"], ".a%2Eb.c%2Fd"),
+    ("matrix", False, {"a": 42, "b": "x"}, ";id=a,42,b,x"),
+    ("matrix", True, {"a": "x;y"}, ";a=x%3By"),
+    ("json", False, {"a": [1]}, "%7B%22a%22%3A%5B1%5D%7D"),
+    ("simple", False, {"a": [1]}, None),
+])
+def test_collection_path_serialization(style, explode, value, expected):
+    options = {"types": ["object", "array"], "style": style, "explode": explode}
+    assert collection_path("id", value, options) == expected
