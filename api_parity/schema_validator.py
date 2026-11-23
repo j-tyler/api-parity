@@ -12,8 +12,10 @@ See ARCHITECTURE.md "OpenAPI Spec as Field Authority" and DESIGN.md
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
+from email.message import Message
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,8 @@ from jsonschema import Draft4Validator, ValidationError, validators
 from referencing import Registry
 from referencing.exceptions import Unresolvable
 from referencing.jsonschema import DRAFT4
+
+from api_parity.models import response_body_format
 
 
 # =============================================================================
@@ -101,11 +105,61 @@ class ResponseSchema:
 
     schema: dict[str, Any]
     allows_extra_fields: bool
+    media_range: str = "application/json"
+
+    def validation_format(self, content_type: str | None) -> str:
+        # The legacy JSON fallback checks the captured value as-is.
+        if self.media_range == "application/json":
+            return "json"
+        return response_body_format(content_type or "application/json")
 
 
 # =============================================================================
 # Helpers
 # =============================================================================
+
+
+# Indexed by declared media range, with parameter-specific variants first.
+_ResponseContent = dict[str, list[tuple[dict[str, str], ResponseSchema | None]]]
+
+
+def _media_parameters(content_type: str) -> dict[str, str]:
+    """Read quoted parameter values, which may contain semicolons."""
+    if ";" not in content_type:
+        return {}
+    message = Message()
+    message["Content-Type"] = content_type
+    return {name.lower(): value.lower() if name.lower() == "charset" else value
+            for name, value in message.get_params()[1:] if isinstance(value, str)}
+
+
+def _expects_text_scalar(error: ValidationError, validator, value: int | float | bool) -> bool:
+    """A failed scalar type or enum can identify a typed text representation."""
+    if error.validator == "type":
+        types = error.validator_value
+        if isinstance(types, str):
+            types = [types]
+        return any(t in ("integer", "number", "boolean") and validator.is_type(value, t) for t in types)
+    if error.validator == "enum":
+        return validator.evolve(schema={"enum": error.validator_value}).is_valid(value)
+    return any(_expects_text_scalar(child, validator, value) for child in error.context)
+
+
+def _text_scalar_errors(validator, body: str, errors: list[ValidationError]) -> list[ValidationError]:
+    # Preserve the literal text whenever it satisfies the schema. Parse only
+    # numbers and booleans, including for referenced and composed scalar schemas.
+    token = body.strip()
+    if not token or (token[0] not in "-0123456789" and token not in ("true", "false")):
+        return errors
+    try:
+        value = json.loads(token)
+    except ValueError:
+        return errors
+    if isinstance(value, float) and not math.isfinite(value):
+        return errors
+    if any(_expects_text_scalar(error, validator, value) for error in errors):
+        return list(validator.iter_errors(value))
+    return errors
 
 
 def _openapi_keywords(schema: dict[str, Any]):
@@ -162,15 +216,16 @@ class _DocumentReferences:
 
 
 def missing_response_references(spec: dict) -> list[str]:
-    """Check JSON response contracts without requiring a response instance."""
+    """Check declared response contracts without requiring a response instance."""
     refs = _DocumentReferences(spec)
     pending = []
     for operation in build_operation_index(spec).values():
         for response in operation.get("responses", {}).values():
             response = refs.resolve(response)
             if isinstance(response, dict):
-                media = response.get("content", {}).get("application/json", {})
-                pending.append(media.get("schema"))
+                for media in response.get("content", {}).values():
+                    if isinstance(media, dict):
+                        pending.append(media.get("schema"))
 
     visited = set()
     while pending:
@@ -240,7 +295,7 @@ class SchemaValidator:
         """
         self._spec_path = spec_path
         self._spec: dict[str, Any] = {}
-        self._schema_cache: dict[tuple[str, int], ResponseSchema | None] = {}
+        self._schema_cache: dict[tuple[str, int], _ResponseContent] = {}
 
         try:
             self.source_bytes = spec_path.read_bytes() if source_bytes is None else source_bytes
@@ -288,6 +343,7 @@ class SchemaValidator:
         body: Any,
         operation_id: str,
         status_code: int,
+        content_type: str | None = None,
     ) -> ValidationResult:
         """Validate a response body against its OpenAPI schema.
 
@@ -295,29 +351,30 @@ class SchemaValidator:
             body: The response body (parsed JSON).
             operation_id: The operationId of the endpoint.
             status_code: The HTTP status code of the response.
+            content_type: The response Content-Type. Defaults to application/json.
 
         Returns:
             ValidationResult with validity status and any violations or extra fields.
         """
-        violations, locations = self.validate_response_locations(body, operation_id, status_code)
+        violations, locations = self.validate_response_locations(body, operation_id, status_code, content_type)
         return ValidationResult(valid=not violations, violations=violations,
                                 extra_fields=[field_path(location) for location in locations])
 
     def validate_response_locations(
-        self, body: Any, operation_id: str, status_code: int,
+        self, body: Any, operation_id: str, status_code: int, content_type: str | None = None,
     ) -> tuple[list[SchemaViolation], list[FieldLocation]]:
         """Validate and return literal extra-field locations for direct comparison."""
         # Get the schema for this operation+status_code
-        response_schema = self._get_response_schema(operation_id, status_code)
+        response_schema = self._get_response_schema(operation_id, status_code, content_type)
 
         # No schema defined for this operation+status_code - pass validation
         if response_schema is None:
             return [], []
 
-        # No body to validate
-        if body is None:
-            # If schema expects content, this might be a violation
-            # But for simplicity, we treat None body as valid (matches "no content" case)
+        # Captured XML keeps its root and string leaves for configured field
+        # rules. This tree is not an instance of the OpenAPI body schema.
+        body_format = response_schema.validation_format(content_type)
+        if body is None or body_format == "xml":
             return [], []
 
         # Validate against schema
@@ -326,6 +383,8 @@ class SchemaValidator:
         try:
             validator = self._document_validator.evolve(schema=response_schema.schema)
             errors = list(validator.iter_errors(body))
+            if errors and body_format == "text" and isinstance(body, str):
+                errors = _text_scalar_errors(validator, body, errors)
 
             for error in errors:
                 path = self._error_path_to_jsonpath(error.absolute_path)
@@ -358,6 +417,7 @@ class SchemaValidator:
         body: Any,
         operation_id: str,
         status_code: int,
+        content_type: str | None = None,
     ) -> list[str]:
         """Get list of extra fields present in response but not defined in schema.
 
@@ -368,72 +428,68 @@ class SchemaValidator:
             body: The response body (parsed JSON).
             operation_id: The operationId of the endpoint.
             status_code: The HTTP status code of the response.
+            content_type: The response Content-Type. Defaults to application/json.
 
         Returns:
             List of JSONPath expressions for extra fields.
         """
-        response_schema = self._get_response_schema(operation_id, status_code)
+        response_schema = self._get_response_schema(operation_id, status_code, content_type)
 
-        if response_schema is None or body is None:
+        if response_schema is None or body is None or response_schema.validation_format(content_type) == "xml":
             return []
 
         return [field_path(location) for location in
                 self._find_extra_fields(body, response_schema.schema, (), allowed_only=False)]
 
-    def has_schema(self, operation_id: str, status_code: int) -> bool:
+    def has_schema(self, operation_id: str, status_code: int, content_type: str | None = None) -> bool:
         """Check if a schema exists for the given operation+status_code.
 
         Args:
             operation_id: The operationId of the endpoint.
             status_code: The HTTP status code.
+            content_type: The response Content-Type. Defaults to application/json.
 
         Returns:
             True if a response schema is defined.
         """
-        return self._get_response_schema(operation_id, status_code) is not None
+        return self._get_response_schema(operation_id, status_code, content_type) is not None
 
     def _get_response_schema(
-        self,
-        operation_id: str,
-        status_code: int,
+        self, operation_id: str, status_code: int, content_type: str | None,
     ) -> ResponseSchema | None:
-        """Get the response schema for an operation+status_code.
+        # Cache only declared variants. Arbitrary wire types and parameters must
+        # not grow the cache or change the choice for a subsequent response.
+        key = (operation_id, status_code)
+        if key not in self._schema_cache:
+            self._schema_cache[key] = self._extract_response_content(operation_id, status_code)
+        content = self._schema_cache[key]
+        content_type = "application/json" if content_type is None else content_type
+        media = content_type.partition(";")[0].strip().lower()
+        major, slash, subtype = media.partition("/")
+        ranges = (media, major + "/*", "*/*") if major and slash and subtype else ()
+        actual_params = None
+        for media_range in ranges:
+            for required, schema in content.get(media_range, ()):
+                if required:
+                    if actual_params is None:
+                        actual_params = _media_parameters(content_type)
+                    if not required.items() <= actual_params.items():
+                        continue
+                return schema
 
-        Caches results for performance.
+        # Before media selection, a bare application/json declaration applied
+        # to the captured body regardless of the returned Content-Type.
+        for required, schema in content.get("application/json", ()):
+            if not required:
+                return schema
+        return None
 
-        Args:
-            operation_id: The operationId to look up.
-            status_code: The HTTP status code.
-
-        Returns:
-            ResponseSchema if found, None otherwise.
-        """
-        cache_key = (operation_id, status_code)
-        if cache_key in self._schema_cache:
-            return self._schema_cache[cache_key]
-
-        schema = self._extract_response_schema(operation_id, status_code)
-        self._schema_cache[cache_key] = schema
-        return schema
-
-    def _extract_response_schema(
-        self,
-        operation_id: str,
-        status_code: int,
-    ) -> ResponseSchema | None:
-        """Extract the response schema from the OpenAPI spec.
-
-        Args:
-            operation_id: The operationId to look up.
-            status_code: The HTTP status code.
-
-        Returns:
-            ResponseSchema if found, None otherwise.
-        """
+    def _extract_response_content(self, operation_id: str, status_code: int) -> _ResponseContent:
+        """Index schemas for the selected status by media range and parameters."""
         # Find the operation by operationId
         operation = self._find_operation(operation_id)
         if operation is None:
-            return None
+            return {}
 
         # Get responses for this operation
         responses = operation.get("responses", {})
@@ -451,24 +507,27 @@ class SchemaValidator:
             response_def = responses.get("default")
 
         if response_def is None:
-            return None
+            return {}
 
         # Handle $ref if present
         response_def = self._references.resolve(response_def)
 
-        # Get content -> application/json -> schema
-        if not isinstance(response_def, dict):
-            return None
-        content = response_def.get("content", {})
-        json_content = content.get("application/json", {})
-        schema = json_content.get("schema")
-
-        if schema is None:
-            return None
-
-        allows_extra = self._allows_additional_properties(self._references.resolve(schema))
-
-        return ResponseSchema(schema=schema, allows_extra_fields=allows_extra)
+        content: _ResponseContent = {}
+        if isinstance(response_def, dict):
+            for declared, representation in response_def.get("content", {}).items():
+                media = declared.partition(";")[0].strip().lower()
+                schema = representation.get("schema")
+                entry = None
+                if schema is not None:
+                    resolved = self._references.resolve(schema)
+                    entry = ResponseSchema(
+                        schema=schema, allows_extra_fields=self._allows_additional_properties(resolved),
+                        media_range=media,
+                    )
+                content.setdefault(media, []).append((_media_parameters(declared), entry))
+        for variants in content.values():
+            variants.sort(key=lambda variant: len(variant[0]), reverse=True)
+        return content
 
     def _find_operation(self, operation_id: str) -> dict[str, Any] | None:
         """Find an operation by its operationId via pre-built index.

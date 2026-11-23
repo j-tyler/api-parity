@@ -10,15 +10,19 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from api_parity.comparator import Comparator
+from api_parity.executor import Executor
 from api_parity.models import (
     ComparisonLibrary,
     MismatchType,
     OperationRules,
     PredefinedComparison,
+    RequestCase,
     ResponseCase,
+    TargetConfig,
 )
 from api_parity.schema_validator import SchemaValidator
 
@@ -416,3 +420,71 @@ def test_grouping_preserves_presence_and_value_evidence(list_comparator):
     assert (equality.path, equality.occurrences, equality.rule) == ("$[1].etag", 2, "extra_field_equality")
     assert (presence.path, presence.occurrences, presence.rule) == ("$[0].etag", 2, "extra_field_presence")
     assert presence.target_a is None and presence.target_b == "<missing>"
+
+
+@pytest.fixture
+def compare_media(tmp_path, monkeypatch, comparison_library, mock_cel):
+    def run(declared, schema, served, first, second, rules=None):
+        definition = {"paths": {"/item": {"get": {"operationId": "item", "responses": {
+            "200": {"content": {declared: {"schema": {"$ref": "#/components/schemas/Item"}}}},
+        }}}}, "components": {"schemas": {"Item": schema}}}
+        path = tmp_path / "openapi.json"
+        path.write_text(json.dumps(definition))
+
+        def respond(request):
+            return httpx.Response(200, headers={"Content-Type": served},
+                                  content=first if request.url.host == "a" else second)
+        monkeypatch.setattr(Executor, "_build_client_kwargs", lambda self, target, timeout: {
+            "base_url": target.base_url, "transport": httpx.MockTransport(respond),
+        })
+        case = RequestCase(case_id="read", operation_id="item", method="GET",
+                           path_template="/item", rendered_path="/item")
+        with Executor(TargetConfig(base_url="http://a"), TargetConfig(base_url="http://b")) as executor:
+            a, b = executor.execute(case)
+        comparator = Comparator(mock_cel, comparison_library, SchemaValidator(path))
+        return comparator.compare(a, b, rules or OperationRules(), "item"), (a.body, b.body)
+    return run
+
+
+@pytest.mark.parametrize("served", [
+    "application/problem+json; charset=UTF-8", "application/vnd.api+json", "text/json", "text/plain",
+])
+def test_unmatched_response_preserves_json_schema_checks(compare_media, served):
+    schema = {"type": "object", "properties": {"id": {"type": "integer"}}}
+    result, _ = compare_media("application/json", schema, served, b'{"id":1}', b'{"id":"one"}')
+    assert result.mismatch_type == MismatchType.SCHEMA_VIOLATION
+    assert {d.path for d in result.details["schema"].differences} == ({"$"} if served == "text/plain" else {"$.id"})
+
+
+def test_unmatched_json_preserves_extra_field_comparison(compare_media):
+    result, _ = compare_media("application/json", {"type": "object"}, "application/hal+json",
+                              b'{"extra":"A"}', b'{"extra":"B"}')
+    assert result.mismatch_type == MismatchType.BODY
+    assert result.details["extra_fields"].differences[0].path == "$.extra"
+
+
+@pytest.mark.parametrize(("schema", "good", "bad"), [
+    ({"type": "integer", "minimum": 10}, "42", "9"),
+    ({"oneOf": [{"type": "boolean"}, {"type": "number", "minimum": 0}]}, "true", "-1"),
+    ({"type": "boolean"}, "false", "yes"),
+    ({"enum": [4.5, 6]}, "4.5", "6.5"),
+    ({"type": "string", "enum": ["042"]}, "042", "42"),
+])
+def test_declared_text_checks_scalar_constraints_and_keeps_wire_text(compare_media, schema, good, bad):
+    result, bodies = compare_media("text/plain", schema, "text/plain", good.encode(), bad.encode())
+    assert bodies == (good, bad)
+    assert result.mismatch_type == MismatchType.SCHEMA_VIOLATION
+    difference, = result.details["schema"].differences
+    assert difference.target_b.startswith("<violation:")
+
+
+@pytest.mark.parametrize("media", ["application/xml", "text/xml", "application/vnd.example+xml"])
+def test_xml_field_rules_see_the_captured_tree(compare_media, media):
+    schema = {"type": "object", "xml": {"name": "Item"}, "required": ["count"],
+              "properties": {"count": {"type": "integer"}}}
+    rules = OperationRules(body={"field_rules": {"$.Item.count": {"predefined": "exact_match"}}})
+    result, bodies = compare_media(media, schema, media, b"<Item><count>3</count></Item>",
+                                   b"<Item><count>4</count></Item>", rules)
+    assert bodies == ({"Item": {"count": "3"}}, {"Item": {"count": "4"}})
+    assert result.mismatch_type == MismatchType.BODY
+    assert result.details["body"].differences[0].path == "$.Item.count"

@@ -35,6 +35,25 @@ Each rule set can specify:
 }
 ```
 
+## Response schema selection
+
+Explore and replay use each target’s response status and `Content-Type` to select its
+OpenAPI schema. For example, an endpoint can declare an integer `id` in
+`application/vnd.example+json` and a string for `text/plain`. Each response is
+checked against its own declaration. An exact type takes precedence over
+a media range such as `text/*` or `*/*`. If no declaration matches, a bare
+`application/json` declaration for that status still checks the captured body
+and its extra fields. This keeps existing checks active when servers return
+an undeclared type such as `application/problem+json`. Configured comparison
+rules still run when there is no applicable schema.
+
+Text stays a string in artifacts and field rules. A matched text schema can
+also validate a JSON-form number or boolean, so a response of `42` can satisfy
+an integer schema and its bounds. For a matched XML representation, use field
+rules against the captured tree, such as `$.Item.count`. The executor retains
+the XML root and string leaf values, so it skips automatic body schema checks
+for that representation.
+
 ## Fields outside the response schema
 
 For each object, including objects inside arrays, the OpenAPI schema controls which

@@ -329,8 +329,10 @@ secrets:
 ```python
 class SchemaValidator:
     def __init__(self, spec_path: Path): ...
-    def validate_response(self, body, operation_id, status_code) -> ValidationResult: ...
+    def validate_response(self, body, operation_id, status_code, content_type=None) -> ValidationResult: ...
 ```
+
+Explore and replay select the response schema separately for each target using its status and Content-Type. The most specific declared media range wins, including matching parameters. With no Content-Type, the validator defaults to `application/json` for existing Python callers. If no declaration matches, a bare `application/json` declaration for that status supplies the legacy schema and extra-field checks. Matched text schemas can validate numeric and boolean scalars while field rules and artifacts retain the original string. Matched XML uses the captured XML tree for configured comparisons and skips JSON Schema body validation.
 
 Uses `jsonschema` library. Extra fields with `additionalProperties: false` are violations.
 
