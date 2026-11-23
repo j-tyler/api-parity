@@ -12,6 +12,7 @@ See ARCHITECTURE.md "OpenAPI Spec as Field Authority" and DESIGN.md
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from email.message import Message
@@ -23,6 +24,8 @@ from jsonschema import Draft4Validator, ValidationError, validators
 from referencing import Registry
 from referencing.exceptions import Unresolvable
 from referencing.jsonschema import DRAFT4
+
+from api_parity.models import response_body_format
 
 
 # =============================================================================
@@ -102,6 +105,13 @@ class ResponseSchema:
 
     schema: dict[str, Any]
     allows_extra_fields: bool
+    media_range: str = "application/json"
+
+    def validation_format(self, content_type: str | None) -> str:
+        # The legacy JSON fallback checks the captured value as-is.
+        if self.media_range == "application/json":
+            return "json"
+        return response_body_format(content_type or "application/json")
 
 
 # =============================================================================
@@ -121,6 +131,35 @@ def _media_parameters(content_type: str) -> dict[str, str]:
     message["Content-Type"] = content_type
     return {name.lower(): value.lower() if name.lower() == "charset" else value
             for name, value in message.get_params()[1:] if isinstance(value, str)}
+
+
+def _expects_text_scalar(error: ValidationError, validator, value: int | float | bool) -> bool:
+    """A failed scalar type or enum can identify a typed text representation."""
+    if error.validator == "type":
+        types = error.validator_value
+        if isinstance(types, str):
+            types = [types]
+        return any(t in ("integer", "number", "boolean") and validator.is_type(value, t) for t in types)
+    if error.validator == "enum":
+        return validator.evolve(schema={"enum": error.validator_value}).is_valid(value)
+    return any(_expects_text_scalar(child, validator, value) for child in error.context)
+
+
+def _text_scalar_errors(validator, body: str, errors: list[ValidationError]) -> list[ValidationError]:
+    # Preserve the literal text whenever it satisfies the schema. Parse only
+    # numbers and booleans, including for referenced and composed scalar schemas.
+    token = body.strip()
+    if not token or (token[0] not in "-0123456789" and token not in ("true", "false")):
+        return errors
+    try:
+        value = json.loads(token)
+    except ValueError:
+        return errors
+    if isinstance(value, float) and not math.isfinite(value):
+        return errors
+    if any(_expects_text_scalar(error, validator, value) for error in errors):
+        return list(validator.iter_errors(value))
+    return errors
 
 
 def _openapi_keywords(schema: dict[str, Any]):
@@ -332,10 +371,10 @@ class SchemaValidator:
         if response_schema is None:
             return [], []
 
-        # No body to validate
-        if body is None:
-            # If schema expects content, this might be a violation
-            # But for simplicity, we treat None body as valid (matches "no content" case)
+        # Captured XML keeps its root and string leaves for configured field
+        # rules. This tree is not an instance of the OpenAPI body schema.
+        body_format = response_schema.validation_format(content_type)
+        if body is None or body_format == "xml":
             return [], []
 
         # Validate against schema
@@ -344,6 +383,8 @@ class SchemaValidator:
         try:
             validator = self._document_validator.evolve(schema=response_schema.schema)
             errors = list(validator.iter_errors(body))
+            if errors and body_format == "text" and isinstance(body, str):
+                errors = _text_scalar_errors(validator, body, errors)
 
             for error in errors:
                 path = self._error_path_to_jsonpath(error.absolute_path)
@@ -394,7 +435,7 @@ class SchemaValidator:
         """
         response_schema = self._get_response_schema(operation_id, status_code, content_type)
 
-        if response_schema is None or body is None:
+        if response_schema is None or body is None or response_schema.validation_format(content_type) == "xml":
             return []
 
         return [field_path(location) for location in
@@ -425,17 +466,22 @@ class SchemaValidator:
         content_type = "application/json" if content_type is None else content_type
         media = content_type.partition(";")[0].strip().lower()
         major, slash, subtype = media.partition("/")
-        if not major or not slash or not subtype:
-            return None
+        ranges = (media, major + "/*", "*/*") if major and slash and subtype else ()
         actual_params = None
-        for media_range in (media, major + "/*", "*/*"):
+        for media_range in ranges:
             for required, schema in content.get(media_range, ()):
-                if not required:
-                    return schema
-                if actual_params is None:
-                    actual_params = _media_parameters(content_type)
-                if required.items() <= actual_params.items():
-                    return schema
+                if required:
+                    if actual_params is None:
+                        actual_params = _media_parameters(content_type)
+                    if not required.items() <= actual_params.items():
+                        continue
+                return schema
+
+        # Before media selection, a bare application/json declaration applied
+        # to the captured body regardless of the returned Content-Type.
+        for required, schema in content.get("application/json", ()):
+            if not required:
+                return schema
         return None
 
     def _extract_response_content(self, operation_id: str, status_code: int) -> _ResponseContent:
@@ -475,7 +521,8 @@ class SchemaValidator:
                 if schema is not None:
                     resolved = self._references.resolve(schema)
                     entry = ResponseSchema(
-                        schema=schema, allows_extra_fields=self._allows_additional_properties(resolved)
+                        schema=schema, allows_extra_fields=self._allows_additional_properties(resolved),
+                        media_range=media,
                     )
                 content.setdefault(media, []).append((_media_parameters(declared), entry))
         for variants in content.values():

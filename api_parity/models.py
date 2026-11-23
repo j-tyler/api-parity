@@ -110,6 +110,18 @@ class RequestCase(BaseModel):
         return self
 
 
+def response_body_format(content_type: str) -> str:
+    """Identify the executor's captured representation of an HTTP response."""
+    media = content_type.partition(";")[0].strip().lower()
+    if "json" in media:
+        return "json"
+    if "xml" in media:
+        return "xml"
+    if media.startswith("text/"):
+        return "text"
+    return "binary"
+
+
 class ResponseCase(BaseModel):
     """One HTTP response captured from a target.
 

@@ -31,6 +31,7 @@ from api_parity.models import (
     RequestCase,
     ResponseCase,
     TargetConfig,
+    response_body_format,
 )
 from api_parity.session_cookies import BundleCookies
 from api_parity.path_rendering import collection_path, decode_path_value, path_parameter_names, render_path
@@ -1000,22 +1001,22 @@ class Executor:
         body: Any = None
         body_base64: str | None = None
 
-        content_type = response.headers.get("content-type", "").partition(";")[0].strip().lower()
+        body_format = response_body_format(response.headers.get("content-type", ""))
 
         if response.content:
-            if "json" in content_type:
+            if body_format == "json":
                 try:
                     body = response.json()
                 except Exception:
                     # Not valid JSON despite content-type
                     body_base64 = base64.b64encode(response.content).decode("ascii")
-            elif "xml" in content_type:
+            elif body_format == "xml":
                 try:
                     body = xml_to_dict(response.content)
                 except Exception:
                     # Not valid XML despite content-type — fall back to base64
                     body_base64 = base64.b64encode(response.content).decode("ascii")
-            elif content_type.startswith("text/"):
+            elif body_format == "text":
                 try:
                     body = response.text
                 except Exception:

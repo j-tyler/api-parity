@@ -921,6 +921,6 @@ def test_schema_selection_uses_most_specific_matching_content(tmp_path):
 
     assert validator.get_extra_fields({"id": 1, "extra": 2}, "x", 200) == ["$.extra"]
     assert validator.get_extra_fields({"id": 1}, "x", 200, "text/html") == []
-    assert not validator.has_schema("x", 400, "application/vnd.other+json")
+    assert validator.has_schema("x", 400, "application/vnd.other+json")
     assert not validator.has_schema("x", 200, "text/html")
     assert not validator.has_schema("x", 204, "application/json")
