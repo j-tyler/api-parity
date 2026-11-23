@@ -35,6 +35,38 @@ Each rule set can specify:
 }
 ```
 
+## Fields outside the response schema
+
+For each object, including objects inside arrays, the OpenAPI schema controls which
+extra fields are allowed. An allowed, undeclared field must be present on both
+targets with equal JSON values by default. A forbidden field produces a schema
+violation before body comparison.
+
+Use an ordinary body field rule to control an allowed extra field. For example,
+this accepts different valid timestamps and ignores an internal ID:
+
+```json
+{
+  "body": {
+    "field_rules": {
+      "$[*].updated_at": {"predefined": "iso_timestamp_format"},
+      "$[*].internal_id": {"predefined": "ignore"}
+    }
+  }
+}
+```
+
+Explicit rules retain their usual presence and value checks. Other extra fields
+still use the default. Ignoring an entire object or array also ignores its
+contents. A presence check on a declared container still allows its extra fields
+to be compared.
+
+For default comparisons, repeated array differences are grouped by field and by
+presence or value failure. In `diff.json`, `path` and the two target values show
+the first differing location. `path_pattern` replaces array indices with `[*]`,
+and `occurrences` counts the differences in the group. Replay and merge use the
+pattern so the same failing field is recognizable as page lengths change.
+
 ## Comparison Types
 
 ### Predefined Comparisons

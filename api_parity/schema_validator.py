@@ -12,6 +12,7 @@ See ARCHITECTURE.md "OpenAPI Spec as Field Authority" and DESIGN.md
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,24 @@ class SchemaExtractionError(SchemaValidatorError):
 # =============================================================================
 # Data Models
 # =============================================================================
+
+
+FieldLocation = tuple[str | int, ...]
+_SIMPLE_FIELD = re.compile(r"[A-Za-z_@][A-Za-z_@0-9-]*")
+
+
+def field_path(location: FieldLocation, *, wildcard_indices: bool = False) -> str:
+    """Format a concrete JSON location for a public diagnostic or group key."""
+    parts = ["$"]
+    for part in location:
+        if isinstance(part, int):
+            parts.append("[*]" if wildcard_indices else f"[{part}]")
+        elif _SIMPLE_FIELD.fullmatch(part) and part not in {"where", "wherenot"}:
+            parts.append("." + part)
+        else:
+            escaped = part.replace("\\", "\\\\").replace("'", "\\'")
+            parts.append(f"['{escaped}']")
+    return "".join(parts)
 
 
 @dataclass
@@ -280,18 +299,26 @@ class SchemaValidator:
         Returns:
             ValidationResult with validity status and any violations or extra fields.
         """
+        violations, locations = self.validate_response_locations(body, operation_id, status_code)
+        return ValidationResult(valid=not violations, violations=violations,
+                                extra_fields=[field_path(location) for location in locations])
+
+    def validate_response_locations(
+        self, body: Any, operation_id: str, status_code: int,
+    ) -> tuple[list[SchemaViolation], list[FieldLocation]]:
+        """Validate and return literal extra-field locations for direct comparison."""
         # Get the schema for this operation+status_code
         response_schema = self._get_response_schema(operation_id, status_code)
 
         # No schema defined for this operation+status_code - pass validation
         if response_schema is None:
-            return ValidationResult(valid=True)
+            return [], []
 
         # No body to validate
         if body is None:
             # If schema expects content, this might be a violation
             # But for simplicity, we treat None body as valid (matches "no content" case)
-            return ValidationResult(valid=True)
+            return [], []
 
         # Validate against schema
         violations: list[SchemaViolation] = []
@@ -322,13 +349,9 @@ class SchemaValidator:
                 )
             )
 
-        extra_fields = self._find_extra_fields(body, response_schema.schema, "$", allowed_only=True)
+        extra_fields = self._find_extra_fields(body, response_schema.schema, (), allowed_only=True)
 
-        return ValidationResult(
-            valid=len(violations) == 0,
-            violations=violations,
-            extra_fields=extra_fields,
-        )
+        return violations, extra_fields
 
     def get_extra_fields(
         self,
@@ -354,7 +377,8 @@ class SchemaValidator:
         if response_schema is None or body is None:
             return []
 
-        return self._find_extra_fields(body, response_schema.schema, "$", allowed_only=False)
+        return [field_path(location) for location in
+                self._find_extra_fields(body, response_schema.schema, (), allowed_only=False)]
 
     def has_schema(self, operation_id: str, status_code: int) -> bool:
         """Check if a schema exists for the given operation+status_code.
@@ -538,10 +562,10 @@ class SchemaValidator:
         self,
         body: Any,
         schema: dict[str, Any],
-        path: str,
+        path: FieldLocation,
         *,
         allowed_only: bool,
-    ) -> list[str]:
+    ) -> list[FieldLocation]:
         """Find fields in body that are not defined in schema.
 
         Recursively walks the body and schema to identify extra fields.
@@ -551,14 +575,14 @@ class SchemaValidator:
         Args:
             body: The response body (or nested part of it).
             schema: The schema (or nested part of it).
-            path: Current JSONPath.
+            path: Literal keys and indices leading to this value.
             allowed_only: Exclude forbidden properties from comparison. The public
                 get_extra_fields inventory includes all undeclared properties.
 
         Returns:
-            List of JSONPaths for extra fields.
+            List of concrete locations for extra fields.
         """
-        extra: list[str] = []
+        extra: list[FieldLocation] = []
 
         if not isinstance(body, (dict, list)):
             return extra
@@ -574,7 +598,7 @@ class SchemaValidator:
             if isinstance(items_schema, dict):
                 for i, item in enumerate(body):
                     item_extra = self._find_extra_fields(
-                        item, items_schema, f"{path}[{i}]", allowed_only=allowed_only
+                        item, items_schema, (*path, i), allowed_only=allowed_only
                     )
                     extra.extend(item_extra)
             return extra
@@ -587,13 +611,13 @@ class SchemaValidator:
         for field_name in body.keys():
             if field_name not in properties:
                 if include_extra:
-                    extra.append(f"{path}.{field_name}")
+                    extra.append((*path, field_name))
             else:
                 # Recursively check nested objects/arrays
                 nested_body = body[field_name]
                 nested_schema = properties.get(field_name, {})
                 nested_extra = self._find_extra_fields(
-                    nested_body, nested_schema, f"{path}.{field_name}", allowed_only=allowed_only
+                    nested_body, nested_schema, (*path, field_name), allowed_only=allowed_only
                 )
                 extra.extend(nested_extra)
 
