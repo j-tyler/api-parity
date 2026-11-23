@@ -10,22 +10,23 @@ import pytest
 from api_parity.artifact_writer import ArtifactWriter
 from api_parity.bundle_loader import load_bundle
 from api_parity.executor import Executor
+from api_parity.schema_validator import SchemaValidator
 from api_parity.models import (
     ChainCase, ChainStep, ComparisonResult, MismatchType, RequestCase, ResponseCase,
     SecretsConfig, TargetConfig, TargetInfo,
 )
 
 
-def _record_and_replay(case, stateful, executor, writer, diff, target):
+def _record_and_replay(case, stateful, executor, writer, diff, target, schema_override=None):
     if stateful:
         chain = ChainCase(chain_id=case.case_id, steps=[ChainStep(step_index=0, request_template=case)])
         trace_a, trace_b = executor.execute_chain(chain)
         path = writer.write_chain_mismatch(chain, trace_a, trace_b, [diff], 0, target, target)
-        executor.execute_chain(load_bundle(path).chain_case)
+        executor.execute_chain(load_bundle(path, schema_override=schema_override).chain_case)
     else:
         response_a, response_b = executor.execute(case)
         path = writer.write_mismatch(case, response_a, response_b, diff, target, target)
-        executor.execute(load_bundle(path).request_case)
+        executor.execute(load_bundle(path, schema_override=schema_override).request_case)
     return path
 
 
@@ -39,7 +40,9 @@ def test_request_body_round_trip(tmp_path, monkeypatch, stateful):
         ("application/json", formatted, None, b'{"name":"{id}"}'),
         ("application/json", None, base64.b64encode(formatted).decode(), formatted),
         ("application/problem+json", binary, None, binary),
-        ("application/json", b"null", None, b""),
+        ("application/json", b"null", None, b"null"),
+        ("application/json", None, None, b""),
+        ("application/json", "null", None, b'"null"'),
         ("text/plain", "b'abc'", None, b"b'abc'"),
     ]
     writer = ArtifactWriter(tmp_path, spec_path=Path(__file__).parent / "fixtures/test_api.yaml")
@@ -71,9 +74,10 @@ def test_request_body_round_trip(tmp_path, monkeypatch, stateful):
             assert case.body == body
 
 
-def test_whole_body_redaction_applies_before_binary_encoding(tmp_path):
+@pytest.mark.parametrize("payload", [{"body": b"sensitive"}, {"body_base64": "bnVsbA=="}])
+def test_whole_body_redaction_applies_before_binary_encoding(tmp_path, payload):
     case = RequestCase(case_id="secret", operation_id="upload", method="POST", path_template="/",
-                       rendered_path="/", body=b"sensitive", media_type="application/octet-stream")
+                       rendered_path="/", media_type="application/octet-stream", **payload)
     writer = ArtifactWriter(tmp_path, SecretsConfig(redact_fields=["$..body"]))
     target = TargetInfo(name="t", base_url="http://t")
     response = ResponseCase(status_code=200, elapsed_ms=1)
@@ -173,3 +177,41 @@ def test_binary_field_paths_preserve_arrays_literal_strings_and_field_redaction(
         assert request["binary_field_paths"] == [["files", 0]]
         assert RequestCase.model_validate(request).body == {"files": [b"\x00\xff", "AP8="], "secret": "[REDACTED]"}
     assert case.body == body
+
+
+@pytest.mark.parametrize("stateful", [False, True], ids=["stateless", "chain"])
+@pytest.mark.parametrize("redact", [False, True], ids=["unredacted", "redacted"])
+def test_response_body_redaction_covers_encoded_bytes_and_json_state(tmp_path, monkeypatch, stateful, redact):
+    raw = b'{"token":"private",'
+
+    def respond(request):
+        return httpx.Response(200, headers={"Content-Type": "application/json"},
+                              content=raw if request.url.host == "a" else b"null")
+
+    monkeypatch.setattr(Executor, "_build_client_kwargs", lambda self, config, timeout: {
+        "base_url": config.base_url, "transport": httpx.MockTransport(respond),
+    })
+    selector = "$.steps[*].response.body" if stateful else "$.response.body"
+    schema = SchemaValidator(Path(__file__).parent / "fixtures/test_api.yaml")
+    writer = ArtifactWriter(tmp_path, SecretsConfig(redact_fields=[selector] if redact else []))
+    target = TargetInfo(name="local", base_url="http://a")
+    diff = ComparisonResult(match=False, mismatch_type=MismatchType.BODY, summary="invalid JSON", details={})
+    case = RequestCase(case_id="test", operation_id="echo", method="POST", path_template="/",
+                       rendered_path="/", body_base64="c2VuZA==", media_type="application/octet-stream")
+    with Executor(TargetConfig(base_url="http://a"), TargetConfig(base_url="http://b")) as executor:
+        path = _record_and_replay(case, stateful, executor, writer, diff, target, schema)
+    for side in ("a", "b"):
+        trace = json.loads((path / f"target_{side}.json").read_text())
+        step = trace["steps"][0] if stateful else trace
+        assert step["request"]["body_base64"] == "c2VuZA=="
+        response = step["response"]
+        if redact:
+            assert response["body"] == "[REDACTED]"
+            assert response["body_base64"] is None
+            assert "json_body_state" not in response
+        elif side == "a":
+            assert response["json_body_state"] == "invalid"
+            assert base64.b64decode(response["body_base64"]) == raw
+        else:
+            assert response["json_body_state"] == "null"
+        ResponseCase.model_validate(response)

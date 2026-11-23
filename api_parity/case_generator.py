@@ -31,6 +31,7 @@ from schemathesis.config import (
     SchemathesisConfig,
     StatefulPhaseConfig,
 )
+from schemathesis.core import NotSet
 from schemathesis.core.transport import Response as SchemathesisResponse
 from schemathesis.transport.serialization import Binary
 
@@ -40,7 +41,7 @@ from schemathesis.transport.serialization import Binary
 _InferenceConfig = type(StatefulPhaseConfig().inference)
 from schemathesis.specs.openapi.stateful import OpenAPIStateMachine
 
-from api_parity.models import ChainCase, ChainStep, RequestCase
+from api_parity.models import ChainCase, ChainStep, RequestCase, response_body_format
 from api_parity.path_rendering import decode_path_value, render_path
 from api_parity.schema_validator import build_operation_index, missing_response_references
 from api_parity.schema_value_generator import SchemaValueGenerator
@@ -779,7 +780,13 @@ class CaseGenerator:
         # Body - check for NotSet sentinel
         body: Any = None
         media_type: str | None = None
-        if case.body is not None and str(type(case.body).__name__) != "NotSet":
+        body_base64 = None
+        if case.body is None and response_body_format(case.media_type or "") == "json":
+            # HTTPX treats json=None as an omitted body. Carry the four wire
+            # bytes in the same lossless field used by direct and replay cases.
+            media_type = case.media_type
+            body_base64 = base64.b64encode(b"null").decode("ascii")
+        elif case.body is not None and not isinstance(case.body, NotSet):
             media_type = case.media_type
             structured_json = isinstance(case.body, (list, dict)) and "json" in (media_type or "").lower()
             body = _unwrap_binary(case.body, json_field=structured_json)
@@ -795,6 +802,7 @@ class CaseGenerator:
             headers=headers,
             cookies=cookies,
             body=body,
+            body_base64=body_base64,
             media_type=media_type,
         )
 

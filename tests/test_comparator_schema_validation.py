@@ -488,3 +488,21 @@ def test_xml_field_rules_see_the_captured_tree(compare_media, media):
     assert bodies == ({"Item": {"count": "3"}}, {"Item": {"count": "4"}})
     assert result.mismatch_type == MismatchType.BODY
     assert result.details["body"].differences[0].path == "$.Item.count"
+
+
+def test_nonstandard_numbers_preserve_schema_and_sibling_field_checks(compare_media):
+    import math
+
+    schema = {"type": "object", "properties": {"name": {"type": "string"},
+              "stats": {"type": "array", "items": {"type": "number"}}}}
+    original = b'{"name":"old","stats":[NaN,Infinity,-Infinity]}'
+    rules = OperationRules(body={"field_rules": {"$.name": {"predefined": "exact_match"}}})
+    for second in (original, original.replace(b"old", b"new")):
+        result, bodies = compare_media("application/json", schema, "application/json", original, second, rules)
+        assert result.match == (original == second)
+        for body in bodies:
+            nan, pos, neg = body["stats"]
+            assert math.isnan(nan) and pos == math.inf and neg == -math.inf
+        if second != original:
+            difference, = result.details["body"].differences
+            assert (difference.path, difference.target_a, difference.target_b) == ("$.name", "old", "new")

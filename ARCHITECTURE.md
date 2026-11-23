@@ -377,7 +377,8 @@ class ResponseCase:
     status_code: int
     headers: dict[str, list[str]]   # List values for multi-value headers
     body: Any | None                # Parsed JSON, XML-converted dict, or text string
-    body_base64: str | None         # Binary body as base64
+    json_body_state: str | None     # "null" for a parsed null, "invalid" for a JSON parse failure
+    body_base64: str | None         # Binary body or unparseable bytes as base64
     elapsed_ms: float               # Response time in milliseconds
     http_version: str               # Protocol version (default "1.1")
 ```
@@ -407,6 +408,7 @@ class ChainStepExecution:
 **Key design notes:**
 - Header/query values are lists (supports repeated params)
 - `body` and `body_base64` are mutually exclusive
+- A generated JSON null request uses `body_base64="bnVsbA=="` and retains its media type. Python callers can also send `body=b"null"` with `media_type="application/json"`. An omitted body or `body=None` still sends no bytes.
 - Request artifacts store byte payloads in `body_base64` after redaction. For bytes supplied in a JSON media type's `body`, the artifact also records `body_encoding: "json-input-bytes"`. Loading restores those bytes for the executor's JSON parsing step. Explicit `body_base64` payloads are sent verbatim, including for JSON media types.
 - Generated binary uploads use the bytes supplied by Schemathesis. Multipart and URL-encoded forms retain their fields through chain substitution and artifact redaction. Each multipart case reuses its boundary across targets and replay. A generated binary field inside a JSON object or array is represented as a base64 string on the wire.
 - In structured request bodies, `binary_field_paths` identifies the individual base64-encoded fields. Other strings stay literal. Replay binary bundles with the writer's version or a version that supports its encoding fields.

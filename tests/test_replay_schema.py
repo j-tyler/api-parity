@@ -322,3 +322,55 @@ def test_explore_and_replay_validate_each_negotiated_representation(
     assert replay(config, out, tmp_path / "persistent")["still_mismatch"] == 1
     value = 1
     assert replay(config, out, tmp_path / "fixed")["now_match"] == 1
+
+
+def test_generated_json_null_and_response_states_survive_replay(
+    tmp_path, monkeypatch, fixture_cel_evaluator_path,
+):
+    import base64
+    import httpx
+
+    schema = {"type": "string", "nullable": True, "enum": [None]}
+    content = {"application/json": {"schema": schema}}
+    operation = {"operationId": "postNull", "requestBody": {"required": True, "content": content},
+                 "responses": {"200": {"description": "OK", "content": content}}}
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({"openapi": "3.0.3", "info": {"title": "Null", "version": "1"},
+                                "paths": {"/value": {"post": operation}}}))
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"targets": {k: {"base_url": f"http://{k}"} for k in ("a", "b")},
+                                 "comparison_rules": "rules.json"}))
+    (tmp_path / "rules.json").write_text(json.dumps({"default_rules": {}}))
+    received = []
+    second_body = b"bad JSON"
+
+    def respond(request):
+        received.append((request.url.host, request.headers.get("content-type"), request.content))
+        return httpx.Response(200, headers={"Content-Type": "application/json"},
+                              content=b"null" if request.url.host == "a" else second_body)
+
+    monkeypatch.setattr(Executor, "_build_client_kwargs", lambda self, config, timeout: {
+        "base_url": config.base_url, "transport": httpx.MockTransport(respond),
+    })
+    out = tmp_path / "explore"
+    assert dispatch(parse_args(["explore", "--spec", str(spec), "--config", str(config), "--seed", "42",
+                                "--target-a", "a", "--target-b", "b", "--out", str(out)])) == 0
+    bundle, = discover_bundles(out)
+    original = json.loads((bundle / "diff.json").read_text())
+    assert original["mismatch_type"] == "schema_violation"
+    violation, = original["details"]["schema"]["differences"]
+    assert violation["target_b"] == "<violation: invalid_json>"
+    captures = [json.loads((bundle / f"target_{side}.json").read_text())["response"] for side in "ab"]
+    assert [r["json_body_state"] for r in captures] == ["null", "invalid"]
+    assert base64.b64decode(captures[1]["body_base64"]) == second_body
+    assert replay(config, out, tmp_path / "persistent")["still_mismatch"] == 1
+    second_body = b'{"value": 1,}'
+    assert replay(config, out, tmp_path / "trailing_comma")["still_mismatch"] == 1
+    malformed_bundle, = discover_bundles(tmp_path / "trailing_comma")
+    malformed_trace = json.loads((malformed_bundle / "target_b.json").read_text())["response"]
+    assert malformed_trace["json_body_state"] == "invalid"
+    second_body = b""
+    assert replay(config, out, tmp_path / "empty")["different_mismatch"] == 1
+    second_body = b"null"
+    assert replay(config, out, tmp_path / "fixed")["now_match"] == 1
+    assert received == [(side, "application/json", b"null") for side in "ab"] * 5

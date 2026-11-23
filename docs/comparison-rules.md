@@ -54,6 +54,26 @@ rules against the captured tree, such as `$.Item.count`. The executor retains
 the XML root and string leaf values, so it skips automatic body schema checks
 for that representation.
 
+### JSON null, empty bodies, and malformed JSON
+
+The four bytes `null` are a present JSON value. They satisfy a nullable schema
+and participate in root (`$`) field rules. A response carrying `null` on one
+target and an empty body on the other produces a mismatch. A null and a
+non-null body also produce a mismatch by default. An explicit rule on `$`
+controls that comparison. Two empty HTTP 204 responses can still match.
+
+If an applicable schema or a JSON field rule needs a response advertised as
+JSON and parsing fails, the comparison reports `invalid_json`, even if both
+targets return the same malformed bytes. The decoder continues to accept
+`NaN`, `Infinity`, and `-Infinity` as numbers, so rules can still check
+other fields in those responses.
+
+A malformed response records `json_body_state: "invalid"` and retains the
+original bytes in `body_base64`. With no applicable schema or JSON field
+rules, an explicit `binary_rule` can compare those bytes directly. A JSON
+null records `json_body_state: "null"`. Redacting the whole response body
+also removes its encoded bytes and JSON state from the target trace.
+
 ## Fields outside the response schema
 
 For each object, including objects inside arrays, the OpenAPI schema controls which

@@ -621,3 +621,41 @@ class TestBinaryRuleValidation:
         # Implicit PARITY (default) should work
         rules = BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         assert rules.binary_rule.presence == PresenceMode.PARITY
+
+
+def test_explicit_json_null_is_a_present_value(comparator):
+    null = make_response_case(body=None).model_copy(update={"json_body_state": "null"})
+    absent = make_response_case(body=None)
+    assert not comparator.compare(null, absent, OperationRules()).match
+    for presence, expected in [(PresenceMode.REQUIRED, True), (PresenceMode.FORBIDDEN, False)]:
+        rules = OperationRules(body=BodyRules(field_rules={"$": FieldRule(presence=presence)}))
+        assert comparator.compare(null, null, rules).match is expected
+
+
+def test_invalid_json_cannot_satisfy_a_json_field_rule(comparator):
+    invalid = make_response_case(body_base64="eA==").model_copy(update={"json_body_state": "invalid"})
+    field_rules = {"$": FieldRule(presence=PresenceMode.REQUIRED)}
+    binary_rule = FieldRule(predefined="exact_match")
+    for rules in [OperationRules(body=BodyRules(field_rules=field_rules)),
+                  OperationRules(body=BodyRules(field_rules=field_rules, binary_rule=binary_rule))]:
+        result = comparator.compare(invalid, invalid, rules)
+        assert result.details["body"].differences[0].rule == "invalid_json"
+    assert comparator.compare(invalid, invalid, OperationRules(body=BodyRules(binary_rule=binary_rule))).match
+    assert comparator.compare(invalid, invalid, OperationRules()).match
+
+
+def test_null_vs_non_null_requires_an_explicit_root_rule_to_match(comparator):
+    null = make_response_case().model_copy(update={"body": None, "json_body_state": "null"})
+    nested = OperationRules(body={"field_rules": {"$.unused": {"predefined": "ignore"}}})
+    ignore_root = OperationRules(body={"field_rules": {"($)": {"predefined": "ignore"}}})
+    exact_root = OperationRules(body={"field_rules": {"$": {"predefined": "exact_match"}}})
+    for value in ({"id": 1}, [], "text", False, 0):
+        other = make_response_case(body=value)
+        for a, b in [(null, other), (other, null)]:
+            for rules in (OperationRules(), nested):
+                result = comparator.compare(a, b, rules)
+                assert not result.match
+                difference, = result.details["body"].differences
+                assert (difference.path, difference.rule) == ("$", "body_null_parity")
+            assert comparator.compare(a, b, ignore_root).match
+            assert not comparator.compare(a, b, exact_root).match

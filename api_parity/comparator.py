@@ -302,9 +302,7 @@ class Comparator:
         # Phase 3: Compare body (only for JSON responses)
         covered = _RuledLocations() if (extra_fields_a or extra_fields_b) and rules.body and rules.body.field_rules else None
         body_result = self._compare_body(
-            response_a.body,
-            response_b.body,
-            rules.body, covered,
+            response_a, response_b, rules.body, covered,
         )
         details["body"] = body_result
 
@@ -376,7 +374,8 @@ class Comparator:
         def validate(response: ResponseCase):
             media = self._get_header_value(response.headers, "content-type")
             return self._schema_validator.validate_response_locations(
-                response.body, operation_id, response.status_code, media if isinstance(media, str) else None
+                response.body, operation_id, response.status_code, media if isinstance(media, str) else None,
+                json_body_state=response.json_body_state,
             )
 
         differences: list[FieldDifference] = []
@@ -599,49 +598,46 @@ class Comparator:
 
     def _compare_body(
         self,
-        body_a: Any,
-        body_b: Any,
+        response_a: ResponseCase,
+        response_b: ResponseCase,
         body_rules: BodyRules | None,
         covered: _RuledLocations | None = None,
     ) -> ComponentResult:
-        """Compare response bodies.
+        """Compare parsed values, including a present null, using the configured rules."""
+        body_a, body_b = response_a.body, response_b.body
+        invalid_a = response_a.json_body_state == "invalid"
+        invalid_b = response_b.json_body_state == "invalid"
+        if (invalid_a or invalid_b) and body_rules and body_rules.field_rules:
+            return ComponentResult(match=False, differences=[FieldDifference(
+                path="$", target_a="<invalid JSON>" if invalid_a else "<not checked>",
+                target_b="<invalid JSON>" if invalid_b else "<not checked>", rule="invalid_json",
+            )])
 
-        Args:
-            body_a: Body from target A (parsed JSON or None).
-            body_b: Body from target B (parsed JSON or None).
-            body_rules: Body comparison rules.
-
-        Returns:
-            ComponentResult for body comparison.
-        """
-        # Handle None bodies (non-JSON responses)
-        if body_a is None and body_b is None:
+        present_a = body_a is not None or response_a.json_body_state == "null"
+        present_b = body_b is not None or response_b.json_body_state == "null"
+        if not present_a and not present_b:
             return ComponentResult(match=True, differences=[])
+        if present_a != present_b:
+            return ComponentResult(match=False, differences=[FieldDifference(
+                path="$", target_a="<has body>" if present_a else "<no body>",
+                target_b="<has body>" if present_b else "<no body>", rule="body_presence",
+            )])
 
-        if body_a is None or body_b is None:
-            # One has body, one doesn't - mismatch
-            return ComponentResult(
-                match=False,
-                differences=[
-                    FieldDifference(
-                        path="$",
-                        target_a="<no body>" if body_a is None else "<has body>",
-                        target_b="<no body>" if body_b is None else "<has body>",
-                        rule="body_presence",
-                    )
-                ],
-            )
-
-        # No rules specified - treat as match (no fields to compare)
-        if body_rules is None or not body_rules.field_rules:
-            return ComponentResult(match=True, differences=[])
-
+        field_rules = body_rules.field_rules if body_rules else {}
+        different_nullness = (body_a is None) != (body_b is None)
+        # Use the actual JSONPath matches so any rule selecting the root can decide.
+        if different_nullness and field_rules and covered is None:
+            covered = _RuledLocations()
         differences: list[FieldDifference] = []
-
-        for jsonpath, rule in body_rules.field_rules.items():
+        for jsonpath, rule in field_rules.items():
             path_differences = self._compare_jsonpath(body_a, body_b, jsonpath, rule, covered)
             differences.extend(path_differences)
 
+        if different_nullness and (covered is None or () not in covered.selected):
+            differences.insert(0, FieldDifference(
+                path="$", target_a="<JSON null>" if body_a is None else "<non-null body>",
+                target_b="<JSON null>" if body_b is None else "<non-null body>", rule="body_null_parity",
+            ))
         return ComponentResult(match=len(differences) == 0, differences=differences)
 
     def _compare_binary_body(
