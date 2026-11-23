@@ -572,12 +572,12 @@ Date: 20260216
 
 **Solution:** Added link-aware resolution to `execute_chain()`. Before executing a linked step:
 
-1. `_resolve_link_expression()` parses OpenAPI runtime expressions (`$response.body#/path`, `$response.header.X`, `$request.path.X`, `$request.header.X`) and maps them to extracted variable keys or prior request data.
+1. `_resolve_link_expression()` parses OpenAPI runtime expressions (`$response.body#/path`, `$response.header.X`, `$request.path.X`, `$request.header.X`, `$request.query.X`, `$request.body#/path`) and maps them to extracted variable keys or prior request data.
 2. `_resolve_link_overrides()` processes all parameters in `link_source["parameters"]` and produces a dict of `{param_name: resolved_value}`.
-3. `_apply_link_overrides()` overrides the fuzz-generated path parameter, query parameter, or header values in the request template with the resolved values, then re-renders the path.
+3. `_apply_link_overrides()` overrides the fuzz-generated path parameter, query parameter, header, or cookie values in the request template with the resolved values, then re-renders the path.
 4. A linked value beginning with `/` is a URI path regardless of its source. Location and Content-Location headers can also supply relative URI paths. The executor strips leading slashes and preserves path separators and existing escapes. A later `$request.path` link reuses the same interpretation on each target. Other linked IDs occupy one segment: `team/42` becomes `team%2F42`, `a#b` becomes `a%23b`, and literal `a%23b` becomes `a%2523b`.
-5. Each target tracks the prior step's request for `$request.path/header` resolution.
-6. Stop before sending the linked request when neither target resolves any binding, or when a linked path expression has no value on either target. If only one target resolves a binding, retain the existing per-target comparison.
+5. Each target tracks the actual source request for request-side expressions.
+6. Stop before sending the linked request when neither target resolves any binding, or when a required linked parameter is unavailable on both targets. If only one target resolves a binding, retain the existing per-target comparison.
 
 **Why not fix `_apply_variables` instead:** `_apply_variables` matches by pattern (`{var_name}` in value) or identity (value == var_name). Neither works when the value is a random UUID and the variable key is `"id"` — there's no syntactic relationship. The fix requires semantic knowledge from `link_source.parameters` to map parameter names to expressions to extracted variable keys. This is a fundamentally different operation from placeholder substitution.
 
@@ -669,7 +669,7 @@ Merge only accepts explore output directories. Replay output (detected by `repla
 ## Blocked chain links during explore and replay
 
 Explore measures agreement across the planned chain. If neither target resolves any link parameter, or both lack the same
-linked path value, the compared prefix alone cannot establish a chain match. Count this as incomplete. A transport exception still counts as an
+required linked value, the compared prefix alone cannot establish a chain match. Count this as incomplete. A transport exception still counts as an
 error. The chain log preserves the plan and identifies steps that were compared.
 Coverage backfill is based on generated chains, so a blocked execution does not
 schedule extra standalone requests.

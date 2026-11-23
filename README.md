@@ -138,12 +138,17 @@ api-parity merge \
 
 **Replay classifications:** `FIXED` (now matches), `STILL MISMATCH` (same failure), `DIFFERENT MISMATCH` (fails differently)
 
-If neither target resolves any link parameter, or both lack the same linked path
-value, explore stops before sending that step and counts the chain in
+If neither target resolves any link parameter, or both lack the same required
+linked parameter, explore stops before sending that step and counts the chain in
 `chain_incomplete`. Replay reports `INCOMPLETE` and names the bundle in
 `incomplete_bundles` if it stopped before comparing the saved failing step.
 If that step now passes and a later link blocks, replay reports `FIXED` and
 identifies the unexecuted step. A later observed mismatch is still reported.
+
+Path bindings need a non-null, nonempty value. Generated chains also record
+which linked query, header, and cookie parameters the target operation requires.
+A missing optional binding can keep its discovery value when another binding
+resolves. A binding resolved by one target retains the per-target comparison.
 
 **Session-dependent results.** Explore keeps each target’s cookies across cases and
 chains. By default, a mismatch bundle records which requests used an earlier

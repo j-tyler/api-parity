@@ -705,3 +705,62 @@ def test_invalid_source_identifies_the_broken_reference(executor, position):
     with patch.object(executor, "_execute_single", return_value=response):
         with pytest.raises(RequestError, match="getWidget.*no matching prior link source.*createWidget"):
             executor.execute_chain(chain)
+
+
+@pytest.mark.parametrize("source_fields", [
+    {"query": {"owner": ["source-owner"]}},
+    {"body": {"rows": [{"a/b": "source-owner"}]}, "media_type": "application/json"},
+    {"body": '{"rows":[{"a/b":"source-owner"}]}', "headers": {"content-type": ["application/json"]}},
+    {"body_base64": "eyJyb3dzIjpbeyJhL2IiOiJzb3VyY2Utb3duZXIifV19", "media_type": "application/json"},
+])
+def test_link_sources_and_qualified_destinations(executor, source_fields):
+    chain = _make_two_step_chain()
+    create, read = chain.steps
+    create.request_template = create.request_template.model_copy(update=source_fields)
+    read.request_template.query = {"widget_id": ["seed"]}
+    read.request_template.headers = {"x-owner": ["seed"]}
+    source = "$request.query.owner" if "query" in source_fields else "$request.body#/rows/0/a~1b"
+    read.link_source["parameters"] = {
+        "path.widget_id": source,
+        "query.widget_id": "$response.body#/id",
+        "header.X-Owner": source,
+        "cookie.owner": source,
+    }
+    responses = [ResponseCase(status_code=200, body={"id": side}, elapsed_ms=1)
+                 for side in ("a", "b", "a", "b")]
+    with patch.object(executor, "_execute_single", side_effect=responses):
+        histories = executor.execute_chain(chain)
+    for history, side in zip(histories, ("a", "b"), strict=True):
+        request = history.steps[1].request
+        assert request.rendered_path == "/widgets/source-owner"
+        assert request.query == {"widget_id": [side]}
+        assert request.headers == {"x-owner": ["source-owner"]}
+        assert request.cookies == {"owner": "source-owner"}
+
+
+@pytest.mark.parametrize(("owner", "expected_suffix"), [(None, None), ("", None), (0, "0"), ("None", "None")])
+def test_path_binding_requires_a_usable_segment(executor, owner, expected_suffix):
+    chain = _make_two_step_chain()
+    step = chain.steps[1]
+    step.link_source["parameters"] = {"path.widget_id": "$response.body#/id",
+                                      "query.other": "$response.header.Location"}
+    response = ResponseCase(status_code=200, body={"id": owner}, headers={"location": ["other"]}, elapsed_ms=1)
+    with patch.object(executor, "_execute_single", return_value=response):
+        histories = executor.execute_chain(chain)
+    for history in histories:
+        if expected_suffix is None:
+            assert len(history.steps) == 1
+        else:
+            assert history.steps[1].request.rendered_path == "/widgets/" + expected_suffix
+
+
+def test_query_link_keeps_repeated_source_values(executor):
+    chain = _make_two_step_chain()
+    create, read = chain.steps
+    create.request_template.query["tag"] = ["a", "b"]
+    read.link_source["parameters"]["query.tag"] = "$request.query.tag"
+    response = ResponseCase(status_code=200, body={"id": "123"}, elapsed_ms=1)
+    with patch.object(executor, "_execute_single", return_value=response):
+        histories = executor.execute_chain(chain)
+    for history in histories:
+        assert history.steps[1].request.query["tag"] == ["a", "b"]

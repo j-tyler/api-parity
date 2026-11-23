@@ -133,3 +133,49 @@ def test_chain_outcomes_depend_on_steps_actually_compared(
     mode = "fixed"
     assert run("replay", tmp_path / "fixed", *replay_flags)["now_match"] == 1
     assert calls == ["createItem"] * 2 + ["getItem"] * 2 + ["finish"] * 2
+
+
+def test_generated_chain_keeps_required_query_bindings_on_replay(tmp_path, monkeypatch):
+    query = {"name": "owner", "in": "query", "required": True, "schema": {"type": "string"}}
+    link = {"operationId": "read", "parameters": {"id": "$response.body#/id", "owner": "$response.body#/owner"}}
+    source = {"description": "OK", "links": {"read": link}, "content": {
+        "application/json": {"schema": {"type": "object", "properties": {
+            k: {"type": "string"} for k in ("id", "owner")
+        }}}
+    }}
+    spec = {"openapi": "3.0.3", "info": {"title": "required link", "version": "1"},
+            "components": {"parameters": {"Owner": query}},
+            "paths": {
+                "/start": {"post": {"operationId": "start", "responses": {"200": source}}},
+                "/items/{id}": {"parameters": [{"$ref": "#/components/parameters/Owner"}],
+                                "get": {"operationId": "read", "parameters": [
+                                    {"in": "path", "name": "id", "required": True, "schema": {"type": "string"}}
+                                ], "responses": {"200": {"description": "OK"}}}},
+            }}
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"targets": {s: {"base_url": f"http://{s}"} for s in ("a", "b")},
+                                 "comparison_rules": "rules.json"}))
+    (tmp_path / "rules.json").write_text(json.dumps({"default_rules": {"status_code": {"predefined": "exact_match"}}}))
+    file = tmp_path / "spec.json"
+    file.write_text(json.dumps(spec))
+    common = ["--config", str(config), "--target-a", "a", "--target-b", "b"]
+    source_body = {"id": "7", "owner": "live"}
+    reads = []
+
+    def send(self, client, request, timeout, target_name, **kwargs):
+        if request.operation_id == "start":
+            return ResponseCase(status_code=200, body=dict(source_body), elapsed_ms=1)
+        reads.append(request.query["owner"])
+        return ResponseCase(status_code=409 if target_name == "Target B" else 200, elapsed_ms=1)
+
+    monkeypatch.setattr(Executor, "_execute_single", send)
+    out = tmp_path / "explore"
+    assert dispatch(parse_args(["explore", *common, "--out", str(out), "--spec", str(file),
+                                "--stateful", "--max-chains", "16", "--max-steps", "2", "--seed", "42"])) == 0
+    assert reads == [["live"], ["live"]]
+    del source_body["owner"]
+    reads.clear()
+    replay = tmp_path / "replay"
+    assert dispatch(parse_args(["replay", *common, "--out", str(replay), "--in", str(out)])) == 0
+    result = json.loads((replay / "replay_summary.json").read_text())
+    assert (reads, result["incomplete"], result["now_match"]) == ([], 1, 0)

@@ -864,6 +864,14 @@ class CaseGenerator:
                         "field": next(iter(parameters.values()), None),
                         "parameters": parameters,
                     }
+                    # Path slots are intrinsic to the template. Persist the
+                    # operation's other requirements for standalone replay.
+                    required = [
+                        f"{p.location.value}.{p.name.lower() if p.location.value == 'header' else p.name}"
+                        for p in case.operation.iter_parameters() if p.is_required and p.location.value != "path"
+                    ]
+                    if required:
+                        source["required_parameters"] = required
 
                 position = len(self.steps)
                 self.sources[case.id] = (position, output.response.status_code)
