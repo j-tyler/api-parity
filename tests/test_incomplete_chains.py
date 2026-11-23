@@ -53,7 +53,7 @@ def test_chain_outcomes_depend_on_steps_actually_compared(
     mode = "mismatch"
     calls = []
 
-    def send(self, client, request, timeout, target_name):
+    def send(self, client, request, timeout, target_name, **kwargs):
         calls.append(request.operation_id)
         if mode == "transport":
             raise RequestError("connection timeout")

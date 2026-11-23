@@ -133,6 +133,7 @@ api-parity merge \
 | `--in PATH` | Input directory with bundles (required) |
 | `--out PATH` | Output directory (required) |
 | `--spec PATH` | Use this OpenAPI spec for every input bundle (optional) |
+| `--ignore-session-cookies` | Treat inherited cookies as irrelevant when verifying a fix |
 | `--validate` | Validate config without executing |
 
 **Replay classifications:** `FIXED` (now matches), `STILL MISMATCH` (same failure), `DIFFERENT MISMATCH` (fails differently)
@@ -142,6 +143,22 @@ If a link cannot be resolved for either target, explore counts the chain in
 `incomplete_bundles` if it stopped before comparing the saved failing step.
 If that step now passes and a later link blocks, replay reports `FIXED` and
 identifies the unexecuted step. A later observed mismatch is still reported.
+
+**Session-dependent results.** Explore keeps each target’s cookies across cases and
+chains. By default, a mismatch bundle records which requests used an earlier
+session and omits its cookie values. To save those values for replay on the same
+origin, set `secrets.store_session_cookies: true` before running explore. This
+can put live credentials in `case.json` or `chain.json`. A current `Cookie`
+header in the target configuration can supply a fresh session at replay time.
+
+Replay still sends the requests when a cookie is unavailable or the deployment
+has moved. An observed mismatch is reported as usual. An apparent match is
+`INCOMPLETE` if the original session was omitted, or if a restored or supplied
+session now receives HTTP 401 or 403 where the original request received
+neither. The console and `replay_summary.json` identify the affected bundles
+and targets. Use `--ignore-session-cookies` when you know the inherited cookies
+are incidental, such as a load-balancer cookie for a public endpoint.
+A chain continues to acquire and rotate its own cookies during replay.
 
 Replay uses the schema saved in each bundle. Pass `--spec corrected.yaml` to
 apply one contract to the entire input suite, including older bundles. Explore

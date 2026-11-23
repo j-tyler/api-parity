@@ -595,7 +595,7 @@ class TestChainLinkResolution:
             elapsed_ms=10.0,
         )
 
-        def mock_execute_single(client, request, timeout, target_name):
+        def mock_execute_single(client, request, timeout, target_name, **kwargs):
             if client is executor._client_a:
                 return success_response
             return error_response

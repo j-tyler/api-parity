@@ -46,8 +46,9 @@ comparison_rules: <path>
 rate_limit:
   requests_per_second: <number>
 
-# Optional: redact fields in artifacts
+# Optional artifact settings
 secrets:
+  store_session_cookies: false
   redact_fields:
     - <jsonpath>
 ```
@@ -96,6 +97,32 @@ secrets:
 ```
 
 Redacted values are replaced with `"[REDACTED]"` in mismatch bundles.
+
+### Session cookies
+
+Explore reuses a separate cookie jar for each target. The default
+`secrets.store_session_cookies: false` records when an earlier case or chain
+supplied a cookie. To capture its value for replay, enable this setting in the
+run that writes the bundle.
+
+```yaml
+secrets:
+  store_session_cookies: true
+  redact_fields:
+    - "$..cookies['auth.token']"
+```
+
+Opted-in bundles may contain live credentials. Replay restores eligible cookies
+only to the original scheme, host and port, with their HTTP domain, path, Secure
+and expiry rules. For a new deployment or an expired session, supply a current
+header for that target, for example `headers: {Cookie: "${TEST_SESSION_COOKIE}"}`.
+The server determines how long the session is valid.
+
+The setting controls inherited request-cookie values. Response headers and
+explicit request inputs keep their ordinary artifact redaction rules. To redact
+a captured response header, use `"$..headers['set-cookie']"`. To suppress all
+inherited values in an opted-in run, use `"$..session_cookies"`. Replay needs
+`--spec` when artifact redaction omits the OpenAPI snapshot.
 
 ---
 
@@ -161,14 +188,17 @@ api-parity replay \
 | `--target-b NAME` | Yes | Second target name |
 | `--in PATH` | Yes | Input directory with bundles |
 | `--out PATH` | Yes | Output directory |
+| `--ignore-session-cookies` | No | Accept comparisons without inherited session cookies |
 | `--validate` | No | Validate without executing |
 | `--timeout SECONDS` | No | Default timeout (default: 30) |
 | `--operation-timeout OPID:SEC` | No | Per-operation timeout (repeatable) |
 
-**Replay classifications:**
+**Replay classifications**
+
 - `FIXED` — Previously mismatched, now matches
 - `STILL MISMATCH` — Same failure pattern persists
 - `DIFFERENT MISMATCH` — Fails differently (rules changed or new issue)
+- `INCOMPLETE` — The saved failure could not be verified with the available session or chain steps
 
 ### `api-parity merge`
 

@@ -32,6 +32,7 @@ from api_parity.models import (
     ResponseCase,
     TargetConfig,
 )
+from api_parity.session_cookies import BundleCookies
 from api_parity.path_rendering import decode_path_value, render_path
 from api_parity.xml_body import dict_to_xml, xml_to_dict
 
@@ -135,6 +136,7 @@ class Executor:
         operation_timeouts: dict[str, float] | None = None,
         link_fields: LinkFields | None = None,
         requests_per_second: float | None = None,
+        *, ignore_session_cookies: bool = False,
     ) -> None:
         """Initialize the executor.
 
@@ -147,7 +149,9 @@ class Executor:
                          for variable extraction during chain execution.
             requests_per_second: Maximum requests per second (rate limit).
                                  If None, no rate limiting is applied.
+            ignore_session_cookies: Treat a saved bundle's inherited cookies as irrelevant on replay.
         """
+        self._ignore_session_cookies = ignore_session_cookies
         self._target_a = target_a
         self._target_b = target_b
         self._default_timeout = default_timeout
@@ -260,16 +264,10 @@ class Executor:
         """
         timeout = self._get_timeout(request.operation_id)
 
-        # Execute against Target A
-        response_a = self._execute_single(
-            self._client_a, request, timeout, "Target A"
-        )
-
-        # Execute against Target B
-        response_b = self._execute_single(
-            self._client_b, request, timeout, "Target B"
-        )
-
+        session_a = BundleCookies.for_cases(self._client_a, [request], "target_a", self._ignore_session_cookies)
+        session_b = BundleCookies.for_cases(self._client_b, [request], "target_b", self._ignore_session_cookies)
+        response_a = self._execute_single(self._client_a, request, timeout, "Target A", session=session_a)
+        response_b = self._execute_single(self._client_b, request, timeout, "Target B", session=session_b)
         return response_a, response_b
 
     def execute_chain(
@@ -300,6 +298,10 @@ class Executor:
         steps_b: list[ChainStepExecution] = []
         extracted_vars_a: dict[str, Any] = {}
         extracted_vars_b: dict[str, Any] = {}
+
+        templates = [step.request_template for step in chain.steps]
+        session_a = BundleCookies.for_cases(self._client_a, templates, "target_a", self._ignore_session_cookies)
+        session_b = BundleCookies.for_cases(self._client_b, templates, "target_b", self._ignore_session_cookies)
 
         for step in chain.steps:
             link = step.link_source or {}
@@ -332,10 +334,10 @@ class Executor:
 
             # Execute against both targets
             response_a = self._execute_single(
-                self._client_a, request_a, timeout, "Target A"
+                self._client_a, request_a, timeout, "Target A", session=session_a
             )
             response_b = self._execute_single(
-                self._client_b, request_b, timeout, "Target B"
+                self._client_b, request_b, timeout, "Target B", session=session_b
             )
 
             # Extract variables from each target's own response
@@ -773,6 +775,7 @@ class Executor:
         request: RequestCase,
         timeout: float,
         target_name: str,
+        *, session: BundleCookies | None = None,
     ) -> ResponseCase:
         """Execute a request against a single target.
 
@@ -781,6 +784,7 @@ class Executor:
             request: The request to execute.
             timeout: Request timeout in seconds.
             target_name: Name for error messages.
+            session: Cookie state for the enclosing standalone case or chain.
 
         Returns:
             ResponseCase with the response.
@@ -879,25 +883,30 @@ class Executor:
         if request.media_type:
             headers.setdefault(content_type_key, request.media_type)
 
-        # Add cookies
-        cookies: dict[str, str] = request.cookies
-
         # Enforce rate limit before making request
         self._wait_for_rate_limit()
 
         try:
             start_time = time.perf_counter()
 
-            http_response = client.request(
+            request_args = dict(
                 method=request.method,
                 url=url,
                 params=params if params else None,
                 headers=headers if headers else None,
                 content=content,
                 json=json_body,
-                cookies=cookies if cookies else None,
+                cookies=request.cookies or None,
                 timeout=timeout,
             )
+            if session is None:
+                http_response = client.request(**request_args)
+            else:
+                prepared = client.build_request(**request_args)
+                origin, used, explicit = session.prepare(client, request, prepared)
+                http_response = client.send(prepared)
+                if session.replay:
+                    session.jar.extract_cookies(http_response)
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
 
@@ -917,7 +926,10 @@ class Executor:
                 f"at position {e.start}. HTTP requires ASCII for these fields."
             ) from e
 
-        return self._convert_response(http_response, elapsed_ms)
+        response = self._convert_response(http_response, elapsed_ms)
+        if session is not None:
+            session.finish(request, response, origin, used, explicit)
+        return response
 
     def _convert_response(
         self,

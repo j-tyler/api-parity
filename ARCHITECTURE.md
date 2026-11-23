@@ -428,6 +428,20 @@ mismatches/<timestamp>__<operation_id>__<case_id>/
 
 **diff.json:** `mismatch_type` (status_code|headers|body|schema_violation), `summary`, `details` with per-component differences. Chain diffs add `"type": "chain"`, `"mismatch_step"`, and `"steps"` (per-step comparison results).
 
+The standalone `case.json` and each request template in `chain.json` carry a
+`session_cookies` map. An entry for `target_a` or `target_b` identifies cookies
+inherited from before that bundle. A null `cookies` value marks withheld inputs.
+Opt-in entries include each selected cookie’s value, scope attributes, expiry
+and original jar order. The execution trace records the dependency. An empty
+map starts an isolated replay even in a reused Python `Executor`. Ordinary
+unsaved inputs continue using the live client’s session.
+
+On replay, Python callers can inspect `ResponseCase.session_replay` and
+`ResponseCase.session_auth_rejected`. The CLI groups the session states by
+bundle and target in its summary. For a chain with inherited cookies, `diff.json`
+also records whether each original response was HTTP 401 or 403 so a denial
+at a later step can be interpreted in context.
+
 ### Replay Output Structure
 
 Replay writes only unresolved mismatches (STILL MISMATCH and DIFFERENT MISMATCH). FIXED bundles are not written — they represent resolved issues. This means the output directory contains only what still needs attention.
@@ -471,6 +485,8 @@ Replay requires a schema for each bundle. Supply `--spec` for bundles without a 
 | `fixed_bundles` | list[str] | Bundle directory names classified as FIXED |
 | `persistent_bundles` | list[str] | Bundle directory names classified as STILL MISMATCH |
 | `changed_bundles` | list[str] | Bundle directory names classified as DIFFERENT MISMATCH |
+| `incomplete_bundles` | list[str] | Bundles whose original failure could not be verified |
+| `session_bundles` | object | Bundle name to target and observed states (`restored`, `configured`, `omitted`, `ignored`, `auth_rejected`) |
 
 ### Merge Output Structure
 

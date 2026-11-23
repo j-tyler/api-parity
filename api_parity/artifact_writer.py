@@ -14,10 +14,12 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from api_parity.schema_validator import SchemaValidator
+from api_parity.session_cookies import StoredCookie
 from api_parity.models import (
     ChainCase,
     ChainExecution,
@@ -26,7 +28,6 @@ from api_parity.models import (
     RequestCase,
     ResponseCase,
     SecretsConfig,
-    StatelessExecution,
     TargetInfo,
 )
 
@@ -36,6 +37,12 @@ TOOL_VERSION = "0.1.0"
 # Per-bundle so merge and moving bundles preserve their validation contract.
 BUNDLE_SPEC_FILENAME = "openapi.json"
 BUNDLE_SPEC_FILENAMES = (BUNDLE_SPEC_FILENAME, "openapi.yaml")
+
+
+@lru_cache(maxsize=128)
+def _redaction_path(expression: str):
+    from jsonpath_ng import parse
+    return parse(expression)
 
 
 @dataclass
@@ -93,6 +100,8 @@ class ReplayStats:
     # Set to True if run was interrupted (SIGINT)
     interrupted: bool = False
     incomplete_bundles: list[str] = field(default_factory=list)
+    # A bundle can restore one side's cookies and omit the other's.
+    session_bundles: dict[str, dict[str, list[str]]] = field(default_factory=dict)
 
 
 class ArtifactWriter:
@@ -175,24 +184,27 @@ class ArtifactWriter:
         self._write_spec(bundle_dir)
 
         # Redact secrets from case and responses if configured
-        case_data = self._redact(case.model_dump())
-        exec_a_data = self._redact(
-            StatelessExecution(request=case, response=response_a).model_dump()
-        )
-        exec_b_data = self._redact(
-            StatelessExecution(request=case, response=response_b).model_dump()
-        )
+        targets = (("target_a", response_a), ("target_b", response_b))
+        case_data = case.model_dump(exclude={"session_cookies"})
+        sessions = self._session_inputs(case_data, targets)
+        case_data["session_cookies"] = sessions
+        case_data = self._redact(case_data)
+        case_data["session_cookies"] = self._safe_session_map(sessions, case_data.get("session_cookies"))
+        self._protect_repeated_cookies([(case_data["session_cookies"], targets)])
+        # An empty map contains no secret and must keep its type for replay.
+        for field in ("cookies", "headers"):
+            if not getattr(case, field) and case_data[field] == "[REDACTED]":
+                case_data[field] = {}
+
+        for side, response in targets:
+            request = {k: v for k, v in case_data.items() if k != "session_cookies"}
+            self._mark_session_trace(request, side, sessions)
+            execution = self._redact({"request": copy.deepcopy(request), "response": response.model_dump()})
+            self._encode_request_bytes(execution["request"])
+            self._write_json(bundle_dir / f"{side}.json", execution)
 
         self._encode_request_bytes(case_data)
-        self._encode_request_bytes(exec_a_data["request"])
-        self._encode_request_bytes(exec_b_data["request"])
-
-        # Write case.json
         self._write_json(bundle_dir / "case.json", case_data)
-
-        # Write target_a.json and target_b.json
-        self._write_json(bundle_dir / "target_a.json", exec_a_data)
-        self._write_json(bundle_dir / "target_b.json", exec_b_data)
 
         # Write diff.json with type discriminator
         diff_data = {"type": "stateless", **diff.model_dump()}
@@ -259,9 +271,37 @@ class ArtifactWriter:
         self._write_spec(bundle_dir)
 
         # Redact secrets from chain and executions
-        chain_data = self._redact(chain.model_dump())
-        exec_a_data = self._redact(execution_a.model_dump())
-        exec_b_data = self._redact(execution_b.model_dump())
+        chain_data = chain.model_dump(exclude={"steps": {"__all__": {"request_template": {"session_cookies"}}}})
+        trace_exclude = {"steps": {"__all__": {"request": {"session_cookies"}}}}
+        exec_a_data = execution_a.model_dump(exclude=trace_exclude)
+        exec_b_data = execution_b.model_dump(exclude=trace_exclude)
+        step_sessions = []
+        protected_steps = []
+        for i, step in enumerate(chain_data["steps"]):
+            template = step["request_template"]
+            sessions = {}
+            targets = ()
+            if i < len(execution_a.steps) and i < len(execution_b.steps):
+                targets = (("target_a", execution_a.steps[i].response), ("target_b", execution_b.steps[i].response))
+                sessions = self._session_inputs(template, targets, i, (len(chain.steps), len(execution_a.steps)))
+                for side, trace in (("target_a", exec_a_data), ("target_b", exec_b_data)):
+                    self._mark_session_trace(trace["steps"][i]["request"], side, sessions)
+            template["session_cookies"] = sessions
+            step_sessions.append((sessions, targets))
+        chain_data = self._redact(chain_data)
+        exec_a_data = self._redact(exec_a_data)
+        exec_b_data = self._redact(exec_b_data)
+        for i, (step, (sessions, targets)) in enumerate(zip(chain_data["steps"], step_sessions)):
+            if isinstance(step, dict) and isinstance(step.get("request_template"), dict):
+                template = step["request_template"]
+                template["session_cookies"] = self._safe_session_map(sessions, template.get("session_cookies"))
+                for field in ("cookies", "headers"):
+                    if template.get(field) == "[REDACTED]" and not getattr(chain.steps[i].request_template, field):
+                        template[field] = {}
+                protected_steps.append((template["session_cookies"], targets))
+            else:
+                protected_steps.append(({}, targets))
+        self._protect_repeated_cookies(protected_steps)
 
         for data, key in ((chain_data, "request_template"), (exec_a_data, "request"),
                           (exec_b_data, "request")):
@@ -284,6 +324,13 @@ class ArtifactWriter:
             "total_steps": len(chain.steps),
             "steps": [diff.model_dump() for diff in step_diffs],
         }
+        if any(sessions for sessions, _ in step_sessions):
+            # A session used at an early step can authorize a later step whose
+            # own cookies were all issued within the chain.
+            diff_data["session_auth_denials"] = [
+                [a.response.status_code in (401, 403), b.response.status_code in (401, 403)]
+                for a, b in zip(execution_a.steps, execution_b.steps)
+            ]
         self._write_json(bundle_dir / "diff.json", diff_data)
 
         # Write metadata.json
@@ -446,6 +493,7 @@ class ArtifactWriter:
             "changed_bundles": stats.changed_bundles,
             "incomplete": len(stats.incomplete_bundles),
             "incomplete_bundles": stats.incomplete_bundles,
+            "session_bundles": stats.session_bundles,
         }
         self._write_json(self._output_dir / "replay_summary.json", summary)
 
@@ -534,6 +582,100 @@ class ArtifactWriter:
             safe = safe[:50]
         return safe or "unnamed"
 
+    def _session_inputs(
+        self, template: dict, targets: tuple[tuple[str, ResponseCase], ...],
+        step_index: int | None = None, step_counts: tuple[int, ...] = (),
+    ) -> dict:
+        sessions = {}
+        for side, response in targets:
+            use = response._session_cookie
+            if use is None:
+                continue
+            saved = use.model_dump(exclude={"cookies"})
+            saved["cookies"] = None
+            if (self._secrets_config and self._secrets_config.store_session_cookies and use.cookies
+                    and not self._cookie_is_redacted(template, response, use.cookies, step_index, step_counts)):
+                saved["cookies"] = [cookie.model_dump(exclude_defaults=True) for cookie in use.cookies]
+            sessions[side] = saved
+        return sessions
+
+    @staticmethod
+    def _safe_session_map(original: dict, redacted: Any) -> dict:
+        # A partially redacted cookie cannot be reconstructed. Keep the
+        # dependency marker and never send a redaction placeholder as a value.
+        result = {}
+        for side, use in original.items():
+            fields = redacted.get(side) if isinstance(redacted, dict) else None
+            if fields == use:
+                result[side] = use
+            else:
+                result[side] = {"cookies": None}
+                for key in ("origin", "auth_denied"):
+                    if isinstance(fields, dict) and key in fields and fields[key] == use[key]:
+                        result[side][key] = fields[key]
+        return result
+
+    def _protect_repeated_cookies(self, steps: list) -> None:
+        """A step-specific redaction must not leave another copy of the same inherited value."""
+        if not (self._secrets_config and self._secrets_config.store_session_cookies and self._secrets_config.redact_fields):
+            return
+        withheld = set()
+        for sessions, targets in steps:
+            for side, response in targets:
+                use = response._session_cookie
+                if use and use.cookies and not sessions.get(side, {}).get("cookies"):
+                    withheld.update((c.name, c.value) for c in use.cookies)
+        if withheld:
+            for sessions, _ in steps:
+                for use in sessions.values():
+                    if any((c["name"], c["value"]) in withheld for c in (use["cookies"] or [])):
+                        use["cookies"] = None
+
+    @staticmethod
+    def _mark_session_trace(request: dict, side: str, sessions: dict) -> None:
+        if side in sessions:
+            # Values are stored only in the canonical case or chain template.
+            request["session_cookies"] = {side: {"cookies": None}}
+
+    def _cookie_is_redacted(
+        self, template: dict, response: ResponseCase, cookies: list[StoredCookie],
+        step_index: int | None, step_counts: tuple[int, ...],
+    ) -> bool:
+        rules = self._secrets_config.redact_fields
+        if not rules:
+            return False
+        # Check user selectors against the request and response shapes they
+        # already use. Mark cookie fields and their ancestors by identity so a
+        # match on an unrelated body field does not disable cookie storage.
+        marker = object()
+        header = [marker]
+        names = {**template["cookies"], **{cookie.name: marker for cookie in cookies}}
+        req_headers = {**template["headers"], "Cookie": header, "cookie": header}
+        res_headers = {**response.headers, "Set-Cookie": header, "set-cookie": header}
+        request = {**template, "cookies": names, "headers": req_headers}
+        reply = {**response.model_dump(), "headers": res_headers}
+        trace = {"request": request, "response": reply}
+        views = [request, reply, trace]
+        protected = [marker, header, names, req_headers, res_headers, *views]
+        if step_index is not None:
+            step = {**trace, "request_template": request, "step_index": step_index}
+            protected.append(step)
+            for count in set(step_counts):
+                steps = [{}] * count
+                steps[step_index] = step
+                document = {"steps": steps}
+                protected.extend((steps, document))
+                views.append(document)
+        protected_ids = {id(item) for item in protected}
+        for rule in rules:
+            try:
+                path = _redaction_path(rule)
+                if any(id(match.value) in protected_ids for view in views for match in path.find(view)):
+                    return True
+            except Exception:
+                continue  # Same best-effort semantics for unsupported selectors as _redact_path.
+        return False
+
     def _redact(self, data: Any) -> Any:
         """Redact secret fields from data.
 
@@ -572,13 +714,11 @@ class ArtifactWriter:
             doesn't match or is invalid.
         """
         try:
-            from jsonpath_ng import parse as jsonpath_parse
-
-            compiled = jsonpath_parse(jsonpath)
+            compiled = _redaction_path(jsonpath)
             matches = compiled.find(data)
 
             for match in matches:
-                self._set_value(data, str(match.full_path), "[REDACTED]")
+                match.full_path.update(data, "[REDACTED]")
 
         except Exception:
             # Best-effort redaction: invalid paths or missing jsonpath_ng library
@@ -586,54 +726,3 @@ class ArtifactWriter:
             pass
 
         return data
-
-    def _set_value(self, data: Any, path: str, value: Any) -> None:
-        """Set a value at a JSONPath-like path.
-
-        This is a simplified path navigator that handles common cases from
-        jsonpath_ng output (e.g., "body.items[0].password"). It does NOT handle
-        wildcards or complex expressions - those are resolved by jsonpath_ng
-        into concrete paths before this method is called.
-
-        Silently does nothing if the path doesn't exist, which is intentional
-        for best-effort redaction.
-
-        Args:
-            data: Root data structure (modified in place).
-            path: Concrete path string (e.g., "body.password", "items[0].key").
-            value: Value to set at the path.
-        """
-        # Convert array notation to dot notation: "items[0].key" -> "items.0.key"
-        parts = path.replace("[", ".").replace("]", "").split(".")
-        parts = [p for p in parts if p]
-
-        current = data
-        for i, part in enumerate(parts[:-1]):
-            if isinstance(current, dict):
-                if part in current:
-                    current = current[part]
-                else:
-                    return
-            elif isinstance(current, list):
-                try:
-                    idx = int(part)
-                    if 0 <= idx < len(current):
-                        current = current[idx]
-                    else:
-                        return
-                except ValueError:
-                    return
-            else:
-                return
-
-        # Set the final value
-        final_part = parts[-1]
-        if isinstance(current, dict) and final_part in current:
-            current[final_part] = value
-        elif isinstance(current, list):
-            try:
-                idx = int(final_part)
-                if 0 <= idx < len(current):
-                    current[idx] = value
-            except ValueError:
-                pass
