@@ -33,7 +33,7 @@ from api_parity.models import (
     TargetConfig,
 )
 from api_parity.session_cookies import BundleCookies
-from api_parity.path_rendering import decode_path_value, path_parameter_names, render_path
+from api_parity.path_rendering import collection_path, decode_path_value, path_parameter_names, render_path
 from api_parity.xml_body import dict_to_xml, xml_to_dict
 
 
@@ -62,6 +62,23 @@ _LINK_EXPR_REQUEST_HEADER = re.compile(
 # Covers 0x00-0x1F and 0x7F (DEL).  httpx handles spaces and non-ASCII (unicode)
 # via its own percent-encoding, but control characters raise InvalidURL.
 _URL_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _response_pointer(body: Any, pointer: str) -> Any:
+    """Preserve literal member names accepted by older versions, then try the URI fragment."""
+    value = extract_by_jsonpointer(body, pointer)
+    if value is _MISSING and "%" in pointer:
+        try:
+            decoded = unquote(pointer, errors="strict")
+        except UnicodeDecodeError:
+            return _MISSING
+        if decoded != pointer:
+            return extract_by_jsonpointer(body, decoded)
+    return value
+
+
+class _SerializedPath(str):
+    """A collection path whose components and style delimiters are already encoded."""
 
 
 def _percent_encode_control_chars(path: str) -> str:
@@ -537,7 +554,7 @@ class Executor:
         if isinstance(response.body, (dict, list)):
             # First pass: extract all values under full pointer paths
             for field_pointer in self._link_fields.body_pointers:
-                value = extract_by_jsonpointer(response.body, unquote(field_pointer))
+                value = _response_pointer(response.body, field_pointer)
                 if value is not _MISSING:
                     extracted[field_pointer] = value
 
@@ -588,7 +605,7 @@ class Executor:
         """Resolve an explicit link against its source exchange, or return _MISSING."""
         match = LINK_BODY_PATTERN.fullmatch(expression)
         if match:
-            return extract_by_jsonpointer(source_response.body, unquote(match.group(1)))
+            return _response_pointer(source_response.body, match.group(1))
 
         match = _LINK_EXPR_RESPONSE_HEADER.fullmatch(expression)
         if match:
@@ -677,6 +694,14 @@ class Executor:
             )
             if value is _MISSING:
                 continue
+            if (param_name in path_keys and isinstance(value, (list, dict))
+                    and expression.startswith(("$response.body#/", "$request.body#/"))):
+                name = param_name.removeprefix("path.")
+                options = link_source.get("collection_paths", {}).get(name, {})
+                wire = collection_path(name, value, options)
+                if not wire:
+                    continue
+                value = _SerializedPath(wire)
             if param_name in path_keys and (value is None or self._variable_to_string(value) == ""):
                 continue
             overrides[param_name] = value
@@ -732,7 +757,9 @@ class Executor:
             if location == "path":
                 expression = (expressions or {}).get(key, "")
                 path_source = _LINK_EXPR_REQUEST_PATH.fullmatch(expression)
-                if path_source and source_request is not None:
+                if isinstance(value, _SerializedPath):
+                    reference = str_value
+                elif path_source and source_request is not None:
                     # An ordinary source segment may decode to a leading slash.
                     # Forward its original interpretation along with the value.
                     reference = source_request._uri_path_references.get(path_source.group(1))

@@ -327,9 +327,27 @@ api-parity replay --in ./artifacts/mismatches/20260112T... ...
 
 ### Chain replay uses wrong variables
 
-**Cause:** During replay, link_fields are extracted from the chain's stored `link_source` data, not the OpenAPI spec. If the chain was generated with a different spec version, field names may not match current responses.
+Find the failing step in `chain.json` and inspect its `link_source.parameters`
+and source step index. Each explicit link reads its value from that source
+exchange on the same target during replay. For example, `$response.body#/id`
+uses the top-level ID and `$response.body#/owner/id` uses the nested owner ID.
+Short names such as `{id}` are for ordinary template placeholders.
 
-**Fix:** Regenerate chains with the current spec using `explore --stateful`.
+For response pointers, a member name such as `a%20b` is looked up literally
+first. If that pointer is missing, replay tries the URI-decoded form (`a b`).
+A present JSON null counts as present for that lookup.
+
+Check that the pointer supplies the shape expected by the destination. A link
+to a string ID usually needs `#/owner/id`, while `#/owner` may select the
+whole object. If both targets lack a usable required value, replay stops before
+the dependent request. A generated chain records how to serialize collection
+path parameters, including their style and explode setting. Direct Python
+chains can supply the same metadata, for example
+`link_source["collection_paths"] = {"owner": {"types": ["object"], "style": "simple", "explode": False}}`.
+Unspecified direct-chain path slots expect scalar JSON body values.
+
+If the API now uses a different pointer, update the OpenAPI link and regenerate
+the chain with `explore --stateful`.
 
 ### replay_summary.json not written
 

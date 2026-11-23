@@ -65,7 +65,7 @@ def test_chain_outcomes_depend_on_steps_actually_compared(
             status = 404
         body = {"id": "live"} if mode != "blocked" else {}
         if request.operation_id == "createItem" and mode not in ("blocked", "missing owner"):
-            body["owner"] = "owner-live"
+            body["owner"] = {"id": "owner-live"} if mode == "object owner" else "owner-live"
         if request.operation_id == "getItem" and mode != "tail blocked":
             body["child_id"] = "child"
         return ResponseCase(status_code=status, body=body, elapsed_ms=1)
@@ -111,6 +111,10 @@ def test_chain_outcomes_depend_on_steps_actually_compared(
     result = run("replay", tmp_path / "partial_replay", *replay_flags)
     assert result["incomplete"] == 1 and result["now_match"] == 0
     assert calls == ["createItem"] * 2
+
+    mode = "object owner"
+    result = run("replay", tmp_path / "object_for_scalar", *replay_flags)
+    assert (calls, result["incomplete"], result["now_match"]) == (["createItem"] * 2, 1, 0)
 
     mode = "tail blocked"
     result = run("replay", tmp_path / "verified_prefix", *replay_flags)

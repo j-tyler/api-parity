@@ -281,6 +281,30 @@ def extract_by_jsonpointer(data: Any, pointer: str) -> Any:
     return current
 
 
+def _collection_types(schema: Any) -> set[str]:
+    """Possible collection shapes, including composed parameter schemas."""
+    kinds = {"array", "object"}
+    if not isinstance(schema, dict):
+        return kinds if schema is True else set()
+    declared = schema.get("type")
+    if declared is not None:
+        kinds.intersection_update([declared] if isinstance(declared, str) else declared)
+    allowed = schema.get("enum")
+    if "const" in schema:
+        allowed = [schema["const"]]
+    if allowed is not None:
+        if not any(isinstance(value, list) for value in allowed):
+            kinds.discard("array")
+        if not any(isinstance(value, dict) for value in allowed):
+            kinds.discard("object")
+    for branch in schema.get("allOf", ()):
+        kinds &= _collection_types(branch)
+    for keyword in ("anyOf", "oneOf"):
+        if keyword in schema:
+            kinds &= set().union(*(_collection_types(branch) for branch in schema[keyword]))
+    return kinds
+
+
 class CaseGeneratorError(Exception):
     """Raised when case generation fails.
 
@@ -866,10 +890,27 @@ class CaseGenerator:
                     }
                     # Path slots are intrinsic to the template. Persist the
                     # operation's other requirements for standalone replay.
-                    required = [
-                        f"{p.location.value}.{p.name.lower() if p.location.value == 'header' else p.name}"
-                        for p in case.operation.iter_parameters() if p.is_required and p.location.value != "path"
-                    ]
+                    required = []
+                    collection_paths = {}
+                    for p in case.operation.iter_parameters():
+                        location = p.location.value
+                        if location != "path":
+                            if p.is_required:
+                                name = p.name.lower() if location == "header" else p.name
+                                required.append(f"{location}.{name}")
+                            continue
+                        expression = parameters.get(f"path.{p.name}", parameters.get(p.name, ""))
+                        if expression.startswith(("$response.body#/", "$request.body#/")):
+                            types = _collection_types(p.raw_schema)
+                            if types:
+                                definition = p.definition
+                                style = definition.get("style", "simple")
+                                if "content" in definition:
+                                    style = "json" if "application/json" in definition["content"] else "unsupported"
+                                collection_paths[p.name] = {"types": sorted(types), "style": style,
+                                                            "explode": definition.get("explode", False)}
+                    if collection_paths:
+                        source["collection_paths"] = collection_paths
                     if required:
                         source["required_parameters"] = required
 

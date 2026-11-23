@@ -66,6 +66,21 @@ def test_response_body_links_select_the_exact_pointer(pointer, expected):
     assert Executor._resolve_link_expression("$response.body#/" + pointer, response, None) == expected
 
 
+@pytest.mark.parametrize(("pointer", "body", "expected"), [
+    ("a%20b", {"a%20b": "literal"}, "literal"),
+    ("a%20b", {"a b": "space"}, "space"),
+    ("a%20b", {"a%20b": None, "a b": "space"}, None),
+    ("a%2Fb", {"a%2Fb": False, "a": {"b": "nested"}}, False),
+    ("a%2Fb", {"a": {"b": "nested"}}, "nested"),
+    ("%FF", {"�": "different member"}, _MISSING),
+])
+def test_response_pointer_spelling_in_links_and_extraction(executor, pointer, body, expected):
+    executor._link_fields = LinkFields(body_pointers={pointer})
+    response = source_response(body)
+    assert Executor._resolve_link_expression("$response.body#/" + pointer, response, None) == expected
+    assert executor._extract_variables(response).get(pointer, _MISSING) == expected
+
+
 @pytest.mark.parametrize(("header", "expected"), [
     ("Location", "/resources/abc-123"), ("LOCATION", "/resources/abc-123"),
     ("Set-Cookie[0]", "session=abc"), ("Set-Cookie[1]", "theme=dark"),

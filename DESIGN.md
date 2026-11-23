@@ -567,12 +567,13 @@ When `predefined: "ignore"` is used without an explicit `presence` mode, the Fie
 
 Keywords: links chain execution resolution runtime expressions stateful
 Date: 20260216
+Updated: 20261122
 
 **Problem:** `execute_chain()` did not resolve OpenAPI link expressions from `link_source.parameters` into actual values from prior step responses. `_apply_variables()` tried to match extracted variable keys (like `"id"` or `"header/location"`) against fuzz-generated parameter values (random UUIDs from Schemathesis) using `{placeholder}` substring and exact-match patterns. Neither matched, so every linked step used garbage fuzz values instead of real response data. Both targets rejected the garbage with different errors, producing spurious mismatches on every stateful run.
 
 **Solution:** Added link-aware resolution to `execute_chain()`. Before executing a linked step:
 
-1. `_resolve_link_expression()` parses OpenAPI runtime expressions (`$response.body#/path`, `$response.header.X`, `$request.path.X`, `$request.header.X`, `$request.query.X`, `$request.body#/path`) against the selected source exchange on each target. Explicit response pointers read the response body directly. Short names such as `{id}` remain available to ordinary placeholders when unambiguous.
+1. `_resolve_link_expression()` parses OpenAPI runtime expressions (`$response.body#/path`, `$response.header.X`, `$request.path.X`, `$request.header.X`, `$request.query.X`, `$request.body#/path`) against the selected source exchange on each target. Explicit response pointers read the response body directly. To preserve existing links, the literal pointer wins when both literal and percent-decoded forms exist. Only a missing literal pointer triggers the decoded lookup. Short names such as `{id}` remain available to ordinary placeholders when unambiguous.
 2. `_resolve_link_overrides()` processes all parameters in `link_source["parameters"]` and produces a dict of `{param_name: resolved_value}`.
 3. `_apply_link_overrides()` overrides the fuzz-generated path parameter, query parameter, header, or cookie values in the request template with the resolved values, then re-renders the path.
 4. A linked value beginning with `/` is a URI path regardless of its source. Location and Content-Location headers can also supply relative URI paths. The executor strips leading slashes and preserves path separators and existing escapes. A later `$request.path` link reuses the same interpretation on each target. Other linked IDs occupy one segment: `team/42` becomes `team%2F42`, `a#b` becomes `a%23b`, and literal `a%23b` becomes `a%2523b`.

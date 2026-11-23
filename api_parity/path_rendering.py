@@ -1,5 +1,6 @@
 """Render OpenAPI path templates without treating parameter data as URL syntax."""
 
+import json
 import re
 from typing import Any
 from urllib.parse import quote, unquote
@@ -31,6 +32,41 @@ def _quote_uri_segment(segment: str) -> str:
     # have meaning. Escape only stray percent signs and non-path characters.
     segment = re.sub(r"%(?![0-9A-Fa-f]{2})", "%25", segment)
     return quote(segment, safe="%!$&'()*+,;=:@", errors="surrogateescape")
+
+
+def collection_path(name: str, value: list | dict, options: dict) -> str | None:
+    """Serialize a JSON collection for a path parameter that explicitly accepts its shape."""
+    kind = "array" if isinstance(value, list) else "object"
+    if kind not in options.get("types", ()):
+        return None
+    style = options.get("style", "simple")
+    if style == "json":
+        return _quote_segment(json.dumps(value, separators=(",", ":"), ensure_ascii=False))
+    if style not in {"simple", "label", "matrix"} or not value:
+        return None
+
+    explode = options.get("explode", False)
+
+    def encode(atom: Any) -> str:
+        text = str(atom).lower() if isinstance(atom, bool) else str(atom)
+        encoded = _quote_segment(text)
+        return encoded.replace(".", "%2E") if style == "label" and explode else encoded
+
+    values = value if isinstance(value, list) else value.values()
+    if any(v is None or isinstance(v, (dict, list)) for v in values):
+        return None
+    prefix = {"simple": "", "label": ".", "matrix": ";"}[style]
+    separator = {"simple": ",", "label": ".", "matrix": ";"}[style] if explode else ","
+    if isinstance(value, dict):
+        pair_separator = "=" if explode else ","
+        parts = [encode(k) + pair_separator + encode(v) for k, v in value.items()]
+    else:
+        parts = [encode(v) for v in value]
+        if style == "matrix" and explode:
+            parts = [encode(name) + "=" + part for part in parts]
+    if style == "matrix" and not explode:
+        prefix += encode(name) + "="
+    return prefix + separator.join(parts)
 
 
 def render_path(template: str, values: dict[str, Any], uri_paths: dict[str, str] | None = None) -> str:
