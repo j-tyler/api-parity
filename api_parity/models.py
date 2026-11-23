@@ -370,6 +370,10 @@ class FieldDifference(BaseModel):
     target_a: Any = Field(description="Value from Target A")
     target_b: Any = Field(description="Value from Target B")
     rule: str = Field(description="Rule that failed (predefined name or 'custom')")
+    path_pattern: str | None = Field(default=None, exclude_if=lambda v: v is None,
+                                     description="Array-index-independent path for grouped extra fields")
+    occurrences: int | None = Field(default=None, exclude_if=lambda v: v is None,
+                                    description="Number of differences represented by this example")
 
 
 class ComponentResult(BaseModel):

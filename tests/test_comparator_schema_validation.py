@@ -6,6 +6,7 @@ Tests the OpenAPI Spec as Field Authority feature in the Comparator:
 - SCHEMA_VIOLATION mismatch type
 """
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -203,6 +204,39 @@ class TestSchemaValidationSkipping:
 class TestExtraFieldsComparison:
     """Tests for extra fields comparison in flexible schemas."""
 
+    @pytest.mark.parametrize("wrapped", [False, True], ids=["root-array", "closed-wrapper"])
+    def test_item_extra_fields_follow_the_item_schema(self, tmp_path, mock_cel, comparison_library, wrapped):
+        item = {"type": "object", "properties": {"id": {"type": "integer"}}}
+        rows = {"type": "array", "items": {"$ref": "#/components/schemas/Item"}}
+        schema = ({"type": "object", "additionalProperties": False, "properties": {"rows": rows}}
+                  if wrapped else rows)
+        spec = {"openapi": "3.0.3", "components": {"schemas": {"Item": item}},
+                "paths": {"/rows": {"get": {"operationId": "rows", "responses": {
+                    "200": {"content": {"application/json": {"schema": schema}}}}}}}}
+        validator = SchemaValidator(tmp_path / "rows.json", source_bytes=json.dumps(spec).encode())
+        compare = Comparator(mock_cel, comparison_library, validator)
+        row_a = {"id": 2, "enabled": True}
+        row_b = {"id": 2, "enabled": False}
+        body_a = [{"id": 1}, row_a]
+        body_b = [{"id": 1}, row_b]
+        if wrapped:
+            body_a, body_b = {"rows": body_a}, {"rows": body_b}
+        path = "$.rows[1].enabled" if wrapped else "$[1].enabled"
+        assert validator.get_extra_fields(body_a, "rows", 200) == [path]
+
+        def difference():
+            return compare.compare(make_response(body=body_a), make_response(body=body_b), OperationRules(), "rows")
+
+        result = difference()
+        assert not result.match
+        diff, = result.details["extra_fields"].differences
+        assert (diff.path, diff.target_a, diff.target_b, diff.rule) == (path, True, False, "extra_field_equality")
+        del row_b["enabled"]
+        diff, = difference().details["extra_fields"].differences
+        assert (diff.path, diff.rule) == (path, "extra_field_presence")
+        row_b["enabled"] = True
+        assert difference().match
+
     def test_extra_fields_compared_when_allowed(self, comparator):
         """Extra fields in flexible schemas are compared for equality."""
         body_a = {"widgets": [{"id": "1", "name": "W"}], "extra": "value_a"}
@@ -322,3 +356,63 @@ class TestMismatchTypeSerialization:
 
         result_dict = result.model_dump()
         assert result_dict["mismatch_type"] == "schema_violation"
+
+
+@pytest.fixture
+def list_comparator(tmp_path, mock_cel):
+    from api_parity.config_loader import load_comparison_library
+
+    schema = {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer"}}}}
+    spec = {"paths": {"/rows": {"get": {"operationId": "rows", "responses": {
+        "200": {"content": {"application/json": {"schema": schema}}}}}}}}
+    validator = SchemaValidator(tmp_path / "spec.json", source_bytes=json.dumps(spec).encode())
+    return Comparator(mock_cel, load_comparison_library(), validator)
+
+
+def test_extra_field_groups_use_literal_locations_and_stable_patterns(list_comparator, monkeypatch):
+    from api_parity.mismatch_classifier import is_same_mismatch, mismatch_dedup_key
+
+    def unexpected_compile(*args):
+        pytest.fail("a discovered extra-field location invoked the JSONPath compiler")
+
+    monkeypatch.setattr(list_comparator, "_compile_jsonpath", unexpected_compile)
+    def compare(n, key):
+        a = [{key: True, "meta": {"etag": 0}} for _ in range(n)]
+        b = [{key: False, "meta": {"etag": 0}} for _ in range(n)]
+        return list_comparator.compare(make_response(body=a), make_response(body=b), OperationRules(), "rows")
+
+    initial = compare(2, "meta.etag").model_dump(mode="json")
+    later = compare(30, "meta.etag")
+    diff, = later.details["extra_fields"].differences
+    assert (diff.path, diff.path_pattern, diff.occurrences) == ("$[0]['meta.etag']", "$[*]['meta.etag']", 30)
+    assert (diff.target_a, diff.target_b) == (True, False)
+    assert is_same_mismatch(initial, later)
+    assert mismatch_dedup_key("rows", initial) == mismatch_dedup_key("rows", later.model_dump(mode="json"))
+    assert not is_same_mismatch(initial, compare(30, "etag"))
+
+
+def test_extra_field_rules_cover_only_selected_locations(list_comparator):
+    def compare(a, b, rules):
+        return list_comparator.compare(make_response(body=a), make_response(body=b),
+                                      OperationRules(body={"field_rules": rules}), "rows")
+
+    a = [{"stamp": 1, "meta": {"a.b": 1, "sibling": 1}}]
+    b = [{"stamp": 2, "meta": {"a.b": 2, "sibling": 1}}]
+    rules = {"$[*].stamp": {"predefined": "ignore"}, "$[*].meta['a.b']": {"predefined": "ignore"}}
+    assert compare(a, b, rules).match
+    b[0]["meta"]["sibling"] = 2
+    assert not compare(a, b, rules).match
+    del b[0]["meta"]["sibling"]
+    assert not compare(a, b, rules).match
+    assert compare(a, b, {"$[*]": {"predefined": "ignore"}}).match
+    assert not compare(a, b, {"$[*]": {"presence": "required"}}).match
+
+
+def test_grouping_preserves_presence_and_value_evidence(list_comparator):
+    a = [{"etag": None}, {"etag": "A"}, {"etag": None}, {"etag": "C"}]
+    b = [{}, {"etag": "B"}, {}, {"etag": "D"}]
+    r = list_comparator.compare(make_response(body=a), make_response(body=b), OperationRules(), "rows")
+    equality, presence = r.details["extra_fields"].differences
+    assert (equality.path, equality.occurrences, equality.rule) == ("$[1].etag", 2, "extra_field_equality")
+    assert (presence.path, presence.occurrences, presence.rule) == ("$[0].etag", 2, "extra_field_presence")
+    assert presence.target_a is None and presence.target_b == "<missing>"

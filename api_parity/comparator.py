@@ -12,8 +12,8 @@ See ARCHITECTURE.md "Comparator Component" for specifications.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, field
+from typing import Any
 
 from jsonpath_ng import parse as jsonpath_parse
 from jsonpath_ng.jsonpath import Child, DatumInContext, Fields, Index, JSONPath, Slice
@@ -33,8 +33,7 @@ from api_parity.models import (
     ResponseCase,
 )
 
-if TYPE_CHECKING:
-    from api_parity.schema_validator import SchemaValidator
+from api_parity.schema_validator import FieldLocation, SchemaValidator, field_path
 
 
 # =============================================================================
@@ -85,6 +84,55 @@ _EXACT_RULES = {
     "exact_match": "a == b",
     "both_null_or_equal": "(a == null && b == null) || (a != null && b != null && a == b)",
 }
+
+
+@dataclass
+class _RuledLocations:
+    selected: set[FieldLocation] = field(default_factory=set)
+    ignored_containers: set[FieldLocation] = field(default_factory=set)
+
+
+def _match_location(match: DatumInContext) -> FieldLocation | None:
+    """Recover literal object keys and absolute array indices from a rule match."""
+    segments = []
+    while match.context is not None:
+        selector, parent = match.path, match.context
+        if isinstance(selector, Fields) and len(selector.fields) == 1:
+            segments.append(selector.fields[0])
+        elif isinstance(selector, Index) and isinstance(parent.value, list):
+            index = selector.index
+            segments.append(index if index >= 0 else len(parent.value) + index)
+        else:
+            return None
+        match = parent
+    return tuple(reversed(segments))
+
+
+def _value_at(body: Any, location: FieldLocation) -> Any:
+    for part in location:
+        if isinstance(part, str) and isinstance(body, dict):
+            body = body.get(part, NOT_FOUND)
+        elif isinstance(part, int) and isinstance(body, list) and part < len(body):
+            body = body[part]
+        else:
+            return NOT_FOUND
+    return body
+
+
+def _uncovered_equal(a: Any, b: Any, path: FieldLocation,
+                     covered: set[FieldLocation], ancestors: set[FieldLocation]) -> bool:
+    """Compare siblings of explicitly ruled fields inside an undeclared container."""
+    if path in covered:
+        return True
+    if path in ancestors:
+        if isinstance(a, dict) and isinstance(b, dict):
+            return all(_uncovered_equal(a.get(k, NOT_FOUND), b.get(k, NOT_FOUND), (*path, k), covered, ancestors)
+                       for k in a.keys() | b.keys())
+        if isinstance(a, list) and isinstance(b, list):
+            return len(a) == len(b) and all(
+                _uncovered_equal(x, y, (*path, i), covered, ancestors) for i, (x, y) in enumerate(zip(a, b))
+            )
+    return _json_equal(a, b, mixed_as_double=False)
 
 
 def _json_equal(left: Any, right: Any, *, mixed_as_double: bool) -> bool:
@@ -202,8 +250,8 @@ class Comparator:
 
         # Phase 0: Schema validation (if schema_validator is configured)
         # Validates both responses against OpenAPI spec before comparison
-        extra_fields_a: list[str] = []
-        extra_fields_b: list[str] = []
+        extra_fields_a: list[FieldLocation] = []
+        extra_fields_b: list[FieldLocation] = []
 
         if self._schema_validator is not None and operation_id is not None:
             schema_result, extra_fields_a, extra_fields_b = self._validate_schemas(
@@ -252,10 +300,11 @@ class Comparator:
             )
 
         # Phase 3: Compare body (only for JSON responses)
+        covered = _RuledLocations() if (extra_fields_a or extra_fields_b) and rules.body and rules.body.field_rules else None
         body_result = self._compare_body(
             response_a.body,
             response_b.body,
-            rules.body,
+            rules.body, covered,
         )
         details["body"] = body_result
 
@@ -288,7 +337,7 @@ class Comparator:
         # When additionalProperties is true/unspecified, we still need to compare them.
         if extra_fields_a or extra_fields_b:
             extra_result = self._compare_extra_fields(
-                response_a.body, response_b.body, extra_fields_a, extra_fields_b
+                response_a.body, response_b.body, extra_fields_a, extra_fields_b, covered
             )
             details["extra_fields"] = extra_result
 
@@ -313,7 +362,7 @@ class Comparator:
         response_a: ResponseCase,
         response_b: ResponseCase,
         operation_id: str,
-    ) -> tuple[ComponentResult, list[str], list[str]]:
+    ) -> tuple[ComponentResult, list[FieldLocation], list[FieldLocation]]:
         """Validate both responses against OpenAPI schema.
 
         Args:
@@ -325,14 +374,11 @@ class Comparator:
             Tuple of (ComponentResult, extra_fields_a, extra_fields_b).
         """
         differences: list[FieldDifference] = []
-        extra_fields_a: list[str] = []
-        extra_fields_b: list[str] = []
-
         # Validate response A
-        result_a = self._schema_validator.validate_response(
+        violations_a, extra_fields_a = self._schema_validator.validate_response_locations(
             response_a.body, operation_id, response_a.status_code
         )
-        for violation in result_a.violations:
+        for violation in violations_a:
             differences.append(
                 FieldDifference(
                     path=violation.path,
@@ -341,13 +387,12 @@ class Comparator:
                     rule=f"schema_violation: {violation.message}",
                 )
             )
-        extra_fields_a = result_a.extra_fields
 
         # Validate response B
-        result_b = self._schema_validator.validate_response(
+        violations_b, extra_fields_b = self._schema_validator.validate_response_locations(
             response_b.body, operation_id, response_b.status_code
         )
-        for violation in result_b.violations:
+        for violation in violations_b:
             differences.append(
                 FieldDifference(
                     path=violation.path,
@@ -356,7 +401,6 @@ class Comparator:
                     rule=f"schema_violation: {violation.message}",
                 )
             )
-        extra_fields_b = result_b.extra_fields
 
         return (
             ComponentResult(match=len(differences) == 0, differences=differences),
@@ -368,63 +412,37 @@ class Comparator:
         self,
         body_a: Any,
         body_b: Any,
-        extra_fields_a: list[str],
-        extra_fields_b: list[str],
+        extra_fields_a: list[FieldLocation],
+        extra_fields_b: list[FieldLocation],
+        covered: _RuledLocations | None,
     ) -> ComponentResult:
-        """Compare extra fields (not defined in schema) between responses.
-
-        Extra fields are compared with equality by default.
-
-        Args:
-            body_a: Body from target A.
-            body_b: Body from target B.
-            extra_fields_a: Extra fields found in response A.
-            extra_fields_b: Extra fields found in response B.
-
-        Returns:
-            ComponentResult for extra fields comparison.
-        """
-        differences: list[FieldDifference] = []
-
-        # Combine all extra fields from both responses
-        all_extra_fields = set(extra_fields_a) | set(extra_fields_b)
-
-        for path in all_extra_fields:
-            try:
-                matches_a = self._expand_jsonpath(body_a, path)
-                matches_b = self._expand_jsonpath(body_b, path)
-            except JSONPathError:
-                # Skip invalid paths
+        """Apply default equality to extra fields left over after configured body rules."""
+        selected = covered.selected if covered else set()
+        ignored = covered.ignored_containers if covered else set()
+        ancestors = {path[:i] for path in selected for i in range(len(path))}
+        groups: dict[tuple[str, str], tuple[int, FieldLocation]] = {}
+        for location in set(extra_fields_a).union(extra_fields_b):
+            if location in selected or (ignored and any(location[:i] in ignored for i in range(len(location)))):
                 continue
+            a, b = _value_at(body_a, location), _value_at(body_b, location)
+            if _uncovered_equal(a, b, location, selected, ancestors):
+                continue
+            rule = "extra_field_presence" if a is NOT_FOUND or b is NOT_FOUND else "extra_field_equality"
+            key = field_path(location, wildcard_indices=True), rule
+            count, first = groups.get(key, (0, location))
+            groups[key] = count + 1, min(first, location)
 
-            value_a = matches_a[0][1] if matches_a else NOT_FOUND
-            value_b = matches_b[0][1] if matches_b else NOT_FOUND
-
-            # Check presence parity
-            a_present = value_a is not NOT_FOUND
-            b_present = value_b is not NOT_FOUND
-
-            if a_present != b_present:
-                differences.append(
-                    FieldDifference(
-                        path=path,
-                        target_a=value_a if a_present else "<missing>",
-                        target_b=value_b if b_present else "<missing>",
-                        rule="extra_field_presence",
-                    )
-                )
-            elif a_present and b_present and not _json_equal(value_a, value_b, mixed_as_double=False):
-                # Both have the field but values differ
-                differences.append(
-                    FieldDifference(
-                        path=path,
-                        target_a=value_a,
-                        target_b=value_b,
-                        rule="extra_field_equality",
-                    )
-                )
-
-        return ComponentResult(match=len(differences) == 0, differences=differences)
+        differences = []
+        for (pattern, rule), (count, first) in sorted(groups.items()):
+            grouped = any(isinstance(segment, int) for segment in first)
+            a, b = _value_at(body_a, first), _value_at(body_b, first)
+            differences.append(FieldDifference(
+                path=field_path(first), rule=rule,
+                target_a="<missing>" if a is NOT_FOUND else a,
+                target_b="<missing>" if b is NOT_FOUND else b,
+                path_pattern=pattern if grouped else None, occurrences=count if grouped else None,
+            ))
+        return ComponentResult(match=not differences, differences=differences)
 
     def _format_schema_summary(self, differences: list[FieldDifference]) -> str:
         """Format a summary for schema violations."""
@@ -435,8 +453,14 @@ class Comparator:
     def _format_extra_fields_summary(self, differences: list[FieldDifference]) -> str:
         """Format a summary for extra fields mismatches."""
         if len(differences) == 1:
-            return f"Extra field mismatch at {differences[0].path}"
-        return f"Extra field mismatches: {len(differences)} differences"
+            diff = differences[0]
+            if diff.occurrences and diff.occurrences > 1:
+                return f"Extra field mismatch at {diff.path_pattern} ({diff.occurrences} occurrences)"
+            return f"Extra field mismatch at {diff.path}"
+        total = sum(diff.occurrences or 1 for diff in differences)
+        if total > len(differences):
+            return f"Extra field mismatches: {total} differences in {len(differences)} groups"
+        return f"Extra field mismatches: {total} differences"
 
     def _compare_status_code(
         self,
@@ -576,6 +600,7 @@ class Comparator:
         body_a: Any,
         body_b: Any,
         body_rules: BodyRules | None,
+        covered: _RuledLocations | None = None,
     ) -> ComponentResult:
         """Compare response bodies.
 
@@ -612,7 +637,7 @@ class Comparator:
         differences: list[FieldDifference] = []
 
         for jsonpath, rule in body_rules.field_rules.items():
-            path_differences = self._compare_jsonpath(body_a, body_b, jsonpath, rule)
+            path_differences = self._compare_jsonpath(body_a, body_b, jsonpath, rule, covered)
             differences.extend(path_differences)
 
         return ComponentResult(match=len(differences) == 0, differences=differences)
@@ -733,6 +758,7 @@ class Comparator:
 
     def _compare_jsonpath(
         self, body_a: Any, body_b: Any, jsonpath: str, rule: FieldRule,
+        covered: _RuledLocations | None = None,
     ) -> list[FieldDifference]:
         try:
             query = self._compile_jsonpath(jsonpath)
@@ -742,6 +768,14 @@ class Comparator:
 
         a = {match.full_path: match for match in query.find(body_a)}
         b = {match.full_path: match for match in query.find(body_b)}
+        if covered is not None:
+            for matches in (a, b):
+                for match in matches.values():
+                    location = _match_location(match)
+                    if location is not None:
+                        covered.selected.add(location)
+                        if rule.predefined == "ignore" and isinstance(match.value, (list, dict)):
+                            covered.ignored_containers.add(location)
         counts = None
         if rule.presence == PresenceMode.OPTIONAL:
             counts = self._optional_array_length_change(query, body_a, body_b)
@@ -989,26 +1023,6 @@ class Comparator:
                 expr = expr.replace(param, str(value))
 
         return expr
-
-    def _expand_jsonpath(
-        self,
-        body: Any,
-        path: str,
-    ) -> list[tuple[str, Any]]:
-        """Expand a JSONPath against a body.
-
-        Args:
-            body: The JSON body to search.
-            path: JSONPath expression.
-
-        Returns:
-            List of (concrete_path, value) tuples for all matches.
-
-        Raises:
-            JSONPathError: If path is syntactically invalid.
-        """
-        matches = self._compile_jsonpath(path).find(body)
-        return [(str(match.full_path), match.value) for match in matches]
 
     def _compile_jsonpath(self, path: str) -> JSONPath:
         # Use cache for compiled paths

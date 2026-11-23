@@ -272,6 +272,8 @@ class TestNestedObjectValidation:
         }
         result = validator.validate_response(body, "getUserProfile", 200)
         assert result.valid is False
+        assert "$.settings.extra_setting" not in result.extra_fields
+        assert "$.settings.extra_setting" in validator.get_extra_fields(body, "getUserProfile", 200)
 
 
 # =============================================================================

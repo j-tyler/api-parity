@@ -51,7 +51,7 @@ def _extract_paths_from_step_diff(step_diff: dict) -> frozenset[str]:
         extra_differences = extra_fields.get("differences", [])
         if extra_differences:
             # Prefix with "extra:" so extra-field paths never collide with JSON paths
-            return frozenset(f"extra:{d.get('path', '')}" for d in extra_differences)
+            return frozenset(f"extra:{d.get('path_pattern') or d.get('path', '')}" for d in extra_differences)
 
         return frozenset()
 
@@ -137,7 +137,7 @@ def _extract_original_body_paths(original_diff: dict) -> set[str]:
     extra_fields = original_details.get("extra_fields", {})
     extra_differences = extra_fields.get("differences", [])
     if extra_differences:
-        return {f"extra:{d.get('path', '')}" for d in extra_differences}
+        return {f"extra:{d.get('path_pattern') or d.get('path', '')}" for d in extra_differences}
 
     return set()
 
@@ -158,7 +158,7 @@ def _extract_new_body_paths(new_result: ComparisonResult) -> set[str]:
 
     new_extra = new_result.details.get("extra_fields")
     if new_extra and new_extra.differences:
-        return {f"extra:{d.path}" for d in new_extra.differences}
+        return {f"extra:{d.path_pattern or d.path}" for d in new_extra.differences}
 
     return set()
 

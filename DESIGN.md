@@ -40,7 +40,7 @@ Date: 20260108
 
 Response fields not in the OpenAPI spec are treated as mismatches. Forces the spec to describe the API accurately. The spec is truth for what fields exist; user rules define which fields to compare and how.
 
-For `additionalProperties: false`, extra fields are violations. For `true` or unspecified, extras are allowed but still compared between targets.
+Each object, including an array item, applies its own `additionalProperties` policy. Forbidden fields are schema violations. Allowed extras use presence parity and equality by default. An explicit body field rule controls its selected values. Extra-field comparison uses literal keys and array indices discovered during validation. Repeated array differences share a wildcard path for merge and replay and retain a concrete example in the bundle.
 
 **Key insight:** Schema validity and implementation equivalence are separate concerns. A response can be valid (matches schema) but not equivalent (differs from other implementation). Example: if the spec allows extras and Target A returns `{id: 1, debug: "foo"}` while Target B returns `{id: 1, trace_id: "bar"}`, both are schema-valid but they're not equivalent—the agent should know about this divergence.
 
