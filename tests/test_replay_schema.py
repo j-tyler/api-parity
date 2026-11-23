@@ -364,11 +364,11 @@ def test_generated_json_null_and_response_states_survive_replay(
     assert [r["json_body_state"] for r in captures] == ["null", "invalid"]
     assert base64.b64decode(captures[1]["body_base64"]) == second_body
     assert replay(config, out, tmp_path / "persistent")["still_mismatch"] == 1
-    second_body = b'{"value": NaN}'
-    assert replay(config, out, tmp_path / "non_json_number")["still_mismatch"] == 1
-    bad_number_bundle, = discover_bundles(tmp_path / "non_json_number")
-    number_trace = json.loads((bad_number_bundle / "target_b.json").read_text())["response"]
-    assert number_trace["json_body_state"] == "invalid"
+    second_body = b'{"value": 1,}'
+    assert replay(config, out, tmp_path / "trailing_comma")["still_mismatch"] == 1
+    malformed_bundle, = discover_bundles(tmp_path / "trailing_comma")
+    malformed_trace = json.loads((malformed_bundle / "target_b.json").read_text())["response"]
+    assert malformed_trace["json_body_state"] == "invalid"
     second_body = b""
     assert replay(config, out, tmp_path / "empty")["different_mismatch"] == 1
     second_body = b"null"

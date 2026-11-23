@@ -642,3 +642,20 @@ def test_invalid_json_cannot_satisfy_a_json_field_rule(comparator):
         assert result.details["body"].differences[0].rule == "invalid_json"
     assert comparator.compare(invalid, invalid, OperationRules(body=BodyRules(binary_rule=binary_rule))).match
     assert comparator.compare(invalid, invalid, OperationRules()).match
+
+
+def test_null_vs_non_null_requires_an_explicit_root_rule_to_match(comparator):
+    null = make_response_case().model_copy(update={"body": None, "json_body_state": "null"})
+    nested = OperationRules(body={"field_rules": {"$.unused": {"predefined": "ignore"}}})
+    ignore_root = OperationRules(body={"field_rules": {"($)": {"predefined": "ignore"}}})
+    exact_root = OperationRules(body={"field_rules": {"$": {"predefined": "exact_match"}}})
+    for value in ({"id": 1}, [], "text", False, 0):
+        other = make_response_case(body=value)
+        for a, b in [(null, other), (other, null)]:
+            for rules in (OperationRules(), nested):
+                result = comparator.compare(a, b, rules)
+                assert not result.match
+                difference, = result.details["body"].differences
+                assert (difference.path, difference.rule) == ("$", "body_null_parity")
+            assert comparator.compare(a, b, ignore_root).match
+            assert not comparator.compare(a, b, exact_root).match

@@ -58,14 +58,21 @@ for that representation.
 
 The four bytes `null` are a present JSON value. They satisfy a nullable schema
 and participate in root (`$`) field rules. A response carrying `null` on one
-target and an empty body on the other produces a mismatch. Two empty HTTP 204
-responses can still match.
+target and an empty body on the other produces a mismatch. A null and a
+non-null body also produce a mismatch by default. An explicit rule on `$`
+controls that comparison. Two empty HTTP 204 responses can still match.
 
-If an applicable schema or a JSON field rule needs to check a response that
-is advertised as JSON but fails to parse, it reports an `invalid_json` difference. The target artifact retains its bytes in `body_base64` and records
-`json_body_state: "invalid"`. A captured null records `json_body_state: "null"`.
-With no applicable schema or JSON field rules, an explicit `binary_rule` can
-compare the captured bytes directly.
+If an applicable schema or a JSON field rule needs a response advertised as
+JSON and parsing fails, the comparison reports `invalid_json`, even if both
+targets return the same malformed bytes. The decoder continues to accept
+`NaN`, `Infinity`, and `-Infinity` as numbers, so rules can still check
+other fields in those responses.
+
+A malformed response records `json_body_state: "invalid"` and retains the
+original bytes in `body_base64`. With no applicable schema or JSON field
+rules, an explicit `binary_rule` can compare those bytes directly. A JSON
+null records `json_body_state: "null"`. Redacting the whole response body
+also removes its encoded bytes and JSON state from the target trace.
 
 ## Fields outside the response schema
 

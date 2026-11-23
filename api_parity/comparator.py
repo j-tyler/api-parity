@@ -623,16 +623,21 @@ class Comparator:
                 target_b="<has body>" if present_b else "<no body>", rule="body_presence",
             )])
 
-        # No rules specified - treat as match (no fields to compare)
-        if body_rules is None or not body_rules.field_rules:
-            return ComponentResult(match=True, differences=[])
-
+        field_rules = body_rules.field_rules if body_rules else {}
+        different_nullness = (body_a is None) != (body_b is None)
+        # Use the actual JSONPath matches so any rule selecting the root can decide.
+        if different_nullness and field_rules and covered is None:
+            covered = _RuledLocations()
         differences: list[FieldDifference] = []
-
-        for jsonpath, rule in body_rules.field_rules.items():
+        for jsonpath, rule in field_rules.items():
             path_differences = self._compare_jsonpath(body_a, body_b, jsonpath, rule, covered)
             differences.extend(path_differences)
 
+        if different_nullness and (covered is None or () not in covered.selected):
+            differences.insert(0, FieldDifference(
+                path="$", target_a="<JSON null>" if body_a is None else "<non-null body>",
+                target_b="<JSON null>" if body_b is None else "<non-null body>", rule="body_null_parity",
+            ))
         return ComponentResult(match=len(differences) == 0, differences=differences)
 
     def _compare_binary_body(

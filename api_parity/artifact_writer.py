@@ -200,7 +200,7 @@ class ArtifactWriter:
             request = {k: v for k, v in case_data.items() if k != "session_cookies"}
             self._mark_session_trace(request, side, sessions)
             execution = self._redact({"request": copy.deepcopy(request), "response": response.model_dump()})
-            self._encode_request_bytes(execution["request"])
+            self._prepare_trace(execution)
             self._write_json(bundle_dir / f"{side}.json", execution)
 
         self._encode_request_bytes(case_data)
@@ -303,11 +303,13 @@ class ArtifactWriter:
                 protected_steps.append(({}, targets))
         self._protect_repeated_cookies(protected_steps)
 
-        for data, key in ((chain_data, "request_template"), (exec_a_data, "request"),
-                          (exec_b_data, "request")):
-            for step in data["steps"]:
+        for step in chain_data["steps"]:
+            if isinstance(step, dict):
+                self._encode_request_bytes(step["request_template"])
+        for trace in (exec_a_data, exec_b_data):
+            for step in trace["steps"]:
                 if isinstance(step, dict):
-                    self._encode_request_bytes(step[key])
+                    self._prepare_trace(step)
 
         # Write chain.json
         self._write_json(bundle_dir / "chain.json", chain_data)
@@ -509,6 +511,13 @@ class ArtifactWriter:
         temp_path = spec_path.with_suffix(".tmp")
         temp_path.write_bytes(self._spec_bytes)
         temp_path.replace(spec_path)
+
+    def _prepare_trace(self, trace: dict) -> None:
+        self._encode_request_bytes(trace["request"])
+        response = trace["response"]
+        if isinstance(response, dict) and response.get("body") == "[REDACTED]":
+            response["body_base64"] = None
+            response.pop("json_body_state", None)
 
     @staticmethod
     def _encode_request_bytes(request: Any) -> None:
