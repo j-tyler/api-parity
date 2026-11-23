@@ -6,6 +6,7 @@ Tests the OpenAPI Spec as Field Authority feature in the Comparator:
 - SCHEMA_VIOLATION mismatch type
 """
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -202,6 +203,39 @@ class TestSchemaValidationSkipping:
 
 class TestExtraFieldsComparison:
     """Tests for extra fields comparison in flexible schemas."""
+
+    @pytest.mark.parametrize("wrapped", [False, True], ids=["root-array", "closed-wrapper"])
+    def test_item_extra_fields_follow_the_item_schema(self, tmp_path, mock_cel, comparison_library, wrapped):
+        item = {"type": "object", "properties": {"id": {"type": "integer"}}}
+        rows = {"type": "array", "items": {"$ref": "#/components/schemas/Item"}}
+        schema = ({"type": "object", "additionalProperties": False, "properties": {"rows": rows}}
+                  if wrapped else rows)
+        spec = {"openapi": "3.0.3", "components": {"schemas": {"Item": item}},
+                "paths": {"/rows": {"get": {"operationId": "rows", "responses": {
+                    "200": {"content": {"application/json": {"schema": schema}}}}}}}}
+        validator = SchemaValidator(tmp_path / "rows.json", source_bytes=json.dumps(spec).encode())
+        compare = Comparator(mock_cel, comparison_library, validator)
+        row_a = {"id": 2, "enabled": True}
+        row_b = {"id": 2, "enabled": False}
+        body_a = [{"id": 1}, row_a]
+        body_b = [{"id": 1}, row_b]
+        if wrapped:
+            body_a, body_b = {"rows": body_a}, {"rows": body_b}
+        path = "$.rows[1].enabled" if wrapped else "$[1].enabled"
+        assert validator.get_extra_fields(body_a, "rows", 200) == [path]
+
+        def difference():
+            return compare.compare(make_response(body=body_a), make_response(body=body_b), OperationRules(), "rows")
+
+        result = difference()
+        assert not result.match
+        diff, = result.details["extra_fields"].differences
+        assert (diff.path, diff.target_a, diff.target_b, diff.rule) == (path, True, False, "extra_field_equality")
+        del row_b["enabled"]
+        diff, = difference().details["extra_fields"].differences
+        assert (diff.path, diff.rule) == (path, "extra_field_presence")
+        row_b["enabled"] = True
+        assert difference().match
 
     def test_extra_fields_compared_when_allowed(self, comparator):
         """Extra fields in flexible schemas are compared for equality."""

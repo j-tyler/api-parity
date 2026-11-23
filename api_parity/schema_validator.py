@@ -295,7 +295,6 @@ class SchemaValidator:
 
         # Validate against schema
         violations: list[SchemaViolation] = []
-        extra_fields: list[str] = []
 
         try:
             validator = self._document_validator.evolve(schema=response_schema.schema)
@@ -323,9 +322,7 @@ class SchemaValidator:
                 )
             )
 
-        # If schema allows extra fields, identify them for comparison
-        if response_schema.allows_extra_fields and isinstance(body, dict):
-            extra_fields = self._find_extra_fields(body, response_schema.schema, "$")
+        extra_fields = self._find_extra_fields(body, response_schema.schema, "$", allowed_only=True)
 
         return ValidationResult(
             valid=len(violations) == 0,
@@ -357,10 +354,7 @@ class SchemaValidator:
         if response_schema is None or body is None:
             return []
 
-        if not isinstance(body, dict):
-            return []
-
-        return self._find_extra_fields(body, response_schema.schema, "$")
+        return self._find_extra_fields(body, response_schema.schema, "$", allowed_only=False)
 
     def has_schema(self, operation_id: str, status_code: int) -> bool:
         """Check if a schema exists for the given operation+status_code.
@@ -545,6 +539,8 @@ class SchemaValidator:
         body: Any,
         schema: dict[str, Any],
         path: str,
+        *,
+        allowed_only: bool,
     ) -> list[str]:
         """Find fields in body that are not defined in schema.
 
@@ -556,50 +552,48 @@ class SchemaValidator:
             body: The response body (or nested part of it).
             schema: The schema (or nested part of it).
             path: Current JSONPath.
+            allowed_only: Exclude forbidden properties from comparison. The public
+                get_extra_fields inventory includes all undeclared properties.
 
         Returns:
             List of JSONPaths for extra fields.
         """
         extra: list[str] = []
 
-        if not isinstance(schema, dict):
+        if not isinstance(body, (dict, list)):
             return extra
 
-        # Resolve $ref at top level
+        # Resolve the schema at this instance location
         schema = self._references.resolve(schema)
         if not isinstance(schema, dict):
             return extra
 
         # Handle arrays - check items in the array
         if isinstance(body, list):
-            items_schema = schema.get("items", {})
-            if items_schema:
+            items_schema = schema.get("items")
+            if isinstance(items_schema, dict):
                 for i, item in enumerate(body):
                     item_extra = self._find_extra_fields(
-                        item, items_schema, f"{path}[{i}]"
+                        item, items_schema, f"{path}[{i}]", allowed_only=allowed_only
                     )
                     extra.extend(item_extra)
             return extra
 
-        # Handle objects
-        if not isinstance(body, dict):
-            return extra
-
         # Get defined properties from schema, including composition branches
         properties = self._collect_properties(schema)
-        defined_fields = set(properties.keys())
+        include_extra = not allowed_only or self._allows_additional_properties(schema)
 
         # Find fields in body not in schema
         for field_name in body.keys():
-            if field_name not in defined_fields:
-                field_path = f"{path}.{field_name}"
-                extra.append(field_path)
+            if field_name not in properties:
+                if include_extra:
+                    extra.append(f"{path}.{field_name}")
             else:
                 # Recursively check nested objects/arrays
                 nested_body = body[field_name]
                 nested_schema = properties.get(field_name, {})
                 nested_extra = self._find_extra_fields(
-                    nested_body, nested_schema, f"{path}.{field_name}"
+                    nested_body, nested_schema, f"{path}.{field_name}", allowed_only=allowed_only
                 )
                 extra.extend(nested_extra)
 
