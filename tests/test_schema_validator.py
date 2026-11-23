@@ -1103,3 +1103,30 @@ def test_cached_ref_keeps_the_dynamic_scope_of_each_caller(tmp_path):
                                             "second": {"b": 1, "children": [second]}}, "read", 200)
     assert check({"a": 1}, {"b": 1}).valid
     assert {v.path for v in check({"b": 1}, {"a": 1}).violations} == {"$.first.children[0]", "$.second.children[0]"}
+
+
+def test_inline_dialect_switches_preserve_scope_and_ref_sibling_rules(tmp_path):
+    draft4 = "http://json-schema.org/draft-04/schema#"
+    oas = "https://spec.openapis.org/oas/3.1/dialect/base"
+    state = {"$id": "urn:state", "$schema": oas, "$defs": {"Text": {"type": "string"}},
+             "$ref": "#/$defs/Text", "const": "ready"}
+    legacy = {"$schema": draft4, "$ref": "#/components/schemas/Number", "maximum": 0}
+    components = {"Number": {"type": "number"}}
+    schema = {"items": {"properties": {"state": state, "count": legacy}}}
+    validator = response_contract(tmp_path, "3.1.0", schema, components, jsonSchemaDialect=draft4)
+    result = validator.validate_response([{"state": "bad", "count": 1}], "read", 200)
+    assert [(v.path, v.violation_type) for v in result.violations] == [("$[0].state", "invalid_const")]
+    assert validator.validate_response([{"state": "ready", "count": 1}], "read", 200).valid
+
+    # Enter Draft 4 directly from the OpenAPI dialect. Draft 4 ignores $ref siblings.
+    validator = response_contract(tmp_path, "3.1.0", {"properties": {"count": legacy}}, components)
+    assert validator.validate_response({"count": 1}, "read", 200).valid
+    assert not validator.validate_response({"count": "bad"}, "read", 200).valid
+
+
+def test_contains_uses_embedded_openapi_dialect_for_predicate(tmp_path):
+    schema = {"contains": {"$id": "urn:state", "$schema": "https://spec.openapis.org/oas/3.1/dialect/base",
+                           "type": "array", "prefixItems": [{"const": "ready"}]}}
+    validator = response_contract(tmp_path, "3.1.0", schema, jsonSchemaDialect="http://json-schema.org/draft-07/schema#")
+    assert not validator.validate_response([["bad"]], "read", 200).valid
+    assert validator.validate_response([["bad"], ["ready"]], "read", 200).valid

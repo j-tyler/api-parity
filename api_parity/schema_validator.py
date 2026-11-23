@@ -251,6 +251,7 @@ class _DocumentReferences:
         specification = DRAFT202012 if self.uses_json_schema_dialect else DRAFT4
         self.registry = Registry().with_resource(_DOCUMENT_URI, specification.create_resource(spec))
         self.scopes = {}
+        self.dialect_boundaries = {}
         self.targets = {}
         self.missing: set[str] = set()
         self.operations = build_operation_index(spec)
@@ -285,6 +286,9 @@ class _DocumentReferences:
                 if resource.id():
                     base = urljoin(base, resource.id())
                     self.registry = self.registry.with_resource(base, resource)
+                if "$schema" in schema:
+                    keywords = _oas_schema_keywords if dialect == _OAS31_DIALECT else draft._APPLICABLE_VALIDATORS
+                    self.dialect_boundaries[id(schema)] = (DRAFT202012.create_resource({"$id": base}), keywords)
                 pending.extend((child, base, dialect) for child in specification.subresources_of(schema))
             self.scopes[id(schema)] = (base, dialect)
 
@@ -495,19 +499,53 @@ class SchemaValidator:
             if draft is None:
                 raise SchemaExtractionError(f"Unsupported response schema dialect: {uri}")
             if draft not in self._drafts:
-                if draft is Draft202012Validator:
-                    self._drafts[draft] = validators.create(
-                        meta_schema=draft.META_SCHEMA, validators={**draft.VALIDATORS, "$ref": self._validate_schema_ref},
-                        type_checker=draft.TYPE_CHECKER, id_of=draft.ID_OF,
-                        applicable_validators=self._modern_keywords,
-                    )
-                else:
-                    self._drafts[draft] = validators.extend(draft, {"$ref": self._validate_schema_ref})
+                self._drafts[draft] = self._contract_draft(draft)
             registry = self._references.registry
             self._response_validators[key] = self._drafts[draft](
                 schema, registry=registry, _resolver=registry.resolver(base),
             )
         return self._response_validators[key]
+
+    def _contract_draft(self, draft):
+        boundaries = self._references.dialect_boundaries
+        default_keywords = self._modern_keywords if draft is Draft202012Validator else draft._APPLICABLE_VALIDATORS
+
+        # jsonschema's descend() selects keywords with the parent class and
+        # evaluates them with the evolved child. Both must use the child's dialect.
+        def keywords(schema):
+            boundary = boundaries.get(id(schema))
+            if boundary is None:
+                return default_keywords(schema)
+            _, child_keywords = boundary
+            return child_keywords(schema)
+
+        contract_class = validators.create(
+            meta_schema=draft.META_SCHEMA, validators={**draft.VALIDATORS, "$ref": self._validate_schema_ref},
+            type_checker=draft.TYPE_CHECKER, format_checker=draft.FORMAT_CHECKER, id_of=draft.ID_OF,
+            applicable_validators=keywords if boundaries else default_keywords,
+        )
+        if boundaries:
+            native_evolve = contract_class.evolve
+
+            def evolve(parent, **changes):
+                schema = changes.get("schema", parent.schema)
+                boundary = boundaries.get(id(schema))
+                if boundary is None:
+                    return native_evolve(parent, **changes)
+                # Keep caller history for dynamic references and enter the base
+                # URI indexed using the child dialect's id or $id convention.
+                resolver = changes.get("_resolver", parent._resolver)
+                base_resource, _ = boundary
+                changes["_resolver"] = resolver.in_subresource(base_resource)
+                changes.setdefault("schema", schema)
+                changes.setdefault("registry", self._references.registry)
+                changes.setdefault("format_checker", parent.format_checker)
+                return type(self._validator_for_schema(schema))(**changes)
+
+            # This class belongs only to this contract. Leave jsonschema's
+            # process-wide dialect registry and the library classes untouched.
+            contract_class.evolve = evolve
+        return contract_class
 
     def _validate_schema_ref(self, validator, ref, instance, schema):
         # Rows in an array commonly follow the same reference in the same

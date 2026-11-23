@@ -376,12 +376,17 @@ def test_generated_json_null_and_response_states_survive_replay(
     assert received == [(side, "application/json", b"null") for side in "ab"] * 5
 
 
-def test_openapi31_const_explore_and_replay_use_the_saved_dialect(tmp_path, monkeypatch, replay_env):
+@pytest.mark.parametrize("embedded", [False, True], ids=["document-default", "embedded-override"])
+def test_openapi31_const_explore_and_replay_use_the_saved_dialect(tmp_path, monkeypatch, replay_env, embedded):
     config, bodies, _ = replay_env
     spec = write_spec(tmp_path / "spec.json")
     document = json.loads(spec.read_bytes())
     document["openapi"] = "3.1.0"
-    document["components"]["schemas"]["Item"]["properties"]["id"] = {"const": 42}
+    field = {"const": 42}
+    if embedded:
+        document["jsonSchemaDialect"] = "http://json-schema.org/draft-04/schema#"
+        field.update({"$id": "urn:item-id", "$schema": "https://spec.openapis.org/oas/3.1/dialect/base"})
+    document["components"]["schemas"]["Item"]["properties"]["id"] = field
     spec.write_text(json.dumps(document))
     bodies[:] = [{"id": 42}, {"id": 43}]
     monkeypatch.setattr(CaseGenerator, "generate", lambda *a, **kw: iter([request()]))
