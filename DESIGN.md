@@ -572,7 +572,7 @@ Date: 20260216
 
 **Solution:** Added link-aware resolution to `execute_chain()`. Before executing a linked step:
 
-1. `_resolve_link_expression()` parses OpenAPI runtime expressions (`$response.body#/path`, `$response.header.X`, `$request.path.X`, `$request.header.X`, `$request.query.X`, `$request.body#/path`) and maps them to extracted variable keys or prior request data.
+1. `_resolve_link_expression()` parses OpenAPI runtime expressions (`$response.body#/path`, `$response.header.X`, `$request.path.X`, `$request.header.X`, `$request.query.X`, `$request.body#/path`) against the selected source exchange on each target. Explicit response pointers read the response body directly. Short names such as `{id}` remain available to ordinary placeholders when unambiguous.
 2. `_resolve_link_overrides()` processes all parameters in `link_source["parameters"]` and produces a dict of `{param_name: resolved_value}`.
 3. `_apply_link_overrides()` overrides the fuzz-generated path parameter, query parameter, header, or cookie values in the request template with the resolved values, then re-renders the path.
 4. A linked value beginning with `/` is a URI path regardless of its source. Location and Content-Location headers can also supply relative URI paths. The executor strips leading slashes and preserves path separators and existing escapes. A later `$request.path` link reuses the same interpretation on each target. Other linked IDs occupy one segment: `team/42` becomes `team%2F42`, `a#b` becomes `a%23b`, and literal `a%23b` becomes `a%2523b`.

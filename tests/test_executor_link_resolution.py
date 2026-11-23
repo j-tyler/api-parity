@@ -47,174 +47,35 @@ def executor():
 # =============================================================================
 
 
-class TestResolveResponseBodyExpression:
-    """Test $response.body#/path resolution."""
-
-    def test_simple_body_field(self, executor):
-        """$response.body#/id resolves to extracted body variable."""
-        extracted = {"id": "abc-123"}
-        result = Executor._resolve_link_expression(
-            "$response.body#/id", extracted, None
-        )
-        assert result == "abc-123"
-
-    def test_nested_body_field(self, executor):
-        """$response.body#/data/nested_id resolves to nested extracted variable."""
-        extracted = {"data/nested_id": "nested-456"}
-        result = Executor._resolve_link_expression(
-            "$response.body#/data/nested_id", extracted, None
-        )
-        assert result == "nested-456"
-
-    def test_nested_body_field_with_shortcut(self, executor):
-        """$response.body#/data/nested_id falls back to last segment alias."""
-        # Only the shortcut alias is present (not the full path)
-        extracted = {"nested_id": "nested-456"}
-        result = Executor._resolve_link_expression(
-            "$response.body#/data/nested_id", extracted, None
-        )
-        assert result == "nested-456"
-
-    def test_body_field_prefers_full_path(self, executor):
-        """Full path is preferred over last segment shortcut."""
-        extracted = {
-            "data/nested_id": "full-path-value",
-            "nested_id": "shortcut-value",
-        }
-        result = Executor._resolve_link_expression(
-            "$response.body#/data/nested_id", extracted, None
-        )
-        assert result == "full-path-value"
-
-    def test_body_field_missing(self, executor):
-        """Returns _MISSING when body field not in extracted variables."""
-        extracted = {"other_field": "value"}
-        result = Executor._resolve_link_expression(
-            "$response.body#/id", extracted, None
-        )
-        assert result is _MISSING
-
-    def test_body_field_numeric_value(self, executor):
-        """Numeric body values are returned as-is."""
-        extracted = {"count": 42}
-        result = Executor._resolve_link_expression(
-            "$response.body#/count", extracted, None
-        )
-        assert result == 42
-
-    def test_body_field_null_value(self, executor):
-        """JSON null body value resolves as None (not treated as missing).
-
-        Regression test: null values were previously conflated with "not found"
-        because both used None as the return value. Now _MISSING is used for
-        "not found", and None represents a legitimate JSON null.
-        """
-        extracted = {"id": None}
-        result = Executor._resolve_link_expression(
-            "$response.body#/id", extracted, None
-        )
-        assert result is None
-        assert result is not _MISSING
-
-    def test_simple_field_no_shortcut_fallback(self, executor):
-        """Simple field (no slash) doesn't try shortcut when not found."""
-        extracted = {}
-        result = Executor._resolve_link_expression(
-            "$response.body#/id", extracted, None
-        )
-        assert result is _MISSING
+def source_response(body=None, headers=None):
+    return ResponseCase(status_code=200, body=body, headers=headers or {}, elapsed_ms=1)
 
 
-# =============================================================================
-# _resolve_link_expression: $response.header.X expressions
-# =============================================================================
+@pytest.mark.parametrize(("pointer", "expected"), [
+    ("id", "top"), ("data/id", "nested"), ("missing/id", _MISSING),
+    ("data/absent", _MISSING), ("count", 42), ("nullable", None),
+    ("rows/0/a~1b", "slash"), ("escaped%20key", "space"),
+    ("header/location", "body-value"),
+])
+def test_response_body_links_select_the_exact_pointer(pointer, expected):
+    response = source_response({
+        "id": "top", "data": {"id": "nested"}, "count": 42, "nullable": None,
+        "rows": [{"a/b": "slash"}], "escaped key": "space",
+        "header": {"location": "body-value"},
+    }, {"location": ["header-value"]})
+    assert Executor._resolve_link_expression("$response.body#/" + pointer, response, None) == expected
 
 
-class TestResolveResponseHeaderExpression:
-    """Test $response.header.X resolution."""
-
-    def test_header_value(self, executor):
-        """$response.header.Location resolves to header value."""
-        extracted = {"header/location": ["/resources/abc-123"]}
-        result = Executor._resolve_link_expression(
-            "$response.header.Location", extracted, None
-        )
-        # Returns first element of the list
-        assert result == "/resources/abc-123"
-
-    def test_header_case_insensitive(self, executor):
-        """Header name matching is case-insensitive."""
-        extracted = {"header/location": ["/resources/abc-123"]}
-        result = Executor._resolve_link_expression(
-            "$response.header.LOCATION", extracted, None
-        )
-        assert result == "/resources/abc-123"
-
-    def test_header_with_index(self, executor):
-        """$response.header.Set-Cookie[0] resolves to indexed header value."""
-        extracted = {"header/set-cookie/0": "session=abc"}
-        result = Executor._resolve_link_expression(
-            "$response.header.Set-Cookie[0]", extracted, None
-        )
-        assert result == "session=abc"
-
-    def test_header_with_index_fallback_to_list(self, executor):
-        """When indexed key missing, falls back to full header list at correct index."""
-        # Only the full list key exists, not the indexed key
-        extracted = {"header/set-cookie": ["session=abc", "theme=dark"]}
-        result = Executor._resolve_link_expression(
-            "$response.header.Set-Cookie[0]", extracted, None
-        )
-        assert result == "session=abc"
-
-    def test_header_with_nonzero_index_fallback_to_list(self, executor):
-        """Fallback to full header list uses the requested index, not always [0].
-
-        Regression test: previously the fallback always returned value[0]
-        regardless of the requested index, so $response.header.Set-Cookie[1]
-        would incorrectly return the first cookie instead of the second.
-        """
-        extracted = {"header/set-cookie": ["session=abc", "theme=dark", "lang=en"]}
-        # Request index 1 — should get "theme=dark", not "session=abc"
-        result = Executor._resolve_link_expression(
-            "$response.header.Set-Cookie[1]", extracted, None
-        )
-        assert result == "theme=dark"
-
-        # Request index 2 — should get "lang=en"
-        result = Executor._resolve_link_expression(
-            "$response.header.Set-Cookie[2]", extracted, None
-        )
-        assert result == "lang=en"
-
-    def test_header_with_out_of_bounds_index_fallback(self, executor):
-        """Out-of-bounds index on fallback returns _MISSING."""
-        extracted = {"header/set-cookie": ["session=abc"]}
-        result = Executor._resolve_link_expression(
-            "$response.header.Set-Cookie[5]", extracted, None
-        )
-        assert result is _MISSING
-
-    def test_header_missing(self, executor):
-        """Returns _MISSING when header not in extracted variables."""
-        extracted = {"header/other": ["value"]}
-        result = Executor._resolve_link_expression(
-            "$response.header.Location", extracted, None
-        )
-        assert result is _MISSING
-
-    def test_header_single_string_value(self, executor):
-        """Non-list header value is returned as-is."""
-        extracted = {"header/location": "/resources/abc-123"}
-        result = Executor._resolve_link_expression(
-            "$response.header.Location", extracted, None
-        )
-        assert result == "/resources/abc-123"
-
-
-# =============================================================================
-# _resolve_link_expression: $request.path.X expressions
-# =============================================================================
+@pytest.mark.parametrize(("header", "expected"), [
+    ("Location", "/resources/abc-123"), ("LOCATION", "/resources/abc-123"),
+    ("Set-Cookie[0]", "session=abc"), ("Set-Cookie[1]", "theme=dark"),
+    ("Set-Cookie[2]", _MISSING), ("absent", _MISSING),
+])
+def test_response_header_links_select_the_requested_value(header, expected):
+    response = source_response({"header": {"absent": "body-value"}}, {
+        "location": ["/resources/abc-123"], "set-cookie": ["session=abc", "theme=dark"],
+    })
+    assert Executor._resolve_link_expression("$response.header." + header, response, None) == expected
 
 
 class TestResolveRequestPathExpression:
@@ -231,7 +92,7 @@ class TestResolveRequestPathExpression:
             path_parameters={"widget_id": "abc-123"},
         )
         result = Executor._resolve_link_expression(
-            "$request.path.widget_id", {}, prev_request
+            "$request.path.widget_id", source_response(), prev_request
         )
         assert result == "abc-123"
 
@@ -246,14 +107,14 @@ class TestResolveRequestPathExpression:
             path_parameters={},
         )
         result = Executor._resolve_link_expression(
-            "$request.path.widget_id", {}, prev_request
+            "$request.path.widget_id", source_response(), prev_request
         )
         assert result is _MISSING
 
     def test_request_path_no_prev_request(self, executor):
         """Returns _MISSING when no prior request available."""
         result = Executor._resolve_link_expression(
-            "$request.path.widget_id", {}, None
+            "$request.path.widget_id", source_response(), None
         )
         assert result is _MISSING
 
@@ -277,14 +138,14 @@ class TestResolveRequestHeaderExpression:
             headers={"authorization": ["Bearer token123"]},
         )
         result = Executor._resolve_link_expression(
-            "$request.header.Authorization", {}, prev_request
+            "$request.header.Authorization", source_response(), prev_request
         )
         assert result == "Bearer token123"
 
     def test_request_header_no_prev_request(self, executor):
         """Returns _MISSING when no prior request available."""
         result = Executor._resolve_link_expression(
-            "$request.header.Authorization", {}, None
+            "$request.header.Authorization", source_response(), None
         )
         assert result is _MISSING
 
@@ -300,14 +161,14 @@ class TestResolveUnrecognizedExpression:
     def test_unknown_expression(self, executor):
         """Unrecognized expressions return _MISSING."""
         result = Executor._resolve_link_expression(
-            "$url", {"id": "abc"}, None
+            "$url", source_response({"id": "abc"}), None
         )
         assert result is _MISSING
 
     def test_malformed_body_expression(self, executor):
         """Malformed body expression (no #/) returns _MISSING."""
         result = Executor._resolve_link_expression(
-            "$response.body/id", {"id": "abc"}, None
+            "$response.body/id", source_response({"id": "abc"}), None
         )
         assert result is _MISSING
 
@@ -325,8 +186,8 @@ class TestResolveLinkOverrides:
         link_source = {
             "parameters": {"widget_id": "$response.body#/id"},
         }
-        extracted = {"id": "real-widget-id"}
-        result = executor._resolve_link_overrides(link_source, extracted, None)
+        response = source_response({"id": "real-widget-id"})
+        result = executor._resolve_link_overrides(link_source, response, None)
         assert result == {"widget_id": "real-widget-id"}
 
     def test_multiple_parameters(self, executor):
@@ -337,11 +198,8 @@ class TestResolveLinkOverrides:
                 "resource_path": "$response.header.Location",
             },
         }
-        extracted = {
-            "id": "widget-123",
-            "header/location": ["/widgets/widget-123"],
-        }
-        result = executor._resolve_link_overrides(link_source, extracted, None)
+        response = source_response({"id": "widget-123"}, {"location": ["/widgets/widget-123"]})
+        result = executor._resolve_link_overrides(link_source, response, None)
         assert result == {
             "widget_id": "widget-123",
             "resource_path": "/widgets/widget-123",
@@ -355,16 +213,16 @@ class TestResolveLinkOverrides:
                 "missing_param": "$response.body#/nonexistent",
             },
         }
-        extracted = {"id": "widget-123"}
-        result = executor._resolve_link_overrides(link_source, extracted, None)
+        response = source_response({"id": "widget-123"})
+        result = executor._resolve_link_overrides(link_source, response, None)
         # Only widget_id resolves, missing_param is excluded
         assert result == {"widget_id": "widget-123"}
 
     def test_no_parameters_key(self, executor):
         """Returns empty dict when link_source has no parameters."""
         link_source = {"field": "$response.body#/id"}  # Old format
-        extracted = {"id": "widget-123"}
-        result = executor._resolve_link_overrides(link_source, extracted, None)
+        response = source_response({"id": "widget-123"})
+        result = executor._resolve_link_overrides(link_source, response, None)
         assert result == {}
 
     def test_all_fail_returns_empty(self, executor):
@@ -372,8 +230,8 @@ class TestResolveLinkOverrides:
         link_source = {
             "parameters": {"widget_id": "$response.body#/id"},
         }
-        extracted = {}  # No variables extracted (source step failed)
-        result = executor._resolve_link_overrides(link_source, extracted, None)
+        response = source_response()
+        result = executor._resolve_link_overrides(link_source, response, None)
         assert result == {}
 
     def test_null_value_included_in_overrides(self, executor):
@@ -386,8 +244,8 @@ class TestResolveLinkOverrides:
         link_source = {
             "parameters": {"widget_id": "$response.body#/id"},
         }
-        extracted = {"id": None}  # API returned {"id": null}
-        result = executor._resolve_link_overrides(link_source, extracted, None)
+        response = source_response({"id": None})  # API returned {"id": null}
+        result = executor._resolve_link_overrides(link_source, response, None)
         assert result == {"widget_id": None}
 
 
@@ -764,3 +622,42 @@ def test_query_link_keeps_repeated_source_values(executor):
         histories = executor.execute_chain(chain)
     for history in histories:
         assert history.steps[1].request.query["tag"] == ["a", "b"]
+
+
+@pytest.mark.parametrize("missing", [None, "id", "owner"])
+def test_chain_uses_distinct_item_and_owner_ids(executor, missing):
+    chain = _make_two_step_chain()
+    read = chain.steps[1]
+    read.request_template.path_template = "/items/{id}/owners/{owner}"
+    read.request_template.path_parameters = {"id": "seed", "owner": "seed"}
+    read.link_source["parameters"] = {"id": "$response.body#/id", "owner": "$response.body#/owner/id"}
+    executor._link_fields.body_pointers = {"id", "owner/id"}
+    paths = []
+
+    def send(client, request, timeout, target, **kwargs):
+        if request.operation_id == read.request_template.operation_id:
+            paths.append(request.rendered_path)
+        side = "a" if client is executor._client_a else "b"
+        body = {"id": "item-" + side, "owner": {"id": "owner-" + side}}
+        if missing:
+            del body[missing]
+        return source_response(body)
+
+    with patch.object(executor, "_execute_single", side_effect=send):
+        a, b = executor.execute_chain(chain)
+    if missing:
+        assert paths == []
+        assert len(a.steps) == len(b.steps) == 1
+    else:
+        assert paths == ["/items/item-a/owners/owner-a", "/items/item-b/owners/owner-b"]
+        assert a.steps[0].extracted == {"id": "item-a", "owner/id": "owner-a"}
+
+
+def test_unambiguous_short_name_remains_available_to_placeholders(executor):
+    chain = _make_two_step_chain()
+    read = chain.steps[1]
+    read.link_source = None
+    read.request_template.path_parameters = {"widget_id": "{nested_id}"}
+    with patch.object(executor, "_execute_single", return_value=source_response({"data": {"nested_id": "123"}})):
+        a, b = executor.execute_chain(chain)
+    assert a.steps[1].request.rendered_path == b.steps[1].request.rendered_path == "/widgets/123"
