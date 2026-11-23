@@ -9,25 +9,18 @@ import base64
 import re
 from copy import deepcopy
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from typing_extensions import Self
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
+from api_parity.session_cookies import SessionMap, SessionReplay, SessionUse
+
 
 # =============================================================================
 # Core HTTP Models
 # =============================================================================
-
-
-class SessionCookieHeader(BaseModel):
-    """Cookie header contributed by a target's session, scoped to the original request."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    scope: str
-    value: str
 
 
 class RequestCase(BaseModel):
@@ -58,9 +51,8 @@ class RequestCase(BaseModel):
         default_factory=dict, description="Request headers (arrays for repeated headers)"
     )
     cookies: dict[str, str] = Field(default_factory=dict, description="Cookies")
-    # Absent on ordinary inputs. A saved stateless case owns its cookie state:
-    # an omitted side used no session cookie, a null side required a redacted one.
-    session_cookies: dict[Literal["target_a", "target_b"], SessionCookieHeader | None] | None = Field(
+    # A saved standalone case or chain step records each side's external session inputs.
+    session_cookies: SessionMap | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     body: Any = Field(default=None, description="Body as JSON value if parseable")
@@ -126,7 +118,13 @@ class ResponseCase(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    _session_cookie: SessionCookieHeader | None = PrivateAttr(default=None)
+    _session_cookie: SessionUse | None = PrivateAttr(default=None)
+    session_replay: SessionReplay | None = Field(
+        default=None, exclude=True, description="Use of an inherited session on replay"
+    )
+    session_auth_rejected: bool = Field(
+        default=False, exclude=True, description="New HTTP 401 or 403 after supplying the session"
+    )
     status_code: int = Field(description="HTTP status code")
     headers: dict[str, list[str]] = Field(
         default_factory=dict, description="Response headers (lowercase keys, array values)"
@@ -525,6 +523,7 @@ class SecretsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    store_session_cookies: bool = Field(default=False, description="Save inherited cookie values in mismatch bundles")
     redact_fields: list[str] = Field(
         default_factory=list, description="JSONPaths of fields to redact in artifacts"
     )

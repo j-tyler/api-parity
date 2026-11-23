@@ -1132,7 +1132,7 @@ class TestLinkAttributionHistory:
 
         target = TargetConfig(base_url="http://example.test")
         with Executor(target, target, link_fields=generator.get_link_fields()) as executor:
-            def respond(client, request, timeout, target_name):
+            def respond(client, request, timeout, target_name, **kwargs):
                 if request.operation_id == "updateResource":
                     return ResponseCase(status_code=422, body={}, elapsed_ms=1)
                 if request.operation_id == "getResource":

@@ -9,6 +9,7 @@ import argparse
 import sys
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     from api_parity.case_generator import CaseGenerator
     from api_parity.comparator import Comparator
     from api_parity.executor import Executor
-    from api_parity.models import ChainCase, ComparisonResult, ComparisonRules, TargetInfo
+    from api_parity.models import ChainCase, ComparisonResult, ComparisonRules, ResponseCase, TargetInfo
 
 
 DEFAULT_TIMEOUT = 30.0
@@ -261,6 +262,7 @@ class ReplayArgs:
     timeout: float
     operation_timeout: dict[str, float]
     spec: Path | None = None
+    ignore_session_cookies: bool = False
 
 
 @dataclass
@@ -531,6 +533,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output directory for replay artifacts",
     )
     replay_parser.add_argument(
+        "--ignore-session-cookies", action="store_true",
+        help="Treat inherited session cookies as irrelevant when replaying and classifying bundles",
+    )
+    replay_parser.add_argument(
         "--validate",
         action="store_true",
         default=False,
@@ -642,6 +648,7 @@ def parse_replay_args(namespace: argparse.Namespace) -> ReplayArgs:
     """Convert parsed namespace to ReplayArgs dataclass."""
     op_timeouts = _build_operation_timeouts(namespace.operation_timeout or [])
     return ReplayArgs(
+        ignore_session_cookies=getattr(namespace, "ignore_session_cookies", False),
         spec=getattr(namespace, "spec", None),
         config=namespace.config,
         target_a=namespace.target_a,
@@ -2664,6 +2671,7 @@ def run_replay(args: ReplayArgs) -> int:
             target_b_config,
             default_timeout=args.timeout,
             operation_timeouts=args.operation_timeout,
+            ignore_session_cookies=args.ignore_session_cookies,
             link_fields=link_fields if has_link_fields else None,
             requests_per_second=requests_per_second,
         ) as executor:
@@ -2775,6 +2783,33 @@ def _replay_loaded_bundle(
         )
 
 
+def _record_session_replay(
+    stats: ReplayStats, name: str, pairs: Iterable[tuple[ResponseCase, ResponseCase]], original_step: int,
+) -> str | None:
+    """Describe the session on each side and whether it could verify the saved failure."""
+    states = {}
+    reasons = []
+    for i, pair in enumerate(pairs):
+        for side, response in zip(("target_a", "target_b"), pair):
+            state = response.session_replay
+            if state is None and not response.session_auth_rejected:
+                continue
+            tags = states.setdefault(side, [])
+            if state is not None and state not in tags:
+                tags.append(state)
+            if response.session_auth_rejected and "auth_rejected" not in tags:
+                tags.append("auth_rejected")
+            if i <= original_step:
+                if state == "omitted":
+                    reasons.append(f"{side} omitted its recorded session at step {i}")
+                elif response.session_auth_rejected:
+                    reasons.append(f"{side} newly returned HTTP {response.status_code} at step {i}")
+    if states:
+        stats.session_bundles[name] = states
+        print("[session " + ", ".join(f"{side}={'/'.join(tags)}" for side, tags in states.items()) + "]", end=" ")
+    return ", ".join(reasons) or None
+
+
 def _replay_stateless_bundle(
     bundle: "LoadedBundle",
     executor: "Executor",
@@ -2806,6 +2841,11 @@ def _replay_stateless_bundle(
         result = comparator.compare(response_a, response_b, rules, case.operation_id)
 
         # Classify outcome
+        reason = _record_session_replay(stats, bundle.bundle_path.name, [(response_a, response_b)], 0)
+        if result.match and reason:
+            stats.incomplete_bundles.append(bundle.bundle_path.name)
+            print(f"INCOMPLETE: {reason}")
+            return
         if result.match:
             stats.now_match += 1
             stats.fixed_bundles.append(bundle.bundle_path.name)
@@ -2872,6 +2912,9 @@ def _replay_chain_bundle(
         step_diffs: list[ComparisonResult] = []
         mismatch_found = False
 
+        session_sides = set()
+        recorded_denials = bundle.original_diff.get("session_auth_denials", [])
+
         def on_step(response_a, response_b) -> bool:
             nonlocal mismatch_found
             step_idx = len(step_diffs)
@@ -2881,20 +2924,40 @@ def _replay_chain_bundle(
             result = comparator.compare(response_a, response_b, rules, op_id)
             step_diffs.append(result)
 
+            for side, response in enumerate((response_a, response_b)):
+                if response.session_replay in ("restored", "configured"):
+                    session_sides.add(side)
+                if (side in session_sides and response.status_code in (401, 403)
+                        and isinstance(recorded_denials, list) and step_idx < len(recorded_denials)):
+                    original = recorded_denials[step_idx]
+                    if isinstance(original, list) and len(original) == 2 and original[side] is False:
+                        response.session_auth_rejected = True
+
             if not result.match:
                 mismatch_found = True
                 return False  # Stop chain execution
+            if response_a.session_auth_rejected or response_b.session_auth_rejected:
+                return False
             return True
 
         # Execute chain
         execution_a, execution_b = executor.execute_chain(chain, on_step=on_step)
 
         # Classify outcome
+        original_step = bundle.original_diff.get("mismatch_step")
+        reason = _record_session_replay(
+            stats, bundle.bundle_path.name,
+            ((a.response, b.response) for a, b in zip(execution_a.steps, execution_b.steps)),
+            original_step if isinstance(original_step, int) else len(step_diffs),
+        )
+        if not mismatch_found and reason:
+            stats.incomplete_bundles.append(bundle.bundle_path.name)
+            print(f"  INCOMPLETE: {reason}")
+            return
         if not mismatch_found:
             note = "all steps"
             if len(step_diffs) < len(chain.steps):
                 message = _incomplete_chain_message(chain, len(step_diffs))
-                original_step = bundle.original_diff.get("mismatch_step")
                 if not isinstance(original_step, int) or not 0 <= original_step < len(step_diffs):
                     stats.incomplete_bundles.append(bundle.bundle_path.name)
                     print(f"  INCOMPLETE: {bundle.bundle_path.name}: {message}")

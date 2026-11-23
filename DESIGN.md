@@ -286,14 +286,25 @@ Date: 20260108
 
 Users define which fields contain secrets via JSONPath in config. No automatic detection. Redaction applies when writing artifacts. Users know their sensitive fields better than heuristics.
 
-Stateless explore reuses a cookie jar per target. Replay saves the effective
-Cookie header when the jar changes what a target receives. The wire value
-preserves ordering and duplicate names from different cookie paths. Saving
-only the selected header keeps unrelated jar entries out of the bundle.
-Both the cookie's name and its request/response header representations are
-eligible for redaction. A redacted dependency requires an explicit Cookie
-header on replay so that matching authentication failures cannot mark it fixed.
-Target-configured headers continue to come from the current configuration.
+Explore keeps a session per target across standalone cases and chains. Clearing
+the jar at every boundary would make existing session-based workflows exercise
+anonymous requests, sometimes producing matching authentication failures on both
+targets. Replay instead starts a fresh jar for each target and bundle. A chain
+can renew and delete its own cookies while it runs.
+
+Bundles identify the boundary cookies actually sent at each step. Saving their
+values is opt-in because artifacts are shared and earlier matching requests
+could have established an authenticated session. Storage uses the cookie jar’s
+selection fields and original order. This preserves duplicate names and scoped
+cookies alongside fresh values issued by the chain. Target-configured Cookie
+headers come from the current configuration.
+
+A recorded session can expire in the application while its cookie still looks
+valid to an HTTP client. Replay labels the session context and treats a new
+HTTP 401 or 403 as inconclusive for a matching response. Application-specific
+denials returned as HTTP 200 can require inspection of the response or a fresh
+credential. An omitted session also prevents an automatic `FIXED` verdict,
+unless the caller explicitly declares inherited cookies irrelevant.
 
 ---
 

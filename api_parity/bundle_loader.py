@@ -288,6 +288,8 @@ def load_bundle(
             with open(case_path, encoding="utf-8") as f:
                 case_data = json.load(f)
             request_case = RequestCase.model_validate(case_data)
+            if request_case.session_cookies is None:
+                request_case.session_cookies = {}
         except json.JSONDecodeError as e:
             raise BundleLoadError(f"Invalid JSON in case.json: {e}") from e
         except Exception as e:
@@ -301,6 +303,9 @@ def load_bundle(
             with open(chain_path, encoding="utf-8") as f:
                 chain_data = json.load(f)
             chain_case = ChainCase.model_validate(chain_data)
+            for step in chain_case.steps:
+                if step.request_template.session_cookies is None:
+                    step.request_template.session_cookies = {}
         except json.JSONDecodeError as e:
             raise BundleLoadError(f"Invalid JSON in chain.json: {e}") from e
         except Exception as e:

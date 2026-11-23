@@ -30,9 +30,9 @@ from api_parity.models import (
     ChainStepExecution,
     RequestCase,
     ResponseCase,
-    SessionCookieHeader,
     TargetConfig,
 )
+from api_parity.session_cookies import BundleCookies
 from api_parity.path_rendering import decode_path_value, render_path
 from api_parity.xml_body import dict_to_xml, xml_to_dict
 
@@ -113,30 +113,6 @@ def _sanitize_header_value(value: str) -> str:
     return value.encode('ascii', errors='replace').decode('ascii')
 
 
-def _cookie_scope(url: httpx.URL) -> str:
-    # A recorded wire header no longer has the jar's domain, path and Secure
-    # rules. Bind it to the original endpoint without duplicating URL secrets.
-    endpoint = url.copy_with(username=None, password=None, query=None, fragment=None)
-    return hashlib.sha256(str(endpoint).encode()).hexdigest()
-
-
-def _has_cookie_header(client: httpx.Client, request: RequestCase) -> bool:
-    return "cookie" in client.headers or any(
-        name.lower() == "cookie" and values for name, values in request.headers.items()
-    )
-
-
-def _inherited_cookie(case: RequestCase, sent: httpx.Request) -> SessionCookieHeader | None:
-    if "cookie" not in sent.headers:
-        return None
-    value = sent.headers["cookie"]
-    if case.cookies:
-        explicit = httpx.Request(case.method, sent.url, cookies=case.cookies)
-        if value == explicit.headers.get("cookie"):
-            return None
-    return SessionCookieHeader(scope=_cookie_scope(sent.url), value=value)
-
-
 class Executor:
     """Executes requests against two targets and captures responses.
 
@@ -160,6 +136,7 @@ class Executor:
         operation_timeouts: dict[str, float] | None = None,
         link_fields: LinkFields | None = None,
         requests_per_second: float | None = None,
+        *, ignore_session_cookies: bool = False,
     ) -> None:
         """Initialize the executor.
 
@@ -172,7 +149,9 @@ class Executor:
                          for variable extraction during chain execution.
             requests_per_second: Maximum requests per second (rate limit).
                                  If None, no rate limiting is applied.
+            ignore_session_cookies: Treat a saved bundle's inherited cookies as irrelevant on replay.
         """
+        self._ignore_session_cookies = ignore_session_cookies
         self._target_a = target_a
         self._target_b = target_b
         self._default_timeout = default_timeout
@@ -285,36 +264,11 @@ class Executor:
         """
         timeout = self._get_timeout(request.operation_id)
 
-        # Resolve both saved cookie headers before sending either request, which may be a POST.
-        case_a, cookie_a = self._stateless_request(request, self._client_a, "target_a")
-        case_b, cookie_b = self._stateless_request(request, self._client_b, "target_b")
-        response_a = self._execute_single(self._client_a, case_a, timeout, "Target A", stateless=True)
-        response_b = self._execute_single(self._client_b, case_b, timeout, "Target B", stateless=True)
-        if cookie_a is not None:
-            response_a._session_cookie = cookie_a
-        if cookie_b is not None:
-            response_b._session_cookie = cookie_b
-
+        session_a = BundleCookies.for_cases(self._client_a, [request], "target_a", self._ignore_session_cookies)
+        session_b = BundleCookies.for_cases(self._client_b, [request], "target_b", self._ignore_session_cookies)
+        response_a = self._execute_single(self._client_a, request, timeout, "Target A", session=session_a)
+        response_b = self._execute_single(self._client_b, request, timeout, "Target B", session=session_b)
         return response_a, response_b
-
-    @staticmethod
-    def _stateless_request(
-        case: RequestCase, client: httpx.Client, side: str
-    ) -> tuple[RequestCase, SessionCookieHeader | None]:
-        if case.session_cookies is None or side not in case.session_cookies:
-            return case, None
-        if _has_cookie_header(client, case):
-            return case, None
-        cookie = case.session_cookies[side]
-        if cookie is None:
-            raise RequestError(f"{side} session cookie was redacted. Supply a Cookie header for this target.")
-        url = client.build_request(case.method, _percent_encode_control_chars(case.rendered_path)).url
-        if _cookie_scope(url) != cookie.scope:
-            raise RequestError(
-                f"{side} session cookie belongs to a different endpoint. Supply a Cookie header for this target."
-            )
-        headers = {**case.headers, "cookie": [cookie.value]}
-        return case.model_copy(update={"headers": headers}), cookie
 
     def execute_chain(
         self,
@@ -344,6 +298,10 @@ class Executor:
         steps_b: list[ChainStepExecution] = []
         extracted_vars_a: dict[str, Any] = {}
         extracted_vars_b: dict[str, Any] = {}
+
+        templates = [step.request_template for step in chain.steps]
+        session_a = BundleCookies.for_cases(self._client_a, templates, "target_a", self._ignore_session_cookies)
+        session_b = BundleCookies.for_cases(self._client_b, templates, "target_b", self._ignore_session_cookies)
 
         for step in chain.steps:
             link = step.link_source or {}
@@ -376,10 +334,10 @@ class Executor:
 
             # Execute against both targets
             response_a = self._execute_single(
-                self._client_a, request_a, timeout, "Target A"
+                self._client_a, request_a, timeout, "Target A", session=session_a
             )
             response_b = self._execute_single(
-                self._client_b, request_b, timeout, "Target B"
+                self._client_b, request_b, timeout, "Target B", session=session_b
             )
 
             # Extract variables from each target's own response
@@ -817,7 +775,7 @@ class Executor:
         request: RequestCase,
         timeout: float,
         target_name: str,
-        *, stateless: bool = False,
+        *, session: BundleCookies | None = None,
     ) -> ResponseCase:
         """Execute a request against a single target.
 
@@ -826,7 +784,7 @@ class Executor:
             request: The request to execute.
             timeout: Request timeout in seconds.
             target_name: Name for error messages.
-            stateless: Capture or restore session cookies for a standalone case.
+            session: Cookie state for the enclosing standalone case or chain.
 
         Returns:
             ResponseCase with the response.
@@ -941,17 +899,14 @@ class Executor:
                 cookies=request.cookies or None,
                 timeout=timeout,
             )
-            uses_jar = stateless and not _has_cookie_header(client, request)
-            if uses_jar and request.session_cookies is not None:
-                # This bundle had no inherited Cookie on this side. Remove cookies
-                # introduced by earlier replay bundles and retain the case's own cookies.
-                prepared = client.build_request(**request_args)
-                prepared.headers.pop("cookie", None)
-                if request.cookies:
-                    httpx.Cookies(request.cookies).set_cookie_header(prepared)
-                http_response = client.send(prepared)
-            else:
+            if session is None:
                 http_response = client.request(**request_args)
+            else:
+                prepared = client.build_request(**request_args)
+                origin, used, explicit = session.prepare(client, request, prepared)
+                http_response = client.send(prepared)
+                if session.replay:
+                    session.jar.extract_cookies(http_response)
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
 
@@ -972,9 +927,8 @@ class Executor:
             ) from e
 
         response = self._convert_response(http_response, elapsed_ms)
-        if uses_jar and request.session_cookies is None:
-            # The response may already have rotated or deleted the cookie in the jar.
-            response._session_cookie = _inherited_cookie(request, http_response.request)
+        if session is not None:
+            session.finish(request, response, origin, used, explicit)
         return response
 
     def _convert_response(
