@@ -887,3 +887,40 @@ def test_dangling_pointer_preserves_sibling_validation_and_is_reported_by_lint(t
     assert [(v.path, v.violation_type) for v in result.violations] == [("$.child.id", "wrong_type")]
     messages = [m.message for m in SpecLinter(path).lint().errors if m.code == "missing_response_reference"]
     assert messages == [f"Missing response reference {missing}"]
+
+
+def test_schema_selection_uses_most_specific_matching_content(tmp_path):
+    def declared(kind):
+        return {"schema": {"type": kind}}
+
+    content = {
+        "*/*": declared("boolean"),
+        "text/*": declared("string"),
+        "text/plain": declared("integer"),
+        'TEXT/PLAIN; profile="A;B"; charset=utf-8': declared("array"),
+        "text/html": {},
+        "application/json": {"schema": {"type": "object", "properties": {"id": {}}}},
+    }
+    spec = {"paths": {"/x": {"get": {"operationId": "x", "responses": {
+        "2XX": {"$ref": "#/components/responses/Success"},
+        "204": {"description": "No Content"},
+        "400": {"content": {"application/json": declared("string")}},
+    }}}}, "components": {"responses": {"Success": {"content": content}}}}
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(spec))
+    validator = SchemaValidator(path)
+    for media, valid, invalid in [
+        ('text/plain; charset=UTF-8; profile="A;B"', [], 1),
+        ('text/plain; charset=utf-8; profile="a;b"', 1, []),
+        ("Text/Plain; charset=UTF-8", 1, "no"),
+        ("text/csv", "yes", 1),
+        ("image/example", True, 1),
+    ]:
+        assert validator.validate_response(valid, "x", 200, media).valid
+        assert not validator.validate_response(invalid, "x", 200, media).valid
+
+    assert validator.get_extra_fields({"id": 1, "extra": 2}, "x", 200) == ["$.extra"]
+    assert validator.get_extra_fields({"id": 1}, "x", 200, "text/html") == []
+    assert not validator.has_schema("x", 400, "application/vnd.other+json")
+    assert not validator.has_schema("x", 200, "text/html")
+    assert not validator.has_schema("x", 204, "application/json")

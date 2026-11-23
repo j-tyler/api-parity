@@ -373,11 +373,15 @@ class Comparator:
         Returns:
             Tuple of (ComponentResult, extra_fields_a, extra_fields_b).
         """
+        def validate(response: ResponseCase):
+            media = self._get_header_value(response.headers, "content-type")
+            return self._schema_validator.validate_response_locations(
+                response.body, operation_id, response.status_code, media if isinstance(media, str) else None
+            )
+
         differences: list[FieldDifference] = []
         # Validate response A
-        violations_a, extra_fields_a = self._schema_validator.validate_response_locations(
-            response_a.body, operation_id, response_a.status_code
-        )
+        violations_a, extra_fields_a = validate(response_a)
         for violation in violations_a:
             differences.append(
                 FieldDifference(
@@ -389,9 +393,7 @@ class Comparator:
             )
 
         # Validate response B
-        violations_b, extra_fields_b = self._schema_validator.validate_response_locations(
-            response_b.body, operation_id, response_b.status_code
-        )
+        violations_b, extra_fields_b = validate(response_b)
         for violation in violations_b:
             differences.append(
                 FieldDifference(

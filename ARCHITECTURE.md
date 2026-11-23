@@ -329,8 +329,10 @@ secrets:
 ```python
 class SchemaValidator:
     def __init__(self, spec_path: Path): ...
-    def validate_response(self, body, operation_id, status_code) -> ValidationResult: ...
+    def validate_response(self, body, operation_id, status_code, content_type=None) -> ValidationResult: ...
 ```
+
+Explore and replay select the response schema separately for each target using its status and Content-Type. The most specific declared media range wins, including matching parameters. With no Content-Type, the validator defaults to `application/json` for existing Python callers. A response with no matching declaration receives no body schema check. Configured comparison rules still apply.
 
 Uses `jsonschema` library. Extra fields with `additionalProperties: false` are violations.
 

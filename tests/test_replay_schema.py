@@ -280,3 +280,45 @@ def test_identical_snapshots_parse_once_per_run(tmp_path, replay_env, monkeypatc
                                 "--out", str(tmp_path / "out"), "--target-a", "a",
                                 "--target-b", "b", *flags])) == 0
     assert len(calls) == 1
+
+
+def test_explore_and_replay_validate_each_negotiated_representation(
+    tmp_path, monkeypatch, fixture_cel_evaluator_path,
+):
+    import httpx
+
+    spec = write_spec(tmp_path / "spec.json")
+    doc = json.loads(spec.read_bytes())
+    content = doc["paths"]["/items"]["get"]["responses"]["200"]["content"]
+    content["application/vnd.example+json"] = content.pop("application/json")
+    content["text/plain"] = {"schema": {"type": "string", "enum": ["ready"]}}
+    spec.write_text(json.dumps(doc))
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"targets": {k: {"base_url": f"http://{k}"} for k in ("a", "b")},
+                                 "comparison_rules": "rules.json"}))
+    (tmp_path / "rules.json").write_text(json.dumps({"default_rules": {}}))
+    value = "one"
+
+    def respond(request):
+        if request.url.host == "a":
+            return httpx.Response(200, headers={"Content-Type": 'Text/Plain; profile="json"'},
+                                  content=b"ready")
+        return httpx.Response(200, headers={"Content-Type": "application/vnd.example+json; charset=utf-8"},
+                              json={"id": value})
+
+    monkeypatch.setattr(Executor, "_build_client_kwargs", lambda self, config, timeout: {
+        "base_url": config.base_url, "transport": httpx.MockTransport(respond),
+    })
+    out = tmp_path / "explore"
+    assert dispatch(parse_args(["explore", "--spec", str(spec), "--config", str(config),
+                                "--target-a", "a", "--target-b", "b", "--out", str(out)])) == 0
+    bundle, = discover_bundles(out)
+    assert json.loads((bundle / "target_a.json").read_text())["response"]["body"] == "ready"
+    diff = json.loads((bundle / "diff.json").read_text())
+    assert diff["mismatch_type"] == "schema_violation"
+    violation, = diff["details"]["schema"]["differences"]
+    assert (violation["path"], violation["target_b"]) == ("$.id", "<violation: wrong_type>")
+    spec.unlink()
+    assert replay(config, out, tmp_path / "persistent")["still_mismatch"] == 1
+    value = 1
+    assert replay(config, out, tmp_path / "fixed")["now_match"] == 1

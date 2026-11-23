@@ -1000,16 +1000,16 @@ class Executor:
         body: Any = None
         body_base64: str | None = None
 
-        content_type = response.headers.get("content-type", "")
+        content_type = response.headers.get("content-type", "").partition(";")[0].strip().lower()
 
         if response.content:
-            if "json" in content_type.lower():
+            if "json" in content_type:
                 try:
                     body = response.json()
                 except Exception:
                     # Not valid JSON despite content-type
                     body_base64 = base64.b64encode(response.content).decode("ascii")
-            elif "xml" in content_type.lower():
+            elif "xml" in content_type:
                 try:
                     body = xml_to_dict(response.content)
                 except Exception:

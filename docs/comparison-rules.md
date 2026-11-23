@@ -35,6 +35,14 @@ Each rule set can specify:
 }
 ```
 
+## Response schema selection
+
+Explore and replay use each target’s response status and `Content-Type` to select its
+OpenAPI schema. For example, an endpoint can declare an integer `id` in
+`application/vnd.example+json` and a string for `text/plain`. Each response is
+checked against its own declaration. An exact type takes precedence over
+`text/*` or `*/*`. When no declaration matches, configured comparison rules still run.
+
 ## Fields outside the response schema
 
 For each object, including objects inside arrays, the OpenAPI schema controls which
