@@ -577,7 +577,7 @@ Date: 20260216
 3. `_apply_link_overrides()` overrides the fuzz-generated path parameter, query parameter, or header values in the request template with the resolved values, then re-renders the path.
 4. A linked value beginning with `/` is a URI path regardless of its source. Location and Content-Location headers can also supply relative URI paths. The executor strips leading slashes and preserves path separators and existing escapes. A later `$request.path` link reuses the same interpretation on each target. Other linked IDs occupy one segment: `team/42` becomes `team%2F42`, `a#b` becomes `a%23b`, and literal `a%23b` becomes `a%2523b`.
 5. Each target tracks the prior step's request for `$request.path/header` resolution.
-6. The chain breaks when link resolution fails for BOTH targets (source step returned errors, no variables extracted — continuing would produce noise).
+6. Stop before sending the linked request when neither target resolves any binding, or when a linked path expression has no value on either target. If only one target resolves a binding, retain the existing per-target comparison.
 
 **Why not fix `_apply_variables` instead:** `_apply_variables` matches by pattern (`{var_name}` in value) or identity (value == var_name). Neither works when the value is a random UUID and the variable key is `"id"` — there's no syntactic relationship. The fix requires semantic knowledge from `link_source.parameters` to map parameter names to expressions to extracted variable keys. This is a fundamentally different operation from placeholder substitution.
 
@@ -668,9 +668,8 @@ Merge only accepts explore output directories. Replay output (detected by `repla
 
 ## Blocked chain links during explore and replay
 
-Explore measures agreement across the planned chain. If neither target resolves
-any parameter of a required link, the compared prefix alone cannot establish a
-chain match. Count this as incomplete. A transport exception still counts as an
+Explore measures agreement across the planned chain. If neither target resolves any link parameter, or both lack the same
+linked path value, the compared prefix alone cannot establish a chain match. Count this as incomplete. A transport exception still counts as an
 error. The chain log preserves the plan and identifies steps that were compared.
 Coverage backfill is based on generated chains, so a blocked execution does not
 schedule extra standalone requests.

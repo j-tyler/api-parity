@@ -13,8 +13,8 @@ def test_chain_outcomes_depend_on_steps_actually_compared(
 ):
     # Keep link extraction, execution, comparison and bundle replay real.
     # Fix the generated chain and the transport responses for reproducibility.
-    operations = [("createItem", "/items"), ("getItem", "/items/{id}"), ("finish", "/finish/{child}")]
-    link = {"operationId": "getItem", "parameters": {"id": "$response.body#/id"}}
+    operations = [("createItem", "/items"), ("getItem", "/items/{id}/owners/{owner}"), ("finish", "/finish/{child}")]
+    link = {"operationId": "getItem", "parameters": {"id": "$response.body#/id", "owner": "$response.body#/owner"}}
     child = {"operationId": "finish", "parameters": {"child": "$response.body#/child_id"}}
     paths = {}
     steps = []
@@ -27,10 +27,10 @@ def test_chain_outcomes_depend_on_steps_actually_compared(
         paths[path] = {"get": {"operationId": op, "responses": {"200": response}}}
         path_params = {}
         if index > 0:
-            param = "id" if index == 1 else "child"
-            path_params[param] = "seed"
+            path_params = dict.fromkeys(("id", "owner") if index == 1 else ("child",), "seed")
             paths[path]["get"]["parameters"] = [
                 {"in": "path", "name": param, "required": True, "schema": {"type": "string"}}
+                for param in path_params
             ]
         request = RequestCase(case_id=op, operation_id=op, method="GET",
                               path_template=path, rendered_path=path.format(**path_params),
@@ -64,6 +64,8 @@ def test_chain_outcomes_depend_on_steps_actually_compared(
         if mode == "later mismatch" and request.operation_id == "finish" and target_name == "Target B":
             status = 404
         body = {"id": "live"} if mode != "blocked" else {}
+        if request.operation_id == "createItem" and mode not in ("blocked", "missing owner"):
+            body["owner"] = "owner-live"
         if request.operation_id == "getItem" and mode != "tail blocked":
             body["child_id"] = "child"
         return ResponseCase(status_code=status, body=body, elapsed_ms=1)
@@ -102,6 +104,13 @@ def test_chain_outcomes_depend_on_steps_actually_compared(
     assert summary["errors"] == 0 and summary["fixed_bundles"] == [] and summary["now_match"] == 0
     output = capsys.readouterr().out
     assert "compared 1/3 steps. Step 1 (getItem)" in output and "$response.body#/id" in output
+
+    mode = "missing owner"
+    assert run("explore", tmp_path / "partial_explore", *explore_flags)["chain_incomplete"] == 1
+    assert calls == ["createItem"] * 2
+    result = run("replay", tmp_path / "partial_replay", *replay_flags)
+    assert result["incomplete"] == 1 and result["now_match"] == 0
+    assert calls == ["createItem"] * 2
 
     mode = "tail blocked"
     result = run("replay", tmp_path / "verified_prefix", *replay_flags)

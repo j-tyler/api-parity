@@ -572,6 +572,29 @@ class TestChainLinkResolution:
         assert exec_a.steps[0].step_index == 0
         assert exec_b.steps[0].step_index == 0
 
+    @pytest.mark.parametrize(("binding", "expression", "expected_reads"), [
+        ("owner", "$response.header.Location", 0),
+        ("path.owner", "$response.header.Location", 0),
+        ("owner", "prefix-{$response.header.Location}", 0),
+        ("query.owner", "$response.header.Location", 2),
+        ("owner", "fixed-owner", 2),
+    ])
+    def test_partial_link_requires_its_live_path_bindings(
+        self, executor, binding, expression, expected_reads,
+    ):
+        chain = _make_two_step_chain()
+        step = chain.steps[1]
+        step.request_template.path_template = "/widgets/{widget_id}/owners/{owner}"
+        step.request_template.path_parameters["owner"] = "fixed-owner"
+        step.link_source["parameters"][binding] = expression
+        response = ResponseCase(status_code=200, body={"id": "live"}, elapsed_ms=1)
+        with patch.object(executor, "_execute_single", return_value=response) as send:
+            executor.execute_chain(chain)
+
+        assert send.call_count == 2 + expected_reads
+        for call in send.call_args_list[2:]:
+            assert call.args[1].rendered_path == "/widgets/live/owners/fixed-owner"
+
     def test_asymmetric_resolution_one_target_resolves(self, executor):
         """Chain continues when one target resolves and the other doesn't.
 

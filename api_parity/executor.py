@@ -33,7 +33,7 @@ from api_parity.models import (
     TargetConfig,
 )
 from api_parity.session_cookies import BundleCookies
-from api_parity.path_rendering import decode_path_value, render_path
+from api_parity.path_rendering import decode_path_value, path_parameter_names, render_path
 from api_parity.xml_body import dict_to_xml, xml_to_dict
 
 
@@ -321,6 +321,17 @@ class Executor:
                 overrides_b = self._resolve_link_overrides(link, source_b.extracted, source_b.request)
                 if not overrides_a and not overrides_b:
                     break
+                # A resolved sibling (e.g. item ID) cannot supply a missing
+                # path binding (e.g. owner). Preserve one-sided resolution.
+                unresolved = linked_parameters.keys() - overrides_a.keys() - overrides_b.keys()
+                if unresolved:
+                    slots = path_parameter_names(step.request_template.path_template)
+                    path_keys = set(slots) | {f"path.{slot}" for slot in slots}
+                    expressions = (linked_parameters[key] for key in unresolved & path_keys)
+                    # Literal OpenAPI link values have no live dependency.
+                    if any(isinstance(expr, str) and (expr.startswith("$") or "{$" in expr)
+                           for expr in expressions):
+                        break
 
             # Ordinary placeholders may use accumulated variables. Explicit link
             # parameters belong to their source, and resolved values are literal.

@@ -138,7 +138,8 @@ api-parity merge \
 
 **Replay classifications:** `FIXED` (now matches), `STILL MISMATCH` (same failure), `DIFFERENT MISMATCH` (fails differently)
 
-If a link cannot be resolved for either target, explore counts the chain in
+If neither target resolves any link parameter, or both lack the same linked path
+value, explore stops before sending that step and counts the chain in
 `chain_incomplete`. Replay reports `INCOMPLETE` and names the bundle in
 `incomplete_bundles` if it stopped before comparing the saved failing step.
 If that step now passes and a later link blocks, replay reports `FIXED` and

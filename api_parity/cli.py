@@ -2144,8 +2144,8 @@ def _incomplete_chain_message(chain: ChainCase, compared: int) -> str:
     step = chain.steps[compared]
     parameters = (step.link_source or {}).get("parameters", {})
     return (f"compared {compared}/{len(chain.steps)} steps. Step {compared} "
-            f"({step.request_template.operation_id}): no link parameter resolved "
-            f"for either target. Parameters: {parameters!r}")
+            f"({step.request_template.operation_id}): link bindings were insufficient to execute the step. "
+            f"Parameters: {parameters!r}")
 
 
 def _run_stateful_explore(
