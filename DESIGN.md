@@ -524,6 +524,8 @@ The Draft 4 validator applies the following OpenAPI 3.0 nullable conversions whe
 1. `nullable` + `type`: `{"type": "string", "nullable": true}` → `{"type": ["string", "null"]}`
 2. `nullable` without `type` (composition): `{"nullable": true, "allOf": [...]}` → `{"anyOf": [{allOf: [...]}, {"type": "null"}]}`
 
+OpenAPI 3.1 and 3.2 use a dialect-selected validator. The default OpenAPI dialect accepts the legacy nullable and boolean-bound spellings for compatibility, while enforcing adjacent assertions such as `const`. Lint and preflight warn about these spellings. The 3.0 response projection for required write-only fields applies only to 3.0 documents. In later versions the response schema’s explicit required list governs presence.
+
 **Alternatives rejected:**
 - `openapi-schema-validator` library: Adds a new dependency for one keyword. The rest of `Draft4Validator` works fine for our needs.
 - Subclassing `Draft4Validator` with custom `TYPE_CHECKER`: More invasive, harder to reason about, and the type checker approach doesn't handle the composition case cleanly.

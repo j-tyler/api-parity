@@ -56,15 +56,33 @@ for that representation.
 
 ### Schema version and response direction
 
-OpenAPI 3.1 response schemas use JSON Schema 2020-12 by default. For example,
+OpenAPI 3.1 and 3.2 response schemas use JSON Schema 2020-12 by default. For example,
 if `state` has `const: ready`, a target returning `"corrupted"` produces a
 schema violation at `$.state`. A supported `jsonSchemaDialect` selects a
 different default draft, and a schema resource can override it with `$schema`.
+If a response uses an unsupported dialect, explore stops before sending
+requests. Both `lint-spec` and `explore --validate` identify the dialect.
+
+For existing contracts, the default OpenAPI dialect also accepts the 3.0
+spellings `nullable: true` and boolean `exclusiveMinimum` / `exclusiveMaximum`.
+For example, `minimum: 0` with `exclusiveMinimum: true` accepts `0.5` and
+rejects `0`. Lint and preflight warn about these spellings. For new 3.1 and
+3.2 schemas, express null in the type or composition and use numeric
+exclusive bounds. Independent constraints such as `const` and `enum` still
+apply to a null value. Selecting an explicit standard JSON Schema dialect
+uses that draft’s keyword meanings. For a draft that requires numeric
+exclusive bounds, a boolean bound is a contract error.
 
 In OpenAPI 3.0, a required property marked `writeOnly: true` can be omitted
 from a response. For example, a response can omit a required input password
 while still having to provide a required, read-only `id`. If the response
 includes the password, its declared type and other constraints still apply.
+
+In OpenAPI 3.1 and 3.2, the response validator treats `writeOnly` as an
+annotation. A password explicitly listed in the response schema’s `required`
+array must be present. To require it only on input, place that requirement in
+the request schema and omit it from the response’s required list.
+
 Replay applies the same checks using the bundle’s OpenAPI snapshot or the
 schema supplied with `--spec`.
 

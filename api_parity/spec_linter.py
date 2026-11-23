@@ -16,7 +16,7 @@ from typing import Any
 import yaml
 
 from api_parity.case_generator import LINK_BODY_PATTERN, LINK_HEADER_PATTERN
-from api_parity.schema_validator import missing_response_references
+from api_parity.schema_validator import check_response_contract
 
 
 @dataclass
@@ -221,8 +221,11 @@ class SpecLinter:
         result = LintResult()
         result.total_operations = len(self._operation_ids)
 
-        for ref in missing_response_references(self._spec):
-            result.add(LintMessage("error", "missing_response_reference", f"Missing response reference {ref}"))
+        contract = check_response_contract(self._spec)
+        for code, message in contract.errors():
+            result.add(LintMessage("error", code, message))
+        for code, message in contract.warnings():
+            result.add(LintMessage("warning", code, message))
 
         # Run all checks
         self._check_link_connectivity(result)

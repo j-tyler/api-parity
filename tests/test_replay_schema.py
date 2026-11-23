@@ -396,3 +396,24 @@ def test_openapi31_const_explore_and_replay_use_the_saved_dialect(tmp_path, monk
     assert replay(config, out, tmp_path / "persistent")["still_mismatch"] == 1
     bodies[1] = {"id": 42}
     assert replay(config, out, tmp_path / "fixed")["now_match"] == 1
+
+
+def test_unknown_dialect_is_one_contract_error_before_sending_requests(tmp_path, replay_env, capsys):
+    from api_parity.spec_linter import SpecLinter
+
+    config, _, send = replay_env
+    path = write_spec(tmp_path / "spec.json")
+    document = json.loads(path.read_bytes())
+    document["openapi"] = "3.1.0"
+    document["components"]["schemas"]["Item"]["$schema"] = "urn:unknown"
+    document["paths"]["/other"] = json.loads(json.dumps(document["paths"]["/items"]))
+    document["paths"]["/other"]["get"]["operationId"] = "readOther"
+    path.write_text(json.dumps(document))
+    errors = [e.message for e in SpecLinter(path).lint().errors if e.code == "unsupported_response_dialect"]
+    assert errors == ["Unsupported response schema dialect: urn:unknown"]
+    for flags in (["--validate"], []):
+        assert dispatch(parse_args(["explore", "--spec", str(path), "--config", str(config),
+                                    "--target-a", "a", "--target-b", "b", "--out", str(tmp_path / "run"), *flags])) == 1
+        captured = capsys.readouterr()
+        assert (captured.out + captured.err).count(errors[0]) == 1
+    send.assert_not_called()
