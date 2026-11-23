@@ -515,6 +515,9 @@ class ArtifactWriter:
         """Encode only request payloads, after applying artifact redaction."""
         if not isinstance(request, dict):
             return
+        if request.get("body") == "[REDACTED]" and request.get("body_base64") is not None:
+            # Whole-body redaction supersedes the original encoded payload.
+            request["body_base64"] = None
         if isinstance(request.get("body"), (list, dict)):
             paths = []
 

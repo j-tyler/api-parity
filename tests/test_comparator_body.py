@@ -621,3 +621,24 @@ class TestBinaryRuleValidation:
         # Implicit PARITY (default) should work
         rules = BodyRules(binary_rule=FieldRule(predefined="exact_match"))
         assert rules.binary_rule.presence == PresenceMode.PARITY
+
+
+def test_explicit_json_null_is_a_present_value(comparator):
+    null = make_response_case(body=None).model_copy(update={"json_body_state": "null"})
+    absent = make_response_case(body=None)
+    assert not comparator.compare(null, absent, OperationRules()).match
+    for presence, expected in [(PresenceMode.REQUIRED, True), (PresenceMode.FORBIDDEN, False)]:
+        rules = OperationRules(body=BodyRules(field_rules={"$": FieldRule(presence=presence)}))
+        assert comparator.compare(null, null, rules).match is expected
+
+
+def test_invalid_json_cannot_satisfy_a_json_field_rule(comparator):
+    invalid = make_response_case(body_base64="eA==").model_copy(update={"json_body_state": "invalid"})
+    field_rules = {"$": FieldRule(presence=PresenceMode.REQUIRED)}
+    binary_rule = FieldRule(predefined="exact_match")
+    for rules in [OperationRules(body=BodyRules(field_rules=field_rules)),
+                  OperationRules(body=BodyRules(field_rules=field_rules, binary_rule=binary_rule))]:
+        result = comparator.compare(invalid, invalid, rules)
+        assert result.details["body"].differences[0].rule == "invalid_json"
+    assert comparator.compare(invalid, invalid, OperationRules(body=BodyRules(binary_rule=binary_rule))).match
+    assert comparator.compare(invalid, invalid, OperationRules()).match

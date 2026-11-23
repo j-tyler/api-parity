@@ -721,6 +721,10 @@ class TestEdgeCases:
         result = validator.validate_response(None, "listStrictWidgets", 200)
         assert result.valid is True
 
+    def test_explicit_null_is_validated_against_the_schema(self, validator):
+        result = validator.validate_response(None, "listStrictWidgets", 200, json_body_state="null")
+        assert [(v.path, v.violation_type) for v in result.violations] == [("$", "wrong_type")]
+
     def test_empty_object_missing_required(self, validator):
         """Empty object fails when required fields are missing."""
         result = validator.validate_response({}, "listStrictWidgets", 200)

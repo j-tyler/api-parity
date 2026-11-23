@@ -39,7 +39,9 @@ def test_request_body_round_trip(tmp_path, monkeypatch, stateful):
         ("application/json", formatted, None, b'{"name":"{id}"}'),
         ("application/json", None, base64.b64encode(formatted).decode(), formatted),
         ("application/problem+json", binary, None, binary),
-        ("application/json", b"null", None, b""),
+        ("application/json", b"null", None, b"null"),
+        ("application/json", None, None, b""),
+        ("application/json", "null", None, b'"null"'),
         ("text/plain", "b'abc'", None, b"b'abc'"),
     ]
     writer = ArtifactWriter(tmp_path, spec_path=Path(__file__).parent / "fixtures/test_api.yaml")
@@ -71,9 +73,10 @@ def test_request_body_round_trip(tmp_path, monkeypatch, stateful):
             assert case.body == body
 
 
-def test_whole_body_redaction_applies_before_binary_encoding(tmp_path):
+@pytest.mark.parametrize("payload", [{"body": b"sensitive"}, {"body_base64": "bnVsbA=="}])
+def test_whole_body_redaction_applies_before_binary_encoding(tmp_path, payload):
     case = RequestCase(case_id="secret", operation_id="upload", method="POST", path_template="/",
-                       rendered_path="/", body=b"sensitive", media_type="application/octet-stream")
+                       rendered_path="/", media_type="application/octet-stream", **payload)
     writer = ArtifactWriter(tmp_path, SecretsConfig(redact_fields=["$..body"]))
     target = TargetInfo(name="t", base_url="http://t")
     response = ResponseCase(status_code=200, elapsed_ms=1)

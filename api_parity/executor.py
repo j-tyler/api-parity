@@ -65,6 +65,11 @@ _LINK_EXPR_REQUEST_HEADER = re.compile(
 _URL_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 
 
+def _reject_non_json_constant(token: str):
+    # Python's JSON decoder accepts NaN and Infinity unless told otherwise.
+    raise ValueError(f"Invalid JSON constant: {token}")
+
+
 def _response_pointer(body: Any, pointer: str) -> Any:
     """Preserve literal member names accepted by older versions, then try the URI fragment."""
     value = extract_by_jsonpointer(body, pointer)
@@ -880,6 +885,8 @@ class Executor:
                     # Try to parse as JSON; if that fails, send as raw content.
                     try:
                         json_body = json.loads(request.body)
+                        if json_body is None:
+                            content = b"null"
                     except (ValueError, UnicodeDecodeError):
                         content = request.body
                 else:
@@ -1001,14 +1008,17 @@ class Executor:
         body: Any = None
         body_base64: str | None = None
 
+        json_body_state = None
         body_format = response_body_format(response.headers.get("content-type", ""))
 
         if response.content:
             if body_format == "json":
                 try:
-                    body = response.json()
+                    body = response.json(parse_constant=_reject_non_json_constant)
+                    if body is None:
+                        json_body_state = "null"
                 except Exception:
-                    # Not valid JSON despite content-type
+                    json_body_state = "invalid"
                     body_base64 = base64.b64encode(response.content).decode("ascii")
             elif body_format == "xml":
                 try:
@@ -1035,6 +1045,7 @@ class Executor:
             headers=headers,
             body=body,
             body_base64=body_base64,
+            json_body_state=json_body_state,
             elapsed_ms=elapsed_ms,
             http_version=http_version,
         )

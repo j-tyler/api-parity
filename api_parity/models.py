@@ -9,7 +9,7 @@ import base64
 import re
 from copy import deepcopy
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from typing_extensions import Self
 
@@ -122,6 +122,9 @@ def response_body_format(content_type: str) -> str:
     return "binary"
 
 
+JsonBodyState = Literal["null", "invalid"]
+
+
 class ResponseCase(BaseModel):
     """One HTTP response captured from a target.
 
@@ -143,11 +146,19 @@ class ResponseCase(BaseModel):
     )
     body: Any = Field(default=None, description="Body as JSON value if parseable")
     body_base64: str | None = Field(default=None, description="Body as base64 if binary")
+    json_body_state: JsonBodyState | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+        description="Distinguishes an explicit JSON null or a JSON parse failure from absent content",
+    )
     elapsed_ms: float = Field(description="Response time in milliseconds")
     http_version: str = Field(default="1.1", description="Protocol version")
 
     @model_validator(mode="after")
     def check_body_exclusivity(self) -> Self:
+        if self.json_body_state == "null" and (self.body is not None or self.body_base64 is not None):
+            raise ValueError("JSON null cannot also contain a body or binary data")
+        if self.json_body_state == "invalid" and not self.body_base64:
+            raise ValueError("Malformed JSON requires its nonempty bytes in body_base64")
         if self.body is not None and self.body_base64 is not None:
             raise ValueError(
                 f"ResponseCase body and body_base64 are mutually exclusive, "

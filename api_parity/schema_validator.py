@@ -25,7 +25,7 @@ from referencing import Registry
 from referencing.exceptions import Unresolvable
 from referencing.jsonschema import DRAFT4
 
-from api_parity.models import response_body_format
+from api_parity.models import JsonBodyState, response_body_format
 
 
 # =============================================================================
@@ -344,6 +344,7 @@ class SchemaValidator:
         operation_id: str,
         status_code: int,
         content_type: str | None = None,
+        *, json_body_state: JsonBodyState | None = None,
     ) -> ValidationResult:
         """Validate a response body against its OpenAPI schema.
 
@@ -352,16 +353,20 @@ class SchemaValidator:
             operation_id: The operationId of the endpoint.
             status_code: The HTTP status code of the response.
             content_type: The response Content-Type. Defaults to application/json.
+            json_body_state: Use "null" for a parsed JSON null or "invalid" for a parse failure.
 
         Returns:
             ValidationResult with validity status and any violations or extra fields.
         """
-        violations, locations = self.validate_response_locations(body, operation_id, status_code, content_type)
+        violations, locations = self.validate_response_locations(
+            body, operation_id, status_code, content_type, json_body_state=json_body_state,
+        )
         return ValidationResult(valid=not violations, violations=violations,
                                 extra_fields=[field_path(location) for location in locations])
 
     def validate_response_locations(
         self, body: Any, operation_id: str, status_code: int, content_type: str | None = None,
+        *, json_body_state: JsonBodyState | None = None,
     ) -> tuple[list[SchemaViolation], list[FieldLocation]]:
         """Validate and return literal extra-field locations for direct comparison."""
         # Get the schema for this operation+status_code
@@ -374,7 +379,9 @@ class SchemaValidator:
         # Captured XML keeps its root and string leaves for configured field
         # rules. This tree is not an instance of the OpenAPI body schema.
         body_format = response_schema.validation_format(content_type)
-        if body is None or body_format == "xml":
+        if json_body_state == "invalid":
+            return [SchemaViolation("$", "Response body is not valid JSON", "invalid_json")], []
+        if (body is None and json_body_state != "null") or body_format == "xml":
             return [], []
 
         # Validate against schema
