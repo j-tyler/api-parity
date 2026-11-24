@@ -64,6 +64,9 @@ _LINK_EXPR_REQUEST_HEADER = re.compile(
 # via its own percent-encoding, but control characters raise InvalidURL.
 _URL_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 
+# Keep the historical first value for the body's media type and explicit credentials.
+_FIRST_VALUE_REQUEST_HEADERS = frozenset({"content-type", "authorization", "cookie"})
+
 
 def _response_pointer(body: Any, pointer: str) -> Any:
     """Preserve literal member names accepted by older versions, then try the URI fragment."""
@@ -841,18 +844,28 @@ class Executor:
             for value in values:
                 params.append((key, value))
 
-        # Build headers (flatten lists, sanitize non-ASCII per RFC 7230)
-        headers: dict[str, str] = {}
+        headers: dict[str, list[str]] = {}
+        seen_singletons: set[str] = set()
         for key, values in request.headers.items():
-            if values:
-                headers[key] = _sanitize_header_value(values[0])
+            if not values:
+                continue
+            name = key.lower()
+            if name in _FIRST_VALUE_REQUEST_HEADERS:
+                if name in seen_singletons:
+                    continue
+                seen_singletons.add(name)
+                values = values[:1]
+            headers[key] = [_sanitize_header_value(value) for value in values]
 
         # Build body content
         content: bytes | None = None
         json_body: Any = None
 
         content_type_key = next((k for k in headers if k.lower() == "content-type"), "Content-Type")
-        effective_content_type = request.media_type or headers.get(content_type_key, "")
+        if request.media_type:
+            headers.setdefault(content_type_key, [request.media_type])
+        content_type = headers.get(content_type_key, [""])[0]
+        effective_content_type = request.media_type or content_type
         media = effective_content_type.partition(";")[0].lower().strip()
 
         # Header-only callers can supply pre-serialized JSON text or bytes.
@@ -863,12 +876,12 @@ class Executor:
             content = urlencode(_form_fields(request.body)).encode("ascii")
         elif isinstance(request.body, dict) and media in {"multipart/form-data", "multipart/mixed"}:
             header = Message()
-            header["Content-Type"] = headers.get(content_type_key, request.media_type)
+            header["Content-Type"] = content_type
             if header.get_boundary() is None:
                 # Reuse the delimiter for both targets and when the saved case is replayed.
                 boundary = hashlib.sha256(request.case_id.encode()).hexdigest()[:32]
                 header.set_boundary(boundary)
-            headers[content_type_key] = header["Content-Type"]
+            headers[content_type_key][0] = header["Content-Type"]
             parts = [(name, (name, value, "application/octet-stream") if isinstance(value, bytes) else value)
                      for name, value in _form_fields(request.body)]
             content, _ = encode_multipart_formdata(parts, boundary=header.get_boundary())
@@ -920,21 +933,18 @@ class Executor:
         elif request.body_base64 is not None:
             content = base64.b64decode(request.body_base64)
 
-        # Add content-type if specified
-        if request.media_type:
-            headers.setdefault(content_type_key, request.media_type)
-
         # Enforce rate limit before making request
         self._wait_for_rate_limit()
 
         try:
             start_time = time.perf_counter()
 
+            header_fields = [(key, value) for key, values in headers.items() for value in values]
             request_args = dict(
                 method=request.method,
                 url=url,
                 params=params if params else None,
-                headers=headers if headers else None,
+                headers=header_fields or None,
                 content=content,
                 json=json_body,
                 cookies=request.cookies or None,
