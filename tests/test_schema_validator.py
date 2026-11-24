@@ -928,3 +928,205 @@ def test_schema_selection_uses_most_specific_matching_content(tmp_path):
     assert validator.has_schema("x", 400, "application/vnd.other+json")
     assert not validator.has_schema("x", 200, "text/html")
     assert not validator.has_schema("x", 204, "application/json")
+
+
+def response_contract(tmp_path, version, schema, components=None, **settings):
+    spec = {"openapi": version, "components": {"schemas": components or {}}, **settings,
+            "paths": {"/item": {"get": {"operationId": "read", "responses": {
+                "200": {"content": {"application/json": {"schema": schema}}}
+            }}}}}
+    return SchemaValidator(tmp_path / "spec.json", source_bytes=json.dumps(spec).encode())
+
+
+def test_openapi31_checks_constraints_at_each_reference_and_lists_sibling_properties(tmp_path):
+    schema = {"$ref": "#/components/schemas/Alias", "required": ["state"],
+              "properties": {"state": {"const": "ready"}}}
+    components = {"Alias": {"$ref": "#/components/schemas/Base", "properties": {"count": {"exclusiveMinimum": 1}}},
+                  "Base": {"properties": {"id": {"type": "integer"}}}}
+    validator = response_contract(tmp_path, "3.1.0", schema, components)
+    def check(body):
+        return validator.validate_response(body, "read", 200)
+    good = {"id": 1, "state": "ready", "count": 2, "extra": 0}
+    assert check(good).valid
+    assert check(good).extra_fields == ["$.extra"]
+    bad = check({**good, "id": "one", "state": "bad", "count": 1})
+    assert {(v.path, v.violation_type) for v in bad.violations} == {
+        ("$.state", "invalid_const"), ("$.count", "out_of_range"), ("$.id", "wrong_type")}
+
+
+@pytest.mark.parametrize("version", ["3.0.3", "3.1.0", "3.2.0"])
+def test_legacy_nullable_in_openapi_response_dialect(tmp_path, version):
+    validator = response_contract(tmp_path, version, {"type": "string", "nullable": True})
+    assert validator.validate_response(None, "read", 200, json_body_state="null").valid
+
+
+def test_openapi30_write_only_requirements_follow_instance_location(tmp_path):
+    # A shared component supplies required names. Only one use marks input as write-only.
+    components = {"Names": {"required": ["id", "input"]}, "Secret": {"type": "string", "writeOnly": True}}
+    item = {"allOf": [{"$ref": "#/components/schemas/Names"}, {"properties": {
+        "id": {"type": "integer", "readOnly": True}, "input": {"$ref": "#/components/schemas/Secret"}}}]}
+    schema = {"properties": {"rows": {"type": "array", "items": item},
+                             "ordinary": {"$ref": "#/components/schemas/Names"}}}
+    validator = response_contract(tmp_path, "3.0.3", schema, components)
+    def check(rows, ordinary):
+        return validator.validate_response({"rows": rows, "ordinary": ordinary}, "read", 200)
+    assert check([{"id": 1}], {"id": 2, "input": "visible"}).valid
+    result = check([{}, {"id": 1, "input": 0}], {"id": 2})
+    assert {(v.path, v.violation_type) for v in result.violations} == {
+        ("$.rows[0]", "missing_required"), ("$.rows[1].input", "wrong_type"), ("$.ordinary", "missing_required")}
+
+
+def test_response_dialect_override_and_unrecognized_dialect(tmp_path):
+    draft4 = "http://json-schema.org/draft-04/schema#"
+    base = "https://spec.openapis.org/oas/3.1/dialect/base"
+    for schema, default, expected in [
+        ({"const": "ready"}, draft4, True),
+        ({"$schema": base, "const": "ready"}, draft4, False),
+        ({"$schema": draft4, "const": "ready"}, base, True),
+    ]:
+        validator = response_contract(tmp_path, "3.1.0", schema, jsonSchemaDialect=default)
+        assert validator.validate_response("bad", "read", 200).valid is expected
+    with pytest.raises(SchemaExtractionError, match="Unsupported response schema dialect: urn:unknown"):
+        response_contract(tmp_path, "3.1.0", {"$schema": "urn:unknown"})
+    assert response_contract(tmp_path, "3.1.0", {"$schema": base, "const": 1},
+                             {"Unused": {"$schema": "urn:unused"}}, jsonSchemaDialect="urn:overridden"
+                             ).validate_response(1, "read", 200).valid
+
+
+def test_openapi31_lint_visits_tuple_positions_and_ref_siblings(tmp_path):
+    from api_parity.schema_validator import missing_response_references
+
+    missing = "#/components/schemas/Missing"
+    schema = {"$ref": "#/components/schemas/Base", "prefixItems": [{"$ref": missing}, {"const": 42}]}
+    validator = response_contract(tmp_path, "3.1.0", schema, {"Base": {"type": "array"}})
+    result = validator.validate_response(["ignored", 43], "read", 200)
+    assert [(v.path, v.violation_type) for v in result.violations] == [("$[1]", "invalid_const")]
+    assert missing_response_references(json.loads(validator.source_bytes)) == [missing]
+
+
+def test_openapi31_embedded_resource_resolves_its_own_definitions(tmp_path):
+    from api_parity.schema_validator import missing_response_references
+
+    row = {"properties": {"state": {"const": "ready"}}}
+    schema = {"$id": "urn:parity:rows", "$defs": {"Row": row},
+              "prefixItems": [{"$ref": "#/$defs/Row"}], "items": {"type": "string"}}
+    validator = response_contract(tmp_path, "3.1.0", {"$ref": "#/components/schemas/Rows"}, {"Rows": schema})
+    good = validator.validate_response([{"state": "ready", "extra": 1}, "text"], "read", 200)
+    assert good.valid and good.extra_fields == ["$[0].extra"]
+    result = validator.validate_response([{"state": "bad"}, 0], "read", 200)
+    assert {(v.path, v.violation_type) for v in result.violations} == {
+        ("$[0].state", "invalid_const"), ("$[1]", "wrong_type")}
+    assert missing_response_references(json.loads(validator.source_bytes)) == []
+
+
+def test_mixed_openapi_keywords_respect_bounds_composition_and_sibling_assertions(tmp_path):
+    obj = {"type": "object", "required": ["id"]}
+    schema = {"properties": {
+        "legacy": {"nullable": True, "allOf": [{"$ref": "#/components/schemas/Obj"}]},
+        "limited": {"nullable": True, "allOf": [obj], "enum": [{"id": 1}]},
+        "lower": {"minimum": 0, "exclusiveMinimum": True},
+        "upper": {"maximum": 5, "exclusiveMaximum": False},
+        "native": {"exclusiveMinimum": 2, "exclusiveMaximum": 4},
+        "plain": {"$schema": "https://json-schema.org/draft/2020-12/schema", "type": "string", "nullable": True},
+    }}
+    validator = response_contract(tmp_path, "3.1.0", schema, {"Obj": obj})
+    good = {"legacy": None, "limited": {"id": 1}, "lower": 0.5, "upper": 5, "native": 3}
+    assert validator.validate_response(good, "read", 200).valid
+    result = validator.validate_response({"legacy": {}, "limited": None, "lower": 0, "upper": 6,
+                                          "native": 2, "plain": None}, "read", 200)
+    assert {v.path for v in result.violations} == {"$.legacy", "$.limited", "$.lower", "$.upper", "$.native", "$.plain"}
+
+
+@pytest.mark.parametrize(("version", "required"), [("3.0.3", False), ("3.1.0", True), ("3.2.0", True)])
+def test_required_write_only_response_property_by_version(tmp_path, version, required):
+    schema = {"type": "object", "required": ["id", "password"], "properties": {
+        "id": {"type": "integer", "readOnly": True}, "password": {"type": "string", "writeOnly": True},
+    }}
+    validator = response_contract(tmp_path, version, schema)
+    assert validator.validate_response({"id": 1}, "read", 200).valid is (not required)
+    assert validator.validate_response({"id": 1, "password": "value"}, "read", 200).valid
+    assert not validator.validate_response({"password": "value"}, "read", 200).valid
+
+
+def test_repeated_ref_validates_once_per_binding_and_row_values_remain_independent(tmp_path, monkeypatch):
+    components = {"Row": {"properties": {"x": {"$ref": "#/components/schemas/X"}}},
+                  "X": {"type": "integer"}}
+    validator = response_contract(tmp_path, "3.1.0", {"items": {"$ref": "#/components/schemas/Row"}}, components)
+    original = validator._validator_for_schema
+    calls = []
+    def record(schema):
+        calls.append(id(schema))
+        return original(schema)
+    monkeypatch.setattr(validator, "_validator_for_schema", record)
+    result = validator.validate_response([{"x": 1}] * 99 + [{"x": "bad"}], "read", 200)
+    assert [v.path for v in result.violations] == ["$[99].x"]
+    assert len(calls) == 3
+
+
+def test_dialect_preflight_follows_aliases_and_checks_explicit_bounds(tmp_path):
+    with pytest.raises(SchemaExtractionError, match="Unsupported response schema dialect: urn:unknown"):
+        response_contract(tmp_path, "3.1.0", {"$ref": "#/components/schemas/Alias"}, {
+            "Alias": {"$schema": "urn:unknown", "$ref": "#/components/schemas/Value"},
+            "Value": {"type": "number"},
+        })
+    with pytest.raises(SchemaExtractionError, match="exclusiveMinimum must be a number"):
+        response_contract(tmp_path, "3.1.0", {"type": "number", "minimum": 0, "exclusiveMinimum": True},
+                          jsonSchemaDialect="https://json-schema.org/draft/2020-12/schema")
+
+
+def test_lint_reports_each_legacy_keyword_once_for_reachable_responses(tmp_path):
+    from api_parity.spec_linter import SpecLinter
+
+    schema = {"nullable": True, "exclusiveMinimum": True, "minimum": 0}
+    contract = response_contract(tmp_path, "3.2.0", {"properties": {"a": schema, "b": schema}},
+                                 {"Unused": {"exclusiveMaximum": False}})
+    path = tmp_path / "contract.json"
+    path.write_bytes(contract.source_bytes)
+    warnings = [w.message for w in SpecLinter(path).lint().warnings if w.code == "legacy_response_keyword"]
+    assert warnings == ["Response schema uses the OpenAPI 3.0 spelling of exclusiveMinimum.",
+                        "Response schema uses the OpenAPI 3.0 spelling of nullable."]
+
+
+def test_cached_ref_keeps_the_dynamic_scope_of_each_caller(tmp_path):
+    tree = {"$id": "https://example.test/tree", "$dynamicAnchor": "node", "type": "object",
+            "properties": {"children": {"items": {"$ref": "https://example.test/child"}}}}
+    child = {"$id": "https://example.test/child", "$dynamicRef": "https://example.test/tree#node"}
+    def variant(name):
+        return {"$id": f"https://example.test/{name}", "$dynamicAnchor": "node",
+                "$ref": "https://example.test/tree", "required": [name]}
+    schema = {"properties": {"first": {"$ref": "https://example.test/a"},
+                             "second": {"$ref": "https://example.test/b"}}}
+    validator = response_contract(tmp_path, "3.1.0", schema,
+                                  {"Tree": tree, "Child": child, "A": variant("a"), "B": variant("b")})
+    def check(first, second):
+        return validator.validate_response({"first": {"a": 1, "children": [first]},
+                                            "second": {"b": 1, "children": [second]}}, "read", 200)
+    assert check({"a": 1}, {"b": 1}).valid
+    assert {v.path for v in check({"b": 1}, {"a": 1}).violations} == {"$.first.children[0]", "$.second.children[0]"}
+
+
+def test_inline_dialect_switches_preserve_scope_and_ref_sibling_rules(tmp_path):
+    draft4 = "http://json-schema.org/draft-04/schema#"
+    oas = "https://spec.openapis.org/oas/3.1/dialect/base"
+    state = {"$id": "urn:state", "$schema": oas, "$defs": {"Text": {"type": "string"}},
+             "$ref": "#/$defs/Text", "const": "ready"}
+    legacy = {"$schema": draft4, "$ref": "#/components/schemas/Number", "maximum": 0}
+    components = {"Number": {"type": "number"}}
+    schema = {"items": {"properties": {"state": state, "count": legacy}}}
+    validator = response_contract(tmp_path, "3.1.0", schema, components, jsonSchemaDialect=draft4)
+    result = validator.validate_response([{"state": "bad", "count": 1}], "read", 200)
+    assert [(v.path, v.violation_type) for v in result.violations] == [("$[0].state", "invalid_const")]
+    assert validator.validate_response([{"state": "ready", "count": 1}], "read", 200).valid
+
+    # Enter Draft 4 directly from the OpenAPI dialect. Draft 4 ignores $ref siblings.
+    validator = response_contract(tmp_path, "3.1.0", {"properties": {"count": legacy}}, components)
+    assert validator.validate_response({"count": 1}, "read", 200).valid
+    assert not validator.validate_response({"count": "bad"}, "read", 200).valid
+
+
+def test_contains_uses_embedded_openapi_dialect_for_predicate(tmp_path):
+    schema = {"contains": {"$id": "urn:state", "$schema": "https://spec.openapis.org/oas/3.1/dialect/base",
+                           "type": "array", "prefixItems": [{"const": "ready"}]}}
+    validator = response_contract(tmp_path, "3.1.0", schema, jsonSchemaDialect="http://json-schema.org/draft-07/schema#")
+    assert not validator.validate_response([["bad"]], "read", 200).valid
+    assert validator.validate_response([["bad"], ["ready"]], "read", 200).valid

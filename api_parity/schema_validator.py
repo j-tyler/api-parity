@@ -18,12 +18,13 @@ from dataclasses import dataclass, field
 from email.message import Message
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 import yaml
-from jsonschema import Draft4Validator, ValidationError, validators
+from jsonschema import Draft4Validator, Draft201909Validator, Draft202012Validator, ValidationError, validators
 from referencing import Registry
-from referencing.exceptions import Unresolvable
-from referencing.jsonschema import DRAFT4
+from referencing.exceptions import PointerToNowhere, Unresolvable
+from referencing.jsonschema import DRAFT4, DRAFT202012, specification_with
 
 from api_parity.models import JsonBodyState, response_body_format
 
@@ -103,7 +104,7 @@ class ResponseSchema:
         allows_extra_fields: True if additionalProperties is not explicitly false
     """
 
-    schema: dict[str, Any]
+    schema: dict[str, Any] | bool
     allows_extra_fields: bool
     media_range: str = "application/json"
 
@@ -140,8 +141,8 @@ def _expects_text_scalar(error: ValidationError, validator, value: int | float |
         if isinstance(types, str):
             types = [types]
         return any(t in ("integer", "number", "boolean") and validator.is_type(value, t) for t in types)
-    if error.validator == "enum":
-        return validator.evolve(schema={"enum": error.validator_value}).is_valid(value)
+    if error.validator in ("enum", "const"):
+        return validator.evolve(schema={error.validator: error.validator_value}).is_valid(value)
     return any(_expects_text_scalar(child, validator, value) for child in error.context)
 
 
@@ -180,13 +181,129 @@ def _openapi_keywords(schema: dict[str, Any]):
     return non_nullable.items()
 
 
+_DOCUMENT_URI = "https://api-parity.invalid/openapi"  # Local base for resolving relative schema IDs.
+_OAS31_DIALECT = "https://spec.openapis.org/oas/3.1/dialect/base"
+
+
+def _json_schema_draft(uri: str):
+    if uri == _OAS31_DIALECT:
+        return Draft202012Validator
+    return validators.validator_for({"$schema": uri}, default=None)
+
+
+_BOUND_PAIRS = (("exclusiveMinimum", "minimum"), ("exclusiveMaximum", "maximum"))
+
+
+def _oas_schema_keywords(schema):
+    """Accept legacy spellings in the OAS dialect while preserving adjacent constraints."""
+    if schema.get("nullable") is not True and not any(isinstance(schema.get(k), bool) for k, _ in _BOUND_PAIRS):
+        return schema.items()
+    keywords = dict(schema)
+    if keywords.pop("nullable", False) is True:
+        if "type" in keywords:
+            types = keywords["type"]
+            types = types if isinstance(types, list) else [types]
+            keywords["type"] = types if "null" in types else [*types, "null"]
+        else:
+            # Legacy nullable compositions admit null. Keep const, enum, and
+            # other independent assertions at the original schema location.
+            branches = {k: keywords.pop(k) for k in ("allOf", "anyOf", "oneOf") if k in keywords}
+            if branches:
+                keywords["anyOf"] = [branches, {"type": "null"}]
+    for exclusive, bound in _BOUND_PAIRS:
+        if isinstance(keywords.get(exclusive), bool):
+            enabled = keywords.pop(exclusive)
+            if enabled and bound in keywords:
+                keywords[exclusive] = keywords.pop(bound)
+    return keywords.items()
+
+
+@dataclass
+class ResponseContractChecks:
+    missing: set[str] = field(default_factory=set)
+    unsupported: set[str] = field(default_factory=set)
+    legacy: set[str] = field(default_factory=set)
+    invalid_bounds: set[tuple[str, str]] = field(default_factory=set)
+
+    def errors(self):
+        for ref in sorted(self.missing):
+            yield "missing_response_reference", f"Missing response reference {ref}"
+        yield from self.dialect_errors()
+
+    def dialect_errors(self):
+        for keyword, dialect in sorted(self.invalid_bounds):
+            yield "invalid_response_bound", f"{keyword} must be a number in response schema dialect {dialect}"
+        for uri in sorted(self.unsupported):
+            yield "unsupported_response_dialect", f"Unsupported response schema dialect: {uri}"
+
+    def warnings(self):
+        for keyword in sorted(self.legacy):
+            yield "legacy_response_keyword", f"Response schema uses the OpenAPI 3.0 spelling of {keyword}."
+
+
 class _DocumentReferences:
     """Resolve each local JSON pointer once per contract, including aliases."""
 
     def __init__(self, spec: dict):
-        self.resolver = Registry().resolver_with_root(DRAFT4.create_resource(spec))
+        self.uses_json_schema_dialect = str(spec.get("openapi", "")).startswith(("3.1.", "3.2."))
+        self.dialect = spec.get("jsonSchemaDialect", _OAS31_DIALECT) if self.uses_json_schema_dialect else None
+        # OpenAPI is the containing document for local fragment references.
+        specification = DRAFT202012 if self.uses_json_schema_dialect else DRAFT4
+        self.registry = Registry().with_resource(_DOCUMENT_URI, specification.create_resource(spec))
+        self.scopes = {}
+        self.dialect_boundaries = {}
         self.targets = {}
         self.missing: set[str] = set()
+        self.operations = build_operation_index(spec)
+        self.response_roots = list(self.response_schemas()) if self.uses_json_schema_dialect else []
+        if self.uses_json_schema_dialect:
+            roots = list(spec.get("components", {}).get("schemas", {}).values())
+            roots.extend(self.response_roots)
+            self._index_schema_resources(roots)
+
+    def response_schemas(self):
+        for operation in self.operations.values():
+            for response in operation.get("responses", {}).values():
+                response = self.resolve(response)
+                if isinstance(response, dict):
+                    for media in response.get("content", {}).values():
+                        if isinstance(media, dict) and "schema" in media:
+                            yield media["schema"]
+
+    def _index_schema_resources(self, roots):
+        # The registry knows JSON Schema keywords, but paths and components are
+        # OpenAPI containers. Enter each embedded schema with its own dialect and base.
+        pending = [(schema, _DOCUMENT_URI, self.dialect) for schema in roots]
+        while pending:
+            schema, base, dialect = pending.pop()
+            if not isinstance(schema, dict) or id(schema) in self.scopes:
+                continue
+            dialect = schema.get("$schema", dialect)
+            draft = _json_schema_draft(dialect)
+            if draft is not None:
+                specification = specification_with(draft.ID_OF(draft.META_SCHEMA))
+                resource = specification.create_resource(schema)
+                if resource.id():
+                    base = urljoin(base, resource.id())
+                    self.registry = self.registry.with_resource(base, resource)
+                if "$schema" in schema:
+                    keywords = _oas_schema_keywords if dialect == _OAS31_DIALECT else draft._APPLICABLE_VALIDATORS
+                    self.dialect_boundaries[id(schema)] = (DRAFT202012.create_resource({"$id": base}), keywords)
+                pending.extend((child, base, dialect) for child in specification.subresources_of(schema))
+            self.scopes[id(schema)] = (base, dialect)
+
+    def scope(self, schema):
+        scope = self.scopes.get(id(schema))
+        if scope is not None:
+            return scope
+        dialect = schema.get("$schema", self.dialect) if self.uses_json_schema_dialect and isinstance(schema, dict) else self.dialect
+        return _DOCUMENT_URI, dialect
+
+    def ref_siblings_apply(self, schema):
+        if id(schema) not in self.scopes:
+            return False
+        _, uri = self.scope(schema)
+        return _json_schema_draft(uri) in (Draft201909Validator, Draft202012Validator)
 
     def resolve(self, schema):
         if not isinstance(schema, dict) or "$ref" not in schema:
@@ -194,46 +311,80 @@ class _DocumentReferences:
         ref = schema["$ref"]
         if not isinstance(ref, str):
             return schema
-        if ref in self.targets:
-            return self.targets[ref]
-
         seen = set()
-        while isinstance(ref, str) and ref.startswith("#/") and ref not in seen:
-            if ref in self.targets:
-                schema = self.targets[ref]
+        while isinstance(ref, str) and ref.startswith("#/"):
+            base, _ = self.scope(schema)
+            key = (base, ref)
+            if key in self.targets:
+                schema = self.targets[key]
                 break
-            seen.add(ref)
+            if key in seen:
+                break
+            seen.add(key)
             try:
-                schema = self.resolver.lookup(ref).contents
+                schema = self.registry.resolver(base).lookup(ref).contents
             except Unresolvable:
                 self.missing.add(ref)
                 schema = {}
                 break
+            # OpenAPI 3.1 schema references keep adjacent validation keywords.
+            if isinstance(schema, dict) and "$ref" in schema and len(schema) > 1 and self.ref_siblings_apply(schema):
+                break
             ref = schema.get("$ref") if isinstance(schema, dict) else None
-        for alias in seen:
-            self.targets[alias] = schema
+        for key in seen:
+            self.targets[key] = schema
         return schema
+
+    def check_responses(self):
+        checks = ResponseContractChecks()
+        pending = list(self.response_roots if self.uses_json_schema_dialect else self.response_schemas())
+        visited = set()
+        while pending:
+            schema = pending.pop()
+            if id(schema) in visited:
+                continue
+            visited.add(id(schema))
+            specification = DRAFT4
+            if self.uses_json_schema_dialect:
+                base, dialect = self.scope(schema)
+                draft = _json_schema_draft(dialect)
+                if draft is None:
+                    checks.unsupported.add(dialect)
+                    continue
+                specification = specification_with(draft.ID_OF(draft.META_SCHEMA))
+            if not isinstance(schema, dict):
+                continue
+            if self.uses_json_schema_dialect and dialect != _OAS31_DIALECT and "exclusiveMinimum" in draft.VALIDATORS:
+                checks.invalid_bounds.update((k, dialect) for k, _ in _BOUND_PAIRS if isinstance(schema.get(k), bool))
+            if self.uses_json_schema_dialect and dialect == _OAS31_DIALECT:
+                if schema.get("nullable") is True:
+                    checks.legacy.add("nullable")
+                checks.legacy.update(k for k, _ in _BOUND_PAIRS if isinstance(schema.get(k), bool))
+            ref_keywords = ("$ref", "$dynamicRef", "$recursiveRef") if self.uses_json_schema_dialect else ("$ref",)
+            for keyword in ref_keywords:
+                ref = schema.get(keyword)
+                if not isinstance(ref, str):
+                    continue
+                if self.uses_json_schema_dialect:
+                    try:
+                        pending.append(self.registry.resolver(base).lookup(ref).contents)
+                    except Unresolvable:
+                        if ref.startswith("#/"):
+                            checks.missing.add(ref)
+                elif ref.startswith("#/"):
+                    pending.append(self.resolve(schema))
+            if "$ref" not in schema or self.ref_siblings_apply(schema):
+                pending.extend(specification.subresources_of(schema))
+        checks.missing.update(self.missing)
+        return checks
+
+
+def check_response_contract(spec: dict) -> ResponseContractChecks:
+    return _DocumentReferences(spec).check_responses()
 
 
 def missing_response_references(spec: dict) -> list[str]:
-    """Check declared response contracts without requiring a response instance."""
-    refs = _DocumentReferences(spec)
-    pending = []
-    for operation in build_operation_index(spec).values():
-        for response in operation.get("responses", {}).values():
-            response = refs.resolve(response)
-            if isinstance(response, dict):
-                for media in response.get("content", {}).values():
-                    if isinstance(media, dict):
-                        pending.append(media.get("schema"))
-
-    visited = set()
-    while pending:
-        schema = refs.resolve(pending.pop())
-        if isinstance(schema, dict) and id(schema) not in visited:
-            visited.add(id(schema))
-            pending.extend(DRAFT4.subresources_of(schema))
-    return sorted(refs.missing)
+    return sorted(check_response_contract(spec).missing)
 
 
 def build_operation_index(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -316,27 +467,191 @@ class SchemaValidator:
         # from a snapshot. An empty registry does not retrieve external documents.
         refs = _DocumentReferences(self._spec)
         self._references = refs
+        if refs.uses_json_schema_dialect:
+            errors = [message for _, message in refs.check_responses().dialect_errors()]
+            if errors:
+                raise SchemaExtractionError("\n".join(errors))
 
+        self._scoped_ref_validators = {}
+        self._response_validators = {}
+        self._drafts = {}
+        if not refs.uses_json_schema_dialect:
+            self._document_validator = self._openapi30_validator(refs)
+
+        # Pre-build operationId -> operation dict index for O(1) lookups.
+        # Without this, every _find_operation() call scans all paths × methods.
+        self._operation_index = refs.operations
+
+    def _modern_keywords(self, schema):
+        # jsonschema can enter a resource with an explicit dialect through a
+        # parent validator's descend(). Respect the child schema's dialect.
+        if self._references.scope(schema)[1] == _OAS31_DIALECT:
+            return _oas_schema_keywords(schema)
+        return schema.items()
+
+    def _validator_for_schema(self, schema):
+        if not self._references.uses_json_schema_dialect:
+            return self._document_validator.evolve(schema=schema)
+        key = id(schema)
+        if key not in self._response_validators:
+            base, uri = self._references.scope(schema)
+            draft = _json_schema_draft(uri)
+            if draft is None:
+                raise SchemaExtractionError(f"Unsupported response schema dialect: {uri}")
+            if draft not in self._drafts:
+                self._drafts[draft] = self._contract_draft(draft)
+            registry = self._references.registry
+            self._response_validators[key] = self._drafts[draft](
+                schema, registry=registry, _resolver=registry.resolver(base),
+            )
+        return self._response_validators[key]
+
+    def _contract_draft(self, draft):
+        boundaries = self._references.dialect_boundaries
+        default_keywords = self._modern_keywords if draft is Draft202012Validator else draft._APPLICABLE_VALIDATORS
+
+        # jsonschema's descend() selects keywords with the parent class and
+        # evaluates them with the evolved child. Both must use the child's dialect.
+        def keywords(schema):
+            boundary = boundaries.get(id(schema))
+            if boundary is None:
+                return default_keywords(schema)
+            _, child_keywords = boundary
+            return child_keywords(schema)
+
+        contract_class = validators.create(
+            meta_schema=draft.META_SCHEMA, validators={**draft.VALIDATORS, "$ref": self._validate_schema_ref},
+            type_checker=draft.TYPE_CHECKER, format_checker=draft.FORMAT_CHECKER, id_of=draft.ID_OF,
+            applicable_validators=keywords if boundaries else default_keywords,
+        )
+        if boundaries:
+            native_evolve = contract_class.evolve
+
+            def evolve(parent, **changes):
+                schema = changes.get("schema", parent.schema)
+                boundary = boundaries.get(id(schema))
+                if boundary is None:
+                    return native_evolve(parent, **changes)
+                # Keep caller history for dynamic references and enter the base
+                # URI indexed using the child dialect's id or $id convention.
+                resolver = changes.get("_resolver", parent._resolver)
+                base_resource, _ = boundary
+                changes["_resolver"] = resolver.in_subresource(base_resource)
+                changes.setdefault("schema", schema)
+                changes.setdefault("registry", self._references.registry)
+                changes.setdefault("format_checker", parent.format_checker)
+                return type(self._validator_for_schema(schema))(**changes)
+
+            # This class belongs only to this contract. Leave jsonschema's
+            # process-wide dialect registry and the library classes untouched.
+            contract_class.evolve = evolve
+        return contract_class
+
+    def _validate_schema_ref(self, validator, ref, instance, schema):
+        # Rows in an array commonly follow the same reference in the same
+        # resolver. Keep at most one binding per schema, including its caller scope.
+        key = id(schema)
+        cached = self._scoped_ref_validators.get(key)
+        if cached is not None and cached[0] is validator._resolver:
+            yield from cached[1].iter_errors(instance)
+            return
+        try:
+            target = validator._resolver.lookup(ref)
+        except PointerToNowhere:
+            if ref.startswith("#/"):
+                return  # Lint reports missing local pointers. Siblings still apply.
+            raise
+        if id(target.contents) in self._references.scopes:
+            selected = self._validator_for_schema(target.contents)
+            base, _ = self._references.scope(target.contents)
+            # A pointer through OpenAPI containers can enter a new schema resource.
+            # Keep the active dynamic scope while selecting that resource's dialect.
+            resolver = target.resolver.in_subresource(DRAFT202012.create_resource({"$id": base}))
+            scoped = type(selected)(target.contents, registry=self._references.registry, _resolver=resolver)
+            if key in self._references.scopes:
+                self._scoped_ref_validators[key] = validator._resolver, scoped
+            yield from scoped.iter_errors(instance)
+        else:
+            yield from validator.descend(instance, target.contents, resolver=target.resolver)
+
+    def _openapi30_validator(self, refs):
         def validate_ref(validator, ref, instance, schema):
-            if isinstance(ref, str) and ref.startswith("#/"):
-                yield from validator.descend(instance, refs.resolve(schema))
-            else:
+            if not isinstance(ref, str) or not ref.startswith("#/"):
                 yield from Draft4Validator.VALIDATORS["$ref"](validator, ref, instance, schema)
+                return
+            cached = self._scoped_ref_validators.get(ref)
+            if cached is None or cached[0] is not validator._resolver:
+                target = refs.resolve(schema)
+                if not isinstance(target, dict) or "$schema" in target:
+                    yield from validator.descend(instance, target)
+                    return
+                resolver = validator._resolver.in_subresource(DRAFT4.create_resource(target))
+                cached = validator._resolver, validator.evolve(schema=target, _resolver=resolver)
+                self._scoped_ref_validators[ref] = cached
+            yield from cached[1].iter_errors(instance)
+
+        # Compile at the object schema, where required and properties may be
+        # contributed by different allOf branches. Never rewrite the input spec.
+        keywords_by_schema = {}
+
+        def response_keywords(schema):
+            if "$ref" in schema or ("required" not in schema and "allOf" not in schema):
+                return _openapi_keywords(schema)
+            key = id(schema)
+            if key not in keywords_by_schema:
+                exempt = set()
+                for part in self._all_of_schemas(schema):
+                    for name, prop in part.get("properties", {}).items():
+                        if any(s.get("writeOnly") is True for s in self._all_of_schemas(prop)):
+                            exempt.add(name)
+                projected = self._omit_write_required(schema, exempt, {}) if exempt else schema
+                # Retain the original alongside its keys (identity cache).
+                keywords_by_schema[key] = schema, _openapi_keywords(projected)
+            return keywords_by_schema[key][1]
 
         validator_class = validators.create(
             meta_schema=Draft4Validator.META_SCHEMA,
             validators={**Draft4Validator.VALIDATORS, "$ref": validate_ref},
             type_checker=Draft4Validator.TYPE_CHECKER,
             id_of=Draft4Validator.ID_OF,
-            applicable_validators=_openapi_keywords,
+            applicable_validators=response_keywords,
         )
-        self._document_validator = validator_class(self._spec, registry=Registry())
+        return validator_class(self._spec, registry=Registry())
 
-        # Pre-build operationId -> operation dict index for O(1) lookups.
-        # Without this, every _find_operation() call scans all paths × methods.
-        self._operation_index: dict[str, dict[str, Any]] = build_operation_index(
-            self._spec
-        )
+    def _all_of_schemas(self, schema):
+        """Yield unconditional schema declarations at one instance location."""
+        pending = [schema]
+        seen = set()
+        while pending:
+            part = pending.pop()
+            if not isinstance(part, dict) or id(part) in seen:
+                continue
+            seen.add(id(part))
+            if "$ref" in part:
+                pending.append(self._references.resolve(part))
+                if not self._references.ref_siblings_apply(part):
+                    continue
+            yield part
+            pending.extend(part.get("allOf", []))
+
+    def _omit_write_required(self, schema, exempt, memo):
+        """Project same-instance branches only. Nested properties have their own scope."""
+        schema = self._references.resolve(schema)
+        if not isinstance(schema, dict):
+            return schema
+        key = id(schema)
+        if key in memo:
+            return memo[key]
+        # Preserve cyclic references and share completed projections across aliases.
+        memo[key] = schema
+        projected = dict(schema)
+        if "required" in schema:
+            projected["required"] = [name for name in schema["required"] if name not in exempt]
+        for keyword in ("allOf", "anyOf", "oneOf"):
+            if keyword in schema:
+                projected[keyword] = [self._omit_write_required(branch, exempt, memo) for branch in schema[keyword]]
+        memo[key] = projected
+        return projected
 
     def validate_response(
         self,
@@ -388,7 +703,7 @@ class SchemaValidator:
         violations: list[SchemaViolation] = []
 
         try:
-            validator = self._document_validator.evolve(schema=response_schema.schema)
+            validator = self._validator_for_schema(response_schema.schema)
             errors = list(validator.iter_errors(body))
             if errors and body_format == "text" and isinstance(body, str):
                 errors = _text_scalar_errors(validator, body, errors)
@@ -601,10 +916,11 @@ class SchemaValidator:
             if ref in visited:
                 return {}  # Circular reference
             resolved = self._references.resolve(schema)
-            if resolved != schema:
-                return self._collect_properties(resolved, visited | {ref})
-
-        properties: dict[str, Any] = {}
+            properties = self._collect_properties(resolved, visited | {ref}) if resolved is not schema else {}
+            if not self._references.ref_siblings_apply(schema):
+                return properties
+        else:
+            properties = {}
 
         # Collect from direct properties
         if "properties" in schema:
@@ -654,23 +970,42 @@ class SchemaValidator:
             return extra
 
         # Resolve the schema at this instance location
+        declared = schema
         schema = self._references.resolve(schema)
         if not isinstance(schema, dict):
-            return extra
+            if not self._references.ref_siblings_apply(declared):
+                return extra
+            schema = declared
 
         # Handle arrays - check items in the array
         if isinstance(body, list):
-            items_schema = schema.get("items")
-            if isinstance(items_schema, dict):
+            variants = []
+            parts = self._all_of_schemas(declared) if self._references.uses_json_schema_dialect else (schema,)
+            for part in parts:
+                items = part.get("items")
+                prefix = ()
+                if "prefixItems" in part and self._references.uses_json_schema_dialect:
+                    _, uri = self._references.scope(part)
+                    draft = _json_schema_draft(uri)
+                    if draft and "prefixItems" in draft.VALIDATORS:
+                        prefix = part["prefixItems"]
+                if prefix or isinstance(items, dict):
+                    variants.append((prefix, items))
+            if variants:
                 for i, item in enumerate(body):
-                    item_extra = self._find_extra_fields(
-                        item, items_schema, (*path, i), allowed_only=allowed_only
-                    )
-                    extra.extend(item_extra)
+                    if not isinstance(item, (dict, list)):
+                        continue
+                    if len(variants) == 1:
+                        prefix, items = variants[0]
+                        item_schema = prefix[i] if i < len(prefix) else items
+                    else:
+                        item_schema = {"allOf": [prefix[i] if i < len(prefix) else items for prefix, items in variants]}
+                    if isinstance(item_schema, dict):
+                        extra.extend(self._find_extra_fields(item, item_schema, (*path, i), allowed_only=allowed_only))
             return extra
 
         # Get defined properties from schema, including composition branches
-        properties = self._collect_properties(schema)
+        properties = self._collect_properties(declared if self._references.uses_json_schema_dialect else schema)
         include_extra = not allowed_only or self._allows_additional_properties(schema)
 
         # Find fields in body not in schema
@@ -727,6 +1062,8 @@ class SchemaValidator:
             return "wrong_type"
         elif validator == "required":
             return "missing_required"
+        elif validator == "const":
+            return "invalid_const"
         elif validator == "enum":
             return "invalid_enum"
         elif validator in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):

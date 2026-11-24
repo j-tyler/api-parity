@@ -334,7 +334,9 @@ class SchemaValidator:
 
 Explore and replay select the response schema separately for each target using its status and Content-Type. The most specific declared media range wins, including matching parameters. With no Content-Type, the validator defaults to `application/json` for existing Python callers. If no declaration matches, a bare `application/json` declaration for that status supplies the legacy schema and extra-field checks. Matched text schemas can validate numeric and boolean scalars while field rules and artifacts retain the original string. Matched XML uses the captured XML tree for configured comparisons and skips JSON Schema body validation.
 
-Uses `jsonschema` library. Extra fields with `additionalProperties: false` are violations.
+The validator uses `jsonschema`. OpenAPI 3.0 uses Draft 4 with response-specific required fields. OpenAPI 3.1 and 3.2 select the document or schema resource dialect and enforce explicit response requirements. Unsupported response dialects are contract errors. Repeated local references reuse a validator while the caller’s resolution scope is identical. Extra fields with `additionalProperties: false` are violations.
+
+[Response schema rules and compatibility](docs/comparison-rules.md#schema-version-and-response-direction)
 
 ---
 

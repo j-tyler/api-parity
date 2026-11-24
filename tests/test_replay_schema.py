@@ -374,3 +374,51 @@ def test_generated_json_null_and_response_states_survive_replay(
     second_body = b"null"
     assert replay(config, out, tmp_path / "fixed")["now_match"] == 1
     assert received == [(side, "application/json", b"null") for side in "ab"] * 5
+
+
+@pytest.mark.parametrize("embedded", [False, True], ids=["document-default", "embedded-override"])
+def test_openapi31_const_explore_and_replay_use_the_saved_dialect(tmp_path, monkeypatch, replay_env, embedded):
+    config, bodies, _ = replay_env
+    spec = write_spec(tmp_path / "spec.json")
+    document = json.loads(spec.read_bytes())
+    document["openapi"] = "3.1.0"
+    field = {"const": 42}
+    if embedded:
+        document["jsonSchemaDialect"] = "http://json-schema.org/draft-04/schema#"
+        field.update({"$id": "urn:item-id", "$schema": "https://spec.openapis.org/oas/3.1/dialect/base"})
+    document["components"]["schemas"]["Item"]["properties"]["id"] = field
+    spec.write_text(json.dumps(document))
+    bodies[:] = [{"id": 42}, {"id": 43}]
+    monkeypatch.setattr(CaseGenerator, "generate", lambda *a, **kw: iter([request()]))
+    out = tmp_path / "out"
+    assert dispatch(parse_args(["explore", "--spec", str(spec), "--config", str(config),
+                                "--target-a", "a", "--target-b", "b", "--out", str(out)])) == 0
+    bundle, = discover_bundles(out)
+    diff = json.loads((bundle / "diff.json").read_text())
+    violation, = diff["details"]["schema"]["differences"]
+    assert (violation["path"], violation["target_b"]) == ("$.id", "<violation: invalid_const>")
+    spec.unlink()
+    assert replay(config, out, tmp_path / "persistent")["still_mismatch"] == 1
+    bodies[1] = {"id": 42}
+    assert replay(config, out, tmp_path / "fixed")["now_match"] == 1
+
+
+def test_unknown_dialect_is_one_contract_error_before_sending_requests(tmp_path, replay_env, capsys):
+    from api_parity.spec_linter import SpecLinter
+
+    config, _, send = replay_env
+    path = write_spec(tmp_path / "spec.json")
+    document = json.loads(path.read_bytes())
+    document["openapi"] = "3.1.0"
+    document["components"]["schemas"]["Item"]["$schema"] = "urn:unknown"
+    document["paths"]["/other"] = json.loads(json.dumps(document["paths"]["/items"]))
+    document["paths"]["/other"]["get"]["operationId"] = "readOther"
+    path.write_text(json.dumps(document))
+    errors = [e.message for e in SpecLinter(path).lint().errors if e.code == "unsupported_response_dialect"]
+    assert errors == ["Unsupported response schema dialect: urn:unknown"]
+    for flags in (["--validate"], []):
+        assert dispatch(parse_args(["explore", "--spec", str(path), "--config", str(config),
+                                    "--target-a", "a", "--target-b", "b", "--out", str(tmp_path / "run"), *flags])) == 1
+        captured = capsys.readouterr()
+        assert (captured.out + captured.err).count(errors[0]) == 1
+    send.assert_not_called()

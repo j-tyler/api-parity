@@ -1869,8 +1869,11 @@ def run_explore(args: ExploreArgs) -> int:
 
         # Merge results
         rules_result.merge(cli_result)
-        for ref in generator.missing_response_references():
-            rules_result.add_error("response_schema", f"Missing response reference {ref}")
+        contract = generator.check_response_contract()
+        for _, message in contract.errors():
+            rules_result.add_error("response_schema", message)
+        for _, message in contract.warnings():
+            rules_result.add_warning("response_schema", message)
 
         # Report warnings
         if rules_result.warnings:
