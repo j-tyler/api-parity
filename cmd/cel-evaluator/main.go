@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/ext"
 )
 
 // Request is the JSON structure received from Python.
@@ -193,6 +194,7 @@ func evaluateSync(req Request, cache *programCache) Response {
 		// DynType for all variables since JSON values can be any type.
 		opts := []cel.EnvOption{
 			cel.DefaultUTCTimeZone(true),
+			ext.Strings(ext.StringsVersion(0)), // substring for prefix and suffix comparisons
 		}
 		for _, name := range varNames {
 			opts = append(opts, cel.Variable(name, cel.DynType))

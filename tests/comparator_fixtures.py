@@ -61,7 +61,7 @@ def comparison_library() -> ComparisonLibrary:
             "string_prefix": PredefinedComparison(
                 description="First N chars match",
                 params=["length"],
-                expr="a.substring(0, length) == b.substring(0, length)",
+                expr="size(a) >= length && size(b) >= length && a.substring(0, length) == b.substring(0, length)",
             ),
             "string_length_match": PredefinedComparison(
                 description="Strings have same length",

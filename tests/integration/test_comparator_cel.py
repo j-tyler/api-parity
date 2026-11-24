@@ -383,6 +383,23 @@ class TestArrayLength:
         assert result.match is False
 
 
+@pytest.mark.parametrize(("rule", "left", "right", "length", "expected"), [
+    ("string_prefix", "😀猫-a", "😀猫-b", 2, True),
+    ("string_prefix", "😀猫-a", "😀犬-a", 2, False),
+    ("string_suffix", "a-猫😀", "longer-猫😀", 2, True),
+    ("string_suffix", "a-猫😀", "a-犬😀", 2, False),
+    ("string_prefix", "xy", "xyz", 3, False),
+    ("string_suffix", "xyz", "yz", 3, False),
+    ("string_prefix", "猫", "猫", 1, True),
+    ("string_suffix", "猫", "猫", 2, False),
+])
+def test_predefined_string_prefix_and_suffix(comparator, rule, left, right, length, expected):
+    rules = OperationRules(body=BodyRules(field_rules={"$.value": FieldRule(predefined=rule, length=length)}))
+    result = comparator.compare(make_response_case(body={"value": left}), make_response_case(body={"value": right}), rules)
+    assert result.match is expected
+    assert [diff.rule for diff in result.details["body"].differences] == ([] if expected else [rule])
+
+
 # =============================================================================
 # Predefined: string_nonempty
 # =============================================================================

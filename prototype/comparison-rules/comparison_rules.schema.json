@@ -85,6 +85,7 @@
         {"$ref": "#/$defs/predefined_array_length"},
         {"$ref": "#/$defs/predefined_array_length_tolerance"},
         {"$ref": "#/$defs/predefined_string_prefix"},
+        {"$ref": "#/$defs/predefined_string_suffix"},
         {"$ref": "#/$defs/predefined_string_nonempty"},
         {"$ref": "#/$defs/predefined_both_match_regex"},
         {"$ref": "#/$defs/predefined_uuid_format"},
@@ -200,6 +201,17 @@
       "required": ["predefined", "length"],
       "properties": {
         "predefined": {"const": "string_prefix"},
+        "length": {"type": "integer", "minimum": 1},
+        "presence": {"$ref": "#/$defs/presence"}
+      }
+    },
+
+    "predefined_string_suffix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined", "length"],
+      "properties": {
+        "predefined": {"const": "string_suffix"},
         "length": {"type": "integer", "minimum": 1},
         "presence": {"$ref": "#/$defs/presence"}
       }
