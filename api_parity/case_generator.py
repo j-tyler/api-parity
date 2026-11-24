@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import random
 import re
 import uuid
@@ -22,7 +23,7 @@ import requests
 import schemathesis
 import yaml
 from hypothesis import Phase, seed as hypothesis_seed, settings
-from hypothesis.errors import HypothesisException
+from hypothesis.errors import FailedHealthCheck, HypothesisException, Unsatisfiable
 from hypothesis.stateful import run_state_machine_as_test
 from schemathesis.config import (
     PhasesConfig,
@@ -33,6 +34,7 @@ from schemathesis.config import (
 )
 from schemathesis.core import NotSet
 from schemathesis.core.transport import Response as SchemathesisResponse
+from schemathesis.errors import InvalidSchema, SerializationNotPossible
 from schemathesis.transport.serialization import Binary
 
 # Get InferenceConfig via public API indirection. InferenceConfig is not exported
@@ -45,6 +47,9 @@ from api_parity.models import ChainCase, ChainStep, RequestCase, response_body_f
 from api_parity.path_rendering import decode_path_value, render_path
 from api_parity.schema_validator import build_operation_index, check_response_contract
 from api_parity.schema_value_generator import SchemaValueGenerator
+
+
+logger = logging.getLogger(__name__)
 
 
 def _unwrap_binary(value: Any, *, json_field: bool = False) -> Any:
@@ -694,6 +699,20 @@ class CaseGenerator:
                 total_generated += 1
                 if max_cases and total_generated >= max_cases:
                     break
+
+    def generate_for_operations(
+        self, operation_ids: set[str], *, cases_per_operation: int, seed: int | None = None,
+    ) -> Iterator[RequestCase]:
+        """Generate cases in spec order, warning and continuing if an operation cannot generate inputs."""
+        if not operation_ids or cases_per_operation <= 0:
+            return
+        for operation_id, op in self._get_schemathesis_op_index().items():
+            if operation_id not in operation_ids or operation_id in self._exclude:
+                continue
+            try:
+                yield from self._generate_for_operation(op, operation_id, cases_per_operation, seed)
+            except (Unsatisfiable, FailedHealthCheck, InvalidSchema, SerializationNotPossible) as exc:
+                logger.warning("Cannot generate coverage cases for %s (%s): %s", operation_id, type(exc).__name__, exc)
 
     def _generate_for_operation(
         self,

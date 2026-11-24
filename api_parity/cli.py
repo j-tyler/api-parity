@@ -472,8 +472,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         dest="ensure_coverage",
-        help="Ensure all operations are tested at least once. Runs single-request tests "
-        "on any operations not covered by chains (stateful mode only)",
+        help="Run up to three standalone requests per target for each non-excluded operation "
+        "missed by generated chains, including writes. Report operations still uncovered (stateful mode only)",
     )
     explore_parser.add_argument(
         "--min-hits-per-op",
@@ -2381,9 +2381,6 @@ def _run_stateful_explore(
 
     # Ensure coverage: run single-request tests on uncovered operations
     if ensure_coverage:
-        # Exclude explicitly excluded operations from coverage tracking
-        excluded_set = set(exclude or [])
-        all_operations = set(generator.get_all_operation_ids()) - excluded_set
         uncovered_operations = all_operations - operations_covered_by_chains
 
         if uncovered_operations:
@@ -2397,23 +2394,8 @@ def _run_stateful_explore(
                 print(f"  - {op_id}")
             print()
 
-            # Generate single-request tests for uncovered operations
-            # Use a small number of cases per operation for coverage (not exhaustive fuzzing)
-            cases_per_op = 3  # Just enough to verify the endpoint works
-            coverage_case_count = 0
-            op_coverage_counts: dict[str, int] = {}
-
-            for case in generator.generate(max_cases=len(uncovered_operations) * cases_per_op * 2, seed=seed):
-                if case.operation_id not in uncovered_operations:
-                    continue  # Skip operations already covered by chains
-
-                # Limit to a few cases per uncovered operation
-                current_count = op_coverage_counts.get(case.operation_id, 0)
-                if current_count >= cases_per_op:
-                    continue
-                op_coverage_counts[case.operation_id] = current_count + 1
-
-                coverage_case_count += 1
+            cases = generator.generate_for_operations(uncovered_operations, cases_per_operation=3, seed=seed)
+            for coverage_case_count, case in enumerate(cases, start=1):
                 # Mark as covered for tracking
                 operations_covered_by_chains.add(case.operation_id)
 
