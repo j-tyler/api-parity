@@ -12,6 +12,7 @@ Tests cover:
 import ssl
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from api_parity.executor import Executor, ExecutorError
@@ -709,7 +710,7 @@ class TestHeaderSanitization:
 
                 # Verify the header value was sanitized before being sent
                 call_kwargs = mock_client.request.call_args.kwargs
-                assert call_kwargs["headers"]["X-Custom"] == "test?value"
+                assert httpx.Headers(call_kwargs["headers"])["X-Custom"] == "test?value"
             finally:
                 executor.close()
 
@@ -757,7 +758,7 @@ class TestHeaderSanitization:
 
                 # Both targets should have received sanitized headers
                 for call in mock_client.request.call_args_list:
-                    headers = call.kwargs["headers"]
+                    headers = httpx.Headers(call.kwargs["headers"])
                     assert headers["X-Latin"] == "???"
                     assert headers["X-Unicode"] == "???"
                     assert headers["X-Mixed"] == "hello?world"
