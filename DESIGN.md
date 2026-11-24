@@ -431,7 +431,7 @@ Synthetic responses use the correct status code from the spec (not hardcoded 201
 Keywords: coverage guarantee operations stateful
 Date: 20260119
 
-Schemathesis's state machine is probabilistic, not exhaustive. 26-33% of operations may never be tested by chains due to orphans or deep chain depth. Added `--ensure-coverage` flag: runs chain generation, tracks coverage, runs single-request tests on uncovered operations. Guarantees 100% operation coverage.
+Schemathesis's state machine is probabilistic, not exhaustive. 26-33% of operations may never be tested by chains due to orphans or deep chain depth. Added `--ensure-coverage` flag: runs chain generation, tracks coverage, and generates up to three standalone cases for each non-excluded operation absent from the generated chains. Each such operation gets its own case budget, regardless of its position in the spec.
 
 ---
 
@@ -608,7 +608,7 @@ Date: 20260216
 
 Removed `--max-cases` from the explore CLI. Coverage controls (`--min-hits-per-op`, `--min-coverage`, `--ensure-coverage`, `--max-chains`, `--max-steps`) are the intended way to control exploration depth. `--max-cases` was an early debugging lever that conflicted with coverage-guided stopping semantics.
 
-`CaseGenerator.generate(max_cases=...)` is preserved as an internal parameter since it's used by the `--ensure-coverage` backfill logic and is useful for internal callers. Only the CLI exposure was removed.
+`CaseGenerator.generate(max_cases=...)` retains its total case budget for callers generating cases across the spec. Only the CLI exposure was removed.
 
 ---
 

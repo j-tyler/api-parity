@@ -695,6 +695,16 @@ class CaseGenerator:
                 if max_cases and total_generated >= max_cases:
                     break
 
+    def generate_for_operations(
+        self, operation_ids: set[str], *, cases_per_operation: int, seed: int | None = None,
+    ) -> Iterator[RequestCase]:
+        """Generate up to the given number of cases per selected, non-excluded operation in spec order."""
+        if not operation_ids or cases_per_operation <= 0:
+            return
+        for operation_id, op in self._get_schemathesis_op_index().items():
+            if operation_id in operation_ids and operation_id not in self._exclude:
+                yield from self._generate_for_operation(op, operation_id, cases_per_operation, seed)
+
     def _generate_for_operation(
         self,
         operation: Any,
