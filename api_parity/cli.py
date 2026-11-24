@@ -472,8 +472,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         dest="ensure_coverage",
-        help="Ensure all operations are tested at least once. Runs single-request tests "
-        "on any operations not covered by chains (stateful mode only)",
+        help="Run up to three standalone requests per target for each non-excluded operation "
+        "missed by generated chains, including writes. Report operations still uncovered (stateful mode only)",
     )
     explore_parser.add_argument(
         "--min-hits-per-op",

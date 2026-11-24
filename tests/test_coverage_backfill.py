@@ -13,12 +13,13 @@ from api_parity.models import ChainCase, ChainStep, RequestCase
 
 @pytest.mark.parametrize("orphans_first", [False, True], ids=["last", "first"])
 def test_ensure_coverage_targets_only_missing_operations(
-    tmp_path, monkeypatch, fixture_cel_evaluator_path, orphans_first,
+    tmp_path, monkeypatch, fixture_cel_evaluator_path, orphans_first, caplog, capsys,
 ):
     ok = {"200": {"description": "OK"}}
     paths = {}
     steps = []
-    for i in range(13):
+    # The old shared budget for four missing operations ran out after 24 cases.
+    for i in range(25):
         name = f"linked{i}"
         path = f"/{name}"
         paths[path] = {"get": {"operationId": name, "responses": ok}}
@@ -28,9 +29,18 @@ def test_ensure_coverage_targets_only_missing_operations(
         steps.append(ChainStep(step_index=i, request_template=case))
     paths["/excluded"] = {"get": {"operationId": "excluded", "responses": ok}}
 
-    # One operation has a single possible request. The other can use its full budget.
+    # Put both generation failures between a fixed request and one that can use its full budget.
     missing = {
         "/fixed": {"get": {"operationId": "fixed", "responses": ok}},
+        "/png": {"post": {
+            "operationId": "uploadImage", "responses": ok,
+            "requestBody": {"required": True, "content": {"image/png": {"schema": {"type": "string"}}}},
+        }},
+        "/empty-range": {"get": {
+            "operationId": "emptyRange", "responses": ok,
+            "parameters": [{"name": "n", "in": "query", "required": True,
+                            "schema": {"type": "integer", "minimum": 5, "maximum": 1}}],
+        }},
         "/orphan": {"get": {
             "responses": ok,
             "parameters": [{"name": "n", "in": "query", "required": True, "schema": {"type": "integer"}}],
@@ -79,6 +89,11 @@ def test_ensure_coverage_targets_only_missing_operations(
     for side in ("a", "b"):
         assert received.count((side, "/fixed")) == 1
         assert received.count((side, "/orphan")) == 3
+        assert (side, "/png") not in received
+        assert (side, "/empty-range") not in received
         assert (side, "/excluded") not in received
     assert json.loads((out / "summary.json").read_text())["mismatches"] == 3
-    assert generated == [("fixed", 3, 42), ("get_/orphan", 3, 42)]
+    assert generated == [(name, 3, 42) for name in ("fixed", "uploadImage", "emptyRange", "get_/orphan")]
+    assert any("uploadImage" in message and "image/png" in message for message in caplog.messages)
+    assert any("emptyRange" in message and "Unsatisfiable" in message for message in caplog.messages)
+    assert "2 operations still uncovered after coverage tests:\n  - emptyRange\n  - uploadImage" in capsys.readouterr().out

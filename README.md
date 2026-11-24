@@ -116,7 +116,7 @@ api-parity merge \
 | `--max-steps INT` | Max steps per chain (default: 6) |
 | `--min-hits-per-op INT` | Min unique chains per linked operation (default: 1, stateful mode) |
 | `--min-coverage INT` | % of linked ops that must meet min-hits-per-op (default: 100, stateful mode) |
-| `--ensure-coverage` | Guarantee all operations tested (adds single-request tests for ops chains missed) |
+| `--ensure-coverage` | In stateful mode, send up to three standalone requests to each target for every non-excluded operation missed by generated chains, including operations that change data. Report operations still uncovered. |
 | `--log-chains` | Write executed chains to chains.txt (stateful mode) |
 | `--exclude OPID` | Exclude operation (repeatable) |
 | `--timeout SECONDS` | Default timeout per API call (default: 30) |
