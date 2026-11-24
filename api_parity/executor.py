@@ -64,6 +64,9 @@ _LINK_EXPR_REQUEST_HEADER = re.compile(
 # via its own percent-encoding, but control characters raise InvalidURL.
 _URL_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 
+# Keep the historical first value for the body's media type and explicit credentials.
+_FIRST_VALUE_REQUEST_HEADERS = frozenset({"content-type", "authorization", "cookie"})
+
 
 def _response_pointer(body: Any, pointer: str) -> Any:
     """Preserve literal member names accepted by older versions, then try the URI fragment."""
@@ -841,10 +844,18 @@ class Executor:
             for value in values:
                 params.append((key, value))
 
-        headers = {
-            key: [_sanitize_header_value(value) for value in values]
-            for key, values in request.headers.items() if values
-        }
+        headers: dict[str, list[str]] = {}
+        seen_singletons: set[str] = set()
+        for key, values in request.headers.items():
+            if not values:
+                continue
+            name = key.lower()
+            if name in _FIRST_VALUE_REQUEST_HEADERS:
+                if name in seen_singletons:
+                    continue
+                seen_singletons.add(name)
+                values = values[:1]
+            headers[key] = [_sanitize_header_value(value) for value in values]
 
         # Build body content
         content: bytes | None = None
