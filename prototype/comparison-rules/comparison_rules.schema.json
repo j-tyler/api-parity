@@ -61,6 +61,10 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "binary_rule": {
+              "$ref": "#/$defs/field_comparison",
+              "properties": {"presence": {"const": "parity"}}
+            },
             "field_rules": {
               "type": "object",
               "description": "Per-field comparison rules. Keys are JSONPath expressions.",
@@ -97,6 +101,8 @@
         {"$ref": "#/$defs/predefined_both_positive"},
         {"$ref": "#/$defs/predefined_same_sign"},
         {"$ref": "#/$defs/predefined_both_in_range"},
+        {"$ref": "#/$defs/predefined_no_params"},
+        {"$ref": "#/$defs/predefined_string_contains"},
         {"$ref": "#/$defs/custom_expr"}
       ]
     },
@@ -326,6 +332,32 @@
         "predefined": {"const": "both_in_range"},
         "min": {"type": "number"},
         "max": {"type": "number"},
+        "presence": {"$ref": "#/$defs/presence"}
+      }
+    },
+
+    "predefined_no_params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined"],
+      "properties": {
+        "predefined": {"enum": [
+          "array_nonempty", "string_length_match", "url_format", "iso_date_format",
+          "jwt_format", "base64_format", "hex_string", "same_nullity", "both_boolean",
+          "both_non_negative", "both_integer", "same_keys", "object_nonempty",
+          "binary_exact_match", "binary_length_match", "binary_nonempty"
+        ]},
+        "presence": {"$ref": "#/$defs/presence"}
+      }
+    },
+
+    "predefined_string_contains": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predefined", "substring"],
+      "properties": {
+        "predefined": {"const": "string_contains"},
+        "substring": {"type": "string"},
         "presence": {"$ref": "#/$defs/presence"}
       }
     },

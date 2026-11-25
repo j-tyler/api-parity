@@ -3,12 +3,22 @@
 Tests predefined rule expansion, custom expressions, and CEL error capture.
 """
 
-from api_parity.cel_evaluator import CELEvaluationError
+import pytest
+
+from api_parity.cel_evaluator import CELEvaluationError, CELSubprocessError
 from api_parity.models import BodyRules, FieldRule, MismatchType, OperationRules
 from tests.conftest import make_response_case
 
 # Import shared fixtures
 pytest_plugins = ["tests.comparator_fixtures"]
+
+
+def test_unavailable_substring_is_an_evaluator_failure(comparator, mock_cel):
+    mock_cel.evaluate.side_effect = CELEvaluationError("CEL compile error: undeclared reference to 'substring'")
+    response = make_response_case(body={"value": "abc"})
+    rule = FieldRule(predefined="string_prefix", length=2)
+    with pytest.raises(CELSubprocessError, match="Rebuild cel-evaluator"):
+        comparator.compare(response, response, OperationRules(body=BodyRules(field_rules={"$.value": rule})))
 
 
 class TestPredefinedExpansion:

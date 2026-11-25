@@ -108,6 +108,8 @@ def inline_field_rules(field_rules: dict, library: dict) -> dict:
 def inline_body_rules(body: dict, library: dict) -> dict:
     """Inline body comparison rules."""
     result = copy.deepcopy(body)
+    if result.get("binary_rule") is not None:
+        result["binary_rule"] = inline_predefined(result["binary_rule"], library)
     if "field_rules" in result:
         result["field_rules"] = inline_field_rules(result["field_rules"], library)
     return result

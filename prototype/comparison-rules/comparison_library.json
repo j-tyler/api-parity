@@ -48,7 +48,7 @@
     "array_length_tolerance": {
       "description": "Array lengths differ by at most N elements.",
       "params": ["tolerance"],
-      "expr": "(size(a) - size(b)) <= tolerance && (size(b) - size(a)) <= tolerance"
+      "expr": "double(size(a) - size(b)) <= double(tolerance) && double(size(b) - size(a)) <= double(tolerance)"
     },
 
     "array_nonempty": {

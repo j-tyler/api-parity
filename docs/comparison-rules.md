@@ -160,6 +160,8 @@ Write arbitrary CEL:
 {"expr": "a > 0 && b > 0 && (a - b) <= 10"}
 ```
 
+The evaluator includes version 0 of the cel-go string extension. Custom rules can use methods such as `substring`, `charAt`, `indexOf`, `replace`, `split`, and `trim`. For example, `{"expr": "a.trim() == b.trim()"}` ignores leading and trailing whitespace.
+
 ## Numeric precision
 
 Use the standard `exact_match` or `both_null_or_equal` rule for integer IDs and counters.

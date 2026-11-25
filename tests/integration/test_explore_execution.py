@@ -49,7 +49,7 @@ class TestExploreExecution:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert "Total cases:" in result.stdout
         assert "Timeout: 10.0s" in result.stdout
-        assert "CEL evaluator crashed" not in result.stderr
+        assert "Fatal: CEL evaluator" not in result.stderr
 
         # Summary should be written
         summary_path = out_dir / "summary.json"

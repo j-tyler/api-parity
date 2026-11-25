@@ -22,6 +22,8 @@ cd api-parity
 ./scripts/build.sh
 ```
 
+After updating the checkout, rerun `./scripts/build.sh` to rebuild the CEL evaluator. For an offline Go build, run `go mod download` while connected to cache the pinned dependencies, including `golang.org/x/text`.
+
 ## Quick Start
 
 ### 1. Create Runtime Config (config.yaml)
