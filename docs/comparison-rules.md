@@ -160,6 +160,8 @@ Write arbitrary CEL:
 {"expr": "a > 0 && b > 0 && (a - b) <= 10"}
 ```
 
+The evaluator includes version 0 of the cel-go string extension. Custom rules can use methods such as `substring`, `charAt`, `indexOf`, `replace`, `split`, and `trim`. For example, `{"expr": "a.trim() == b.trim()"}` ignores leading and trailing whitespace.
+
 ## Numeric precision
 
 Use the standard `exact_match` or `both_null_or_equal` rule for integer IDs and counters.
@@ -201,8 +203,8 @@ on lists of these IDs can therefore report a match.
 | `epoch_seconds_tolerance` | `seconds` | Epoch timestamps within N seconds |
 | `epoch_millis_tolerance` | `millis` | Epoch timestamps within N milliseconds |
 | **Strings** |
-| `string_prefix` | `length` | First N characters match |
-| `string_suffix` | `length` | Last N characters match |
+| `string_prefix` | `length` | Both strings have at least N Unicode code points and their first N match |
+| `string_suffix` | `length` | Both strings have at least N Unicode code points and their last N match |
 | `string_contains` | `substring` | Both contain the substring |
 | `string_length_match` | — | Same length |
 | `string_nonempty` | — | Both non-empty |

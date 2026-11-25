@@ -19,7 +19,7 @@ from jsonpath_ng import parse as jsonpath_parse
 from jsonpath_ng.jsonpath import Child, DatumInContext, Fields, Index, JSONPath, Slice
 from jsonpath_ng.exceptions import JsonPathLexerError, JsonPathParserError
 
-from api_parity.cel_evaluator import CELEvaluator, CELEvaluationError
+from api_parity.cel_evaluator import CELEvaluator, CELEvaluationError, CELSubprocessError
 from api_parity.models import (
     BodyRules,
     ComparisonLibrary,
@@ -985,7 +985,16 @@ class Comparator:
             # No comparison specified (presence-only) - treat as pass
             return True
 
-        return self._cel.evaluate(expr, {"a": value_a, "b": value_b})
+        try:
+            return self._cel.evaluate(expr, {"a": value_a, "b": value_b})
+        except CELEvaluationError as exc:
+            # Older binaries accept the protocol but cannot compile the shipped substring rules.
+            if (rule.predefined in {"string_prefix", "string_suffix"}
+                    and "undeclared reference to 'substring'" in str(exc)):
+                raise CELSubprocessError(
+                    f"{rule.predefined} requires CEL substring support. Rebuild cel-evaluator with ./scripts/build.sh."
+                ) from exc
+            raise
 
     def _expand_predefined(self, rule: FieldRule) -> str:
         """Expand a predefined rule to its CEL expression.

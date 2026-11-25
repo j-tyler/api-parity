@@ -101,6 +101,8 @@ Uses stdin/stdout pipes with NDJSON (not Unix sockets) because we have single-cl
 - **Embedded interpreter** — No trusted Python CEL implementation exists
 - **All-Go** — No Go equivalent to Schemathesis for OpenAPI fuzzing
 
+The evaluator enables cel-go's version 0 string extension so predefined prefix and suffix comparisons can take Unicode code-point substrings. Custom expressions use the same environment. Pinning the extension version keeps later additions to the expression language an explicit choice.
+
 **Error handling:** The Go process returns `{"ok":false,"error":"..."}` for CEL errors (bad syntax, type errors). Python-side timeout (10s) handles hung evaluations. Subprocess crashes trigger auto-restart (max 3 times).
 
 ---

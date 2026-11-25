@@ -383,6 +383,69 @@ class TestArrayLength:
         assert result.match is False
 
 
+def test_all_shipped_rules_evaluate_satisfying_inputs(comparator, comparison_library):
+    samples = [
+        ("numeric_tolerance epoch_seconds_tolerance epoch_millis_tolerance both_integer both_positive "
+         "both_non_negative same_sign both_in_range", 1),
+        ("unordered_array array_length array_length_tolerance array_nonempty", [1]),
+        ("same_keys object_nonempty", {"key": 1}),
+        ("both_boolean", True),
+        ("both_null both_null_or_equal same_nullity", None),
+        ("ignore exact_match type_match string_prefix string_suffix string_nonempty string_length_match "
+         "string_contains both_match_regex hex_string", "abc"),
+        ("base64_format binary_exact_match binary_length_match binary_nonempty", "YWJj"),
+        ("uuid_format uuid_v4_format", "550e8400-e29b-41d4-a716-446655440000"),
+        ("iso_date_format", "2026-11-25"),
+        ("iso_timestamp_format", "2026-11-25T12:00:00Z"),
+        ("jwt_format", "abc.def.ghi"),
+        ("url_format", "https://example.com"),
+    ]
+    params = {"length": 2, "tolerance": 1, "seconds": 1, "millis": 1, "pattern": "ab",
+              "substring": "bc", "min": 0, "max": 2}
+    covered = set()
+    for names, value in samples:
+        for name in names.split():
+            covered.add(name)
+            rule = FieldRule(predefined=name, **{p: params[p] for p in comparison_library.predefined[name].params})
+            response = make_response_case(body={"value": value})
+            result = comparator.compare(response, response, OperationRules(body=BodyRules(field_rules={"$.value": rule})))
+            assert result.match, (name, result.details)
+    assert covered == set(comparison_library.predefined)
+
+
+@pytest.mark.parametrize(("left", "right", "tolerance", "expected"), [
+    ([1, 2], [8, 9], 0, True),
+    ([1, 2], [3, 4, 5], 1, True),
+    ([3, 4, 5], [1, 2], 1, True),
+    ([], [1, 2], 1, False),
+    ([1, 2], [], 1, False),
+    ([1], [], 0.5, False),
+])
+def test_array_length_tolerance(comparator, left, right, tolerance, expected):
+    rule = FieldRule(predefined="array_length_tolerance", tolerance=tolerance)
+    rules = OperationRules(body=BodyRules(field_rules={"$.value": rule}))
+    result = comparator.compare(make_response_case(body={"value": left}), make_response_case(body={"value": right}), rules)
+    assert result.match is expected
+    assert [diff.rule for diff in result.details["body"].differences] == ([] if expected else [rule.predefined])
+
+
+@pytest.mark.parametrize(("rule", "left", "right", "length", "expected"), [
+    ("string_prefix", "😀猫-a", "😀猫-b", 2, True),
+    ("string_prefix", "😀猫-a", "😀犬-a", 2, False),
+    ("string_suffix", "a-猫😀", "longer-猫😀", 2, True),
+    ("string_suffix", "a-猫😀", "a-犬😀", 2, False),
+    ("string_prefix", "xy", "xyz", 3, False),
+    ("string_suffix", "xyz", "yz", 3, False),
+    ("string_prefix", "猫", "猫", 1, True),
+    ("string_suffix", "猫", "猫", 2, False),
+])
+def test_predefined_string_prefix_and_suffix(comparator, rule, left, right, length, expected):
+    rules = OperationRules(body=BodyRules(field_rules={"$.value": FieldRule(predefined=rule, length=length)}))
+    result = comparator.compare(make_response_case(body={"value": left}), make_response_case(body={"value": right}), rules)
+    assert result.match is expected
+    assert [diff.rule for diff in result.details["body"].differences] == ([] if expected else [rule])
+
+
 # =============================================================================
 # Predefined: string_nonempty
 # =============================================================================

@@ -5,6 +5,10 @@ Tests cover:
 - validate_cli_operation_ids: --exclude and --operation-timeout validation
 """
 
+import json
+from pathlib import Path
+
+import jsonschema
 import pytest
 
 from api_parity.config_loader import (
@@ -22,6 +26,19 @@ from api_parity.models import (
     OperationRules,
     PredefinedComparison,
 )
+
+
+def test_rule_schema_accepts_all_shipped_predefined_rules():
+    directory = Path(__file__).resolve().parents[1] / "prototype/comparison-rules"
+    schema = json.loads((directory / "comparison_rules.schema.json").read_text())
+    library = json.loads((directory / "comparison_library.json").read_text())["predefined"]
+    params = {"length": 3, "tolerance": 1, "seconds": 1, "millis": 1, "pattern": "abc",
+              "substring": "abc", "min": 0, "max": 5}
+    validator = jsonschema.Draft202012Validator(schema)
+    for name, definition in library.items():
+        rule = {"predefined": name, **{param: params[param] for param in definition["params"]}}
+        body = {"binary_rule": rule} if name.startswith("binary_") else {"field_rules": {"$.value": rule}}
+        validator.validate({"version": "1", "default_rules": {"body": body}})
 
 
 @pytest.fixture

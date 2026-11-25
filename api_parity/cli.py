@@ -2049,7 +2049,7 @@ def run_explore(args: ExploreArgs) -> int:
                 )
 
     except CELSubprocessError as e:
-        print(f"\nFatal: CEL evaluator crashed: {e}", file=sys.stderr)
+        print(f"\nFatal: CEL evaluator failure: {e}", file=sys.stderr)
         if progress_reporter is not None:
             progress_reporter.stop()
         return 1
@@ -2686,7 +2686,7 @@ def run_replay(args: ReplayArgs) -> int:
                 progress_reporter.increment()
 
     except CELSubprocessError as e:
-        print(f"\nFatal: CEL evaluator crashed: {e}", file=sys.stderr)
+        print(f"\nFatal: CEL evaluator failure: {e}", file=sys.stderr)
         if progress_reporter is not None:
             progress_reporter.stop()
         return 1

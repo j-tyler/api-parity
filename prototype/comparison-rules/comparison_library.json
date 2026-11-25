@@ -48,7 +48,7 @@
     "array_length_tolerance": {
       "description": "Array lengths differ by at most N elements.",
       "params": ["tolerance"],
-      "expr": "(size(a) - size(b)) <= tolerance && (size(b) - size(a)) <= tolerance"
+      "expr": "double(size(a) - size(b)) <= double(tolerance) && double(size(b) - size(a)) <= double(tolerance)"
     },
 
     "array_nonempty": {
@@ -58,9 +58,9 @@
     },
 
     "string_prefix": {
-      "description": "First N characters of both strings match.",
+      "description": "First N characters of both strings match. Both strings must be at least N characters long.",
       "params": ["length"],
-      "expr": "a.substring(0, length) == b.substring(0, length)"
+      "expr": "size(a) >= length && size(b) >= length && a.substring(0, length) == b.substring(0, length)"
     },
 
     "string_suffix": {
